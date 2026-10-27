@@ -1,7 +1,7 @@
 // Menus with every kind of input: keyboard through the title and settings (which persist), a
 // controller through the controls card and out of the room-code and name boxes, phone layout, Xbox,
 // the level select's CONTINUE, a fresh room code over an old one, and guards against a stray Ⓐ.
-import { frames, launch, open, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
+import { XBOX_UA, frames, launch, open, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -184,8 +184,7 @@ const sel = (page) => page.evaluate(() => document.querySelector('.sel')?.textCo
 
 // ---- Xbox: the "use game controls" hint
 {
-  const XBOX = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; Xbox; Xbox Series X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0';
-  const page = await open(browser, { ua: XBOX });
+  const page = await open(browser, { ua: XBOX_UA });
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
   const hint = await page.evaluate(() => document.querySelector('.xbox-hint')?.textContent ?? '');
   t.check('Xbox shows how to hand the controller to the game', /Use game controls/.test(hint), hint);

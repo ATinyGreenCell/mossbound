@@ -39,11 +39,15 @@ export async function launch() {
   });
 }
 
+/** Edge on an Xbox Series X. */
+export const XBOX_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; Xbox; Xbox Series X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0';
+
 /**
  * A page that records errors. `pads` installs that many fake standard-mapping gamepads (window.__pads);
- * `storage` seeds localStorage before the game boots.
+ * `hidePads` keeps them out of getGamepads() until window.__padsHidden is cleared, as a browser does
+ * until a controller is first pressed. `storage` seeds localStorage before the game boots.
  */
-export async function open(browser, { viewport = { width: 1280, height: 720 }, ua, pads = 0, storage, query = {}, context } = {}) {
+export async function open(browser, { viewport = { width: 1280, height: 720 }, ua, pads = 0, hidePads = false, storage, query = {}, context } = {}) {
   // reuse Chrome's first blank tab: a page opened beside it is a background tab, and background tabs
   // get (almost) no animation frames — the game would barely run
   let page;
@@ -60,16 +64,18 @@ export async function open(browser, { viewport = { width: 1280, height: 720 }, u
   });
   if (ua) await page.setUserAgent(ua);
   await page.evaluateOnNewDocument(
-    (pads, storage) => {
+    (pads, storage, hidePads) => {
       if (storage) for (const [k, v] of Object.entries(storage)) localStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
       if (pads > 0) {
         const mk = (i) => ({ index: i, id: `Test Pad ${i}`, mapping: 'standard', connected: true, timestamp: 0, buttons: Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 })), axes: [0, 0, 0, 0] });
         window.__pads = Array.from({ length: pads }, (_, i) => mk(i));
-        navigator.getGamepads = () => [0, 1, 2, 3].map((i) => window.__pads[i] ?? null);
+        window.__padsHidden = hidePads;
+        navigator.getGamepads = () => [0, 1, 2, 3].map((i) => (window.__padsHidden ? null : (window.__pads[i] ?? null)));
       }
     },
     pads,
     storage ?? null,
+    hidePads,
   );
   await page.setViewport(viewport);
   await page.goto(url(query), { waitUntil: 'networkidle0' });

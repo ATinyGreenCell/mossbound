@@ -29,7 +29,11 @@ holds for both.
   controller drops out (or dozes off), reconnect it and press Ⓐ to take your sprout back.
 - **Far apart** — *Play online*: one of you makes a room and reads out the four-letter code; the other
   joins with it (or opens the invite link, `…/mossbound/#join=CODE`). Phones play in landscape.
-- **Xbox** — open the game in Edge, hold **☰ Menu → Use game controls**, hold **⧉ View** for full screen.
+- **Xbox** — open the game in Edge and hold **☰ Menu → Use game controls**. Until then Edge keeps the
+  controllers for its cursor. Hold **⧉ View** for full screen. For two of you on one Xbox, pick *Play on
+  one screen* and each press Ⓐ on your own controller. ☰ or ⧉ opens the menu, and the level also pauses
+  whenever the Xbox guide opens. If the controllers stop responding (full screen can take the focus
+  away), press the Xbox button twice.
 
 Progress lives in a shared **garden journal**. Each device keeps a copy, and the copies merge whenever you
 play together: cleared levels, fireflies and best times are never lost, whoever played. Every level
@@ -51,7 +55,7 @@ save code from *Settings* and paste it on the other device.
 | tug        | E · C · L           | Ⓑ                   | TUG          |
 | dash (small sprout) | R · V · ;  | RB                  | DASH         |
 | ♥          | Q · H               | Ⓨ                   | ♥            |
-| menu       | Esc                 | ☰                   | ❚❚           |
+| menu       | Esc                 | ☰ · ⧉               | ❚❚           |
 
 Two on one keyboard: the left player uses WASD, Space, Shift, E, R, Q; the right player uses the
 arrows, `/` jump, `.` hold, `,` tug, `;` dash, `M` ♥. The backquote key toggles a frame-rate meter.
@@ -97,7 +101,7 @@ npm run test:e2e   # end-to-end suite in headless Chrome (online tests need inte
 
 The e2e suite (`tests/e2e/`) drives the real game: physics and swing-energy checks, a scripted run
 through every level, a fuzzed input soak, two-browser online play over both paths, outages and
-reloads, packet loss and jitter, local multiplayer, touch, menus, resizing, rendering (tile cache,
+reloads, packet loss and jitter, local multiplayer, two controllers on an (emulated) Xbox, touch, menus, resizing, rendering (tile cache,
 GPU resets, the quality governor), saves, and quitting and coming back. It runs with
 `node tests/e2e/run.mjs [--only online,physics] [-j 6]`. Chrome comes from `/usr/bin/google-chrome`,
 or set `CHROME_PATH`.

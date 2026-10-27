@@ -2,6 +2,7 @@ import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
 import { BUTTON_NAMES, makeControls, type ControlFrame, type Device, type DeviceId } from '../core/input';
 import { clamp } from '../core/math';
+import { IS_XBOX, XBOX_REFOCUS } from '../core/platform';
 import { bankFeathers, freshGen, levelSig, onFlush, recordClear, save, setRun } from '../core/save';
 import { ceremony } from '../core/testmode';
 import type { Flow } from '../flow';
@@ -807,6 +808,7 @@ export class Session implements Screen {
     this.openOverlay(
       `<div class="ov-title">${this.online ? 'menu' : 'paused'}</div>
        ${this.online ? `<p class="ov-note">the game keeps going for ${esc(this.profiles[1 - this.me]?.name || 'your partner')}</p>` : ''}
+       ${IS_XBOX ? `<p class="ov-note xbox-note">${XBOX_REFOCUS}</p>` : ''}
        <div class="ov-buttons">
          <div class="btn" data-act="resume">RESUME</div>
          <div class="btn small" data-act="regroup">REGROUP AT THE LANTERN</div>

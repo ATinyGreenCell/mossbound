@@ -225,9 +225,12 @@ class Pad implements Device {
       // Non-standard mappings can expose analog triggers as axes resting at -1. A stick never rests
       // there, so mask those axes rather than let the bird walk off on its own.
       this.deadAxes = pad.mapping === 'standard' ? [] : pad.axes.map((a) => Math.abs(a) > 0.5);
-      // a pad that appears with buttons already held mustn't fire them as fresh presses
+      // A pad that comes back with buttons already held mustn't fire them as fresh presses. The first
+      // time a slot fills, though, they're real: browsers hide every pad until one is pressed, so the
+      // press that shows it is the player's first move (on an Xbox, often the very first Ⓐ).
+      const first = this.generation === 1;
       this.prev.length = pad.buttons.length;
-      for (let i = 0; i < pad.buttons.length; i++) this.prev[i] = !!pad.buttons[i]?.pressed;
+      for (let i = 0; i < pad.buttons.length; i++) this.prev[i] = !first && !!pad.buttons[i]?.pressed;
     }
     const b = (i: number) => !!pad.buttons[i]?.pressed;
     const bp = (i: number) => b(i) && !this.prev[i];
@@ -236,7 +239,7 @@ class Pad implements Device {
     let any = false;
     for (let i = 0; i < pad.buttons.length; i++) if (bp(i)) any = true;
 
-    // Standard (Xbox) layout: A jump · B tug · X / LT / RT anchor · RB dash · Y heart · LB hey · START pause
+    // Standard (Xbox) layout: A jump · B tug · X / LT / RT anchor · RB dash · Y heart · LB hey · ☰ / ⧉ menu
     it.mx = ax(0) + (b(15) ? 1 : 0) - (b(14) ? 1 : 0);
     it.my = -ax(1) + (b(12) ? 1 : 0) - (b(13) ? 1 : 0);
     it.jump = b(0);
@@ -257,7 +260,8 @@ class Pad implements Device {
     m.right = bp(15) || (sx > T && this.stickPrev.x <= T);
     m.confirm = bp(0);
     m.back = bp(1);
-    m.pause = bp(9);
+    // either small button: Edge on Xbox may keep ☰ for itself (held, it opens Edge's own menu)
+    m.pause = bp(9) || bp(8);
     m.any = any;
     this.stickPrev.x = sx;
     this.stickPrev.y = sy;
@@ -419,6 +423,9 @@ export class Input {
     window.addEventListener('keydown', (e) => {
       // typing in a text box (names, room codes) is not playing
       if (isTyping(e.target)) return;
+      // Edge on Xbox also sends controller buttons as key presses with no key code: the controller
+      // itself is read as a gamepad, and they mustn't make the hints name keyboard keys
+      if (!e.code) return;
       if (BLOCK_DEFAULT.has(e.code)) e.preventDefault();
       if (!e.repeat) this.pressed.set(e.code, (this.pressed.get(e.code) ?? 0) + 1);
       this.down.add(e.code);
@@ -461,9 +468,13 @@ export class Input {
     return this.pads[Number(id.slice(3))] ?? null;
   }
 
-  /** Every device that could join a game right now: both keyboard halves plus each connected pad. */
+  /**
+   * Every device that could join a game right now: each connected pad, then both keyboard halves.
+   * Pads come first, so when a controller press also arrives as a key press (some browsers send both)
+   * the controller is the one that takes the seat.
+   */
   devices(): Device[] {
-    return [this.keysL, this.keysR, ...this.pads.filter((p) => p.connected)];
+    return [...this.pads.filter((p) => p.connected), this.keysL, this.keysR];
   }
 
   /** Simulate a one-frame key press (e.g. the touch PAUSE button sends 'Escape'). */

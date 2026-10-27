@@ -43,7 +43,7 @@ export const CONTROLS_HTML = `
       <dt>Ⓑ</dt><dd>tug the vine</dd>
       <dt>RB</dt><dd>dash (small sprout)</dd>
       <dt>Ⓨ</dt><dd>♥</dd>
-      <dt>☰</dt><dd>menu</dd>
+      <dt>☰ · ⧉</dt><dd>menu</dd>
     </dl>
     <h3>two on one keyboard</h3>
     <p>left: WASD · SPACE jump · SHIFT hold · E tug · R dash · Q ♥<br>right: arrows · / jump · . hold · , tug · ; dash · M ♥</p>
@@ -466,23 +466,45 @@ export class LocalScreen implements Screen {
     this.el.className = 'screen local-screen';
     app.ui.appendChild(this.el);
     this.build();
+    // On Xbox a click is a controller's Ⓐ in Edge's browsing controls, which never reaches the game:
+    // point at how to hand the controllers over
+    if (IS_XBOX) this.el.addEventListener('click', (e) => {
+      if (!(e.target as HTMLElement).closest('[data-act]')) this.nudge();
+    });
   }
 
   private build() {
     const seat = (i: number) => {
       const d = this.seats[i];
-      const hint = i === 0 ? 'press Ⓐ on a controller, or SPACE' : 'press Ⓐ on another controller, or ENTER';
+      const hint = IS_XBOX
+        ? i === 0 ? 'press Ⓐ on a controller' : 'press Ⓐ on the other controller'
+        : i === 0 ? 'press Ⓐ on a controller, or SPACE' : 'press Ⓐ on another controller, or ENTER';
       return `<div class="seat s${i}${d ? ' on' : ''}"><b>player ${i + 1}</b><span>${d ? `${deviceLabel(d)} ✓` : hint}</span></div>`;
     };
     const touchOnly = !this.app.input.padConnected && this.app.input.lastDevice === 'touch';
+    const note = touchOnly
+      ? 'This mode needs a keyboard or controllers. On phones, play online — each of you on your own phone.'
+      : IS_XBOX
+        ? 'Each of you takes a controller and presses Ⓐ.'
+        : 'Keyboard players: left side uses WASD + SPACE, right side uses the arrows + / . ,';
     this.el.innerHTML = `
       <div class="panel">
         <div class="panel-title">two sprouts, one screen</div>
         <div class="seats">${seat(0)}${seat(1)}</div>
-        <p class="note">${touchOnly ? 'This mode needs a keyboard or controllers. On phones, play online — each of you on your own phone.' : 'Keyboard players: left side uses WASD + SPACE, right side uses the arrows + / . ,'}</p>
+        <p class="note">${note}</p>
         <div class="btn small" data-act="back">BACK</div>
-      </div>`;
+      </div>
+      ${IS_XBOX ? `<div class="xbox-hint">${XBOX_HINT}</div>` : ''}`;
     this.el.querySelector('[data-act="back"]')!.addEventListener('click', () => this.flow.title());
+  }
+
+  private nudge() {
+    const hint = this.el.querySelector<HTMLElement>('.xbox-hint');
+    if (!hint) return;
+    audio.play('bonk');
+    hint.classList.remove('nudge');
+    void hint.offsetWidth;
+    hint.classList.add('nudge');
   }
 
   frame(dt: number) {

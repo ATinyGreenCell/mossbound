@@ -1,5 +1,6 @@
 import { Input } from './core/input';
 import { settings } from './core/settings';
+import { IS_XBOX, XBOX_REFOCUS } from './core/platform';
 import { NO_RENDER } from './core/testmode';
 import { Renderer } from './render/renderer';
 
@@ -160,6 +161,9 @@ export class App {
   private wakeLock: WakeLockLike | null = null;
   private wantAwake = false;
   private wakeBusy = false;
+  /** Edge on Xbox: seconds the page has been showing without focus, and the note that says so */
+  private unfocused = 0;
+  private refocusEl: HTMLDivElement | null = null;
 
   constructor(readonly root: HTMLElement) {
     this.renderer = new Renderer(root);
@@ -257,6 +261,7 @@ export class App {
     // clamp: a background tab or a long GC pause must not fast-forward the world
     const dt = Math.min(0.1, Math.max(0, rawMs / 1000) || 0);
     this.time += dt;
+    if (IS_XBOX) this.watchFocus(dt);
     if (this.pending) {
       const old = this.screen;
       this.screen = this.pending;
@@ -304,6 +309,26 @@ export class App {
       this.handleError(err, now);
     }
   };
+
+  /**
+   * Edge on Xbox can leave the page showing but without focus (the View button's full screen does it,
+   * and so can the guide), and then no controller reaches the game until the Xbox button is pressed
+   * twice. A local level pauses on the way (blur); this says how to get the controllers back.
+   */
+  private watchFocus(dt: number) {
+    this.unfocused = !document.hidden && !document.hasFocus() ? this.unfocused + dt : 0;
+    const show = this.unfocused > 1;
+    if (show === !!this.refocusEl) return;
+    if (show) {
+      this.refocusEl = document.createElement('div');
+      this.refocusEl.className = 'xbox-refocus';
+      this.refocusEl.textContent = XBOX_REFOCUS;
+      this.root.appendChild(this.refocusEl);
+    } else {
+      this.refocusEl!.remove();
+      this.refocusEl = null;
+    }
+  }
 
   private handleError(err: unknown, now: number) {
     console.error('[mossbound] frame error', err);
