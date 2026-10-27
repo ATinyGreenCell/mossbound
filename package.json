@@ -1,0 +1,22 @@
+{
+  "name": "mossbound",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node tests/e2e/run.mjs"
+  },
+  "dependencies": {
+    "@fontsource/fredoka": "^5.2.0",
+    "trystero": "^0.26.0"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.13.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.4"
+  }
+}
