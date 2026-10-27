@@ -203,6 +203,8 @@ export class NetLink {
       };
       room.onPeerLeave = (id) => {
         if (id === this.tpeer) {
+          // nothing more goes down a connection that's gone (until they're back, the relay carries it all)
+          this.tpeer = null;
           this.closeRt();
           this.lastDirect = 0;
           this.checkAway();

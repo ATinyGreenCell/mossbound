@@ -93,6 +93,17 @@ await waitFor(() => host.evaluate(() => window.__fb.app.current?.constructor.nam
 await host.evaluate(() => window.__fb.app.current.act('rehost'));
 const lobby = await step('host back', () => waitFor(() => Promise.all([host, guest].map((p) => p.evaluate(() => window.__fb.flow.link?.status === 'connected' && window.__fb.app.current?.constructor.name === 'LevelSelect' && !!document.querySelector('[data-act="continue"], .card.continue')))).then((v) => v.every(Boolean)), 40000, 'both in the lobby').catch(() => false));
 t.check('a host whose page reloaded reopens the room: both back in the lobby, the run there to continue', lobby);
+
+// 6 · the guest's phone dies mid-level, without a goodbye: while the host waits for them, nothing is
+//     aimed at the connection that's gone (that would be 40 sends a second, for as long as they wait)
+await host.evaluate(() => window.__fb.flow.playLevel(0));
+await step('level for the dropout', () => waitFor(() => Promise.all([host, guest].map((p) => p.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'))).then((v) => v.every(Boolean)), 15000, 'both in a level'));
+await sleep(1500);
+const before = host.errors.length;
+await guest.evaluate(() => { const l = window.__fb.flow.link; l.muted = true; void l.room?.leave(); });
+await sleep(4000);
+const stale = host.errors.slice(before).filter((e) => /no peer with id/.test(e));
+t.check(`while the host waits for a partner who dropped off, nothing goes down the connection that's gone (${stale.length} tries)`, stale.length === 0, stale.slice(0, 2));
 errs.push(...host.errors, ...guest.errors);
 for (const b of browsers) await b.close().catch(() => undefined);
 t.finish('outage', errs);

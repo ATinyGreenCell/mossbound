@@ -130,6 +130,10 @@ t.check('the next level loads for both; the clear is in both saves', next && unl
 await guest.close();
 const left = await waitFor(() => host.evaluate(() => window.__fb.flow.link?.status === 'lost'), 15000, 'partner left');
 t.check('leaving is noticed', left);
+// …and while the host waits for them, nothing more is aimed at their old connection (40 sends a second)
+await sleep(4000);
+const stale = host.errors.filter((e) => /no peer with id/.test(e));
+t.check(`nothing is sent down a connection the partner has left (${stale.length} tries)`, stale.length === 0, stale.slice(0, 2));
 await browser.close();
 await browser2.close();
 t.finish('online', errors());
