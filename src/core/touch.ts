@@ -2,7 +2,7 @@ import '../ui/touch.css';
 import type { TouchHooks } from '../app';
 import type { Input, TouchState } from './input';
 
-type ButtonId = 'jump' | 'tug' | 'anchor' | 'heart';
+type ButtonId = 'jump' | 'tug' | 'anchor' | 'heart' | 'dash';
 
 interface ButtonDef {
   id: ButtonId;
@@ -19,9 +19,11 @@ const BUTTONS: ButtonDef[] = [
   { id: 'tug', label: 'TUG', x: 196, y: 62, d: 74 },
   { id: 'anchor', label: 'HOLD', x: 184, y: 166, d: 74 },
   { id: 'heart', label: '♥', x: 70, y: 204, d: 54 },
+  // (only for a sprout that can dash: see setDash)
+  { id: 'dash', label: 'DASH', x: 298, y: 92, d: 66 },
 ];
 
-const TAP: Partial<Record<ButtonId, keyof Pick<TouchState, 'tug' | 'heart'>>> = { tug: 'tug', heart: 'heart' };
+const TAP: Partial<Record<ButtonId, keyof Pick<TouchState, 'tug' | 'heart' | 'dash'>>> = { tug: 'tug', heart: 'heart', dash: 'dash' };
 const HOLD: Partial<Record<ButtonId, keyof Pick<TouchState, 'jump' | 'anchor'>>> = { jump: 'jump', anchor: 'anchor' };
 
 /** base joystick radius (px at --s = 1) */
@@ -152,6 +154,12 @@ export class TouchControls implements TouchHooks {
   setPlayActive(on: boolean) {
     this.playActive = on;
     this.refresh();
+  }
+
+  /** Show the DASH button (this player's sprout can dash) or not. */
+  setDash(on: boolean) {
+    const b = this.buttons.find((x) => x.def.id === 'dash');
+    if (b) b.el.style.display = on ? '' : 'none';
   }
 
   /** Called each frame by the app: a pad or keyboard taking over hides the overlay. */
@@ -297,6 +305,6 @@ export class TouchControls implements TouchHooks {
     for (const b of this.buttons) if (b.pointer !== null) this.release(b, b.pointer);
     const t = this.input.touch;
     t.moveX = t.moveY = 0;
-    t.jump = t.anchor = t.jumpTap = t.tug = t.heart = false;
+    t.jump = t.anchor = t.jumpTap = t.tug = t.dash = t.heart = false;
   }
 }

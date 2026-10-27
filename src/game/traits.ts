@@ -1,0 +1,50 @@
+/**
+ * The two sprouts. The tall one is sturdy: heavy on the vine (it holds the small one without budging,
+ * drags it along rather than being stopped by it, and its tug flings it far), but it jumps lower and
+ * can't fit through a one-tile gap. The small one is nimble: it jumps higher, fits through tight
+ * spaces, climbs walls like ivy (and jumps off them), and has a burst of speed through the air once
+ * per jump. Both run at the same speed and fall the same way (springs, bounces and updrafts lift
+ * them alike); the small one's jump just launches harder, for a higher arc that tops out a moment later.
+ *
+ * Player 1 (whoever made the room, or held the first controller) starts as the tall one; either can
+ * swap at the level select. "The same" (Settings) gives both sprouts one body with every ability, for
+ * anyone who'd rather not have different powers.
+ */
+export type Kind = 'tall' | 'small' | 'even';
+
+export interface Traits {
+  /** body box, px */
+  w: number;
+  h: number;
+  /** jump launch speed, and gravity (the same for every body: what lifts one lifts the other alike) */
+  jumpV: number;
+  gravity: number;
+  /** weight on the vine: the heavier end drags the lighter one */
+  mass: number;
+  /** a tug throws the partner this many times as hard */
+  tug: number;
+  /** walking away from a partner who hangs below: × run speed */
+  lift: number;
+  /** clings to walls, climbs them, jumps off them */
+  climb: boolean;
+  /** one burst through the air per jump */
+  dash: boolean;
+}
+
+export const TRAITS: Record<Kind, Traits> = {
+  // a jump of ~3.3 tiles (104 px)
+  tall: { w: 22, h: 40, jumpV: 630, gravity: 1900, mass: 2, tug: 1.3, lift: 0.85, climb: false, dash: false },
+  // ~4.1 tiles (131 px), at the top 0.04 s after the tall one
+  small: { w: 16, h: 16, jumpV: 705, gravity: 1900, mass: 1, tug: 0.55, lift: 0.35, climb: true, dash: true },
+  // the original body (~3.4 tiles), with everything both can do
+  even: { w: 18, h: 20, jumpV: 640, gravity: 1900, mass: 1, tug: 1, lift: 0.55, climb: true, dash: true },
+};
+
+/** Which sprout each bird index is: [player 1's, player 2's]. */
+export function kindsFor(even: boolean, swapped: boolean): [Kind, Kind] {
+  if (even) return ['even', 'even'];
+  return swapped ? ['small', 'tall'] : ['tall', 'small'];
+}
+
+/** A kind from the wire or storage, or null. */
+export const isKind = (k: unknown): k is Kind => k === 'tall' || k === 'small' || k === 'even';

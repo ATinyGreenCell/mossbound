@@ -20,6 +20,10 @@ export interface Settings {
   lastRoom: string;
   /** whether we made that room or joined it (a guest rejoins; only the host reopens) */
   lastRole: 'host' | 'guest';
+  /** both sprouts alike (one body, every ability) rather than tall and small — see traits.ts */
+  even: boolean;
+  /** player 1 is the small sprout and player 2 the tall one */
+  swap: boolean;
   /** optional TURN relay for networks that block direct connections */
   turn: TurnServer;
 }
@@ -36,6 +40,8 @@ const defaults: Settings = {
   shake: true,
   lastRoom: '',
   lastRole: 'host',
+  even: false,
+  swap: false,
   turn: { urls: '', username: '', credential: '' },
 };
 
@@ -56,6 +62,8 @@ function load(): Settings {
     if (typeof v.shake === 'boolean') s.shake = v.shake;
     s.lastRoom = str(v.lastRoom, 8) ?? s.lastRoom;
     if (v.lastRole === 'host' || v.lastRole === 'guest') s.lastRole = v.lastRole;
+    if (typeof v.even === 'boolean') s.even = v.even;
+    if (typeof v.swap === 'boolean') s.swap = v.swap;
     if (v.turn && typeof v.turn === 'object') {
       s.turn.urls = str(v.turn.urls, 300) ?? '';
       s.turn.username = str(v.turn.username, 200) ?? '';

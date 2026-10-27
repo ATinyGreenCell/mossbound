@@ -34,6 +34,19 @@ export const FLUTTER_FALL = 300;
 /** a bump on the head from a ceiling: slide around corners this close */
 export const CORNER_NUDGE = 7;
 
+// ---- the small sprout's moves (see traits.ts)
+/** air dash: its speed, and how long it holds before gravity takes over again */
+export const DASH_V = 560;
+export const DASH_TIME = 0.15;
+/** after a dash, this much of its speed carries on */
+export const DASH_KEEP = 0.7;
+/** clinging to a wall: climbing up / down it */
+export const WALL_UP = 120;
+export const WALL_DOWN = 170;
+/** jumping off a wall: sideways speed, and how long pushing back toward the wall is ignored */
+export const WALL_JUMP_VX = 300;
+export const WALL_JUMP_LOCK = 0.16;
+
 // ---- the string
 export const ROPE_LEN = 8 * T;
 /** shortest a bird can climb the string to */

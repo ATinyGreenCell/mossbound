@@ -134,11 +134,12 @@ export async function installRig(page) {
     const { Bird } = await import('/src/game/bird.ts');
     const { Tether } = await import('/src/game/tether.ts');
     const { makeControls } = await import('/src/core/input.ts');
-    window.__rig = (def) => {
+    /** `kinds`: which sprout each bird is (see src/game/traits.ts) */
+    window.__rig = (def, kinds = ['even', 'even']) => {
       const L = typeof def === 'number' ? parseLevel(LEVELS[def], def) : parseLevel(def, 0);
       const world = new World(L);
       const birds = [new Bird(0), new Bird(1)];
-      birds.forEach((b, i) => b.place(L.spawns[i]));
+      birds.forEach((b, i) => { b.setKind(kinds[i]); b.place(L.spawns[i]); });
       const tether = new Tether(world);
       tether.reset(birds[0], birds[1]);
       const c = [makeControls(), makeControls()];
@@ -167,7 +168,7 @@ export async function installRig(page) {
             tether.solve(birds, [true, true], dt);
             for (let i = 0; i < 2; i++) { birds[i].rope = tether.ends[i]; birds[i].afterRope(world); birds[i].fx.length = 0; }
             world.stepDynamic(dt, birds);
-            for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.heartPressed = cc.heyPressed = false;
+            for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.dashPressed = cc.heartPressed = cc.heyPressed = false;
           }
         },
         secs(s) { this.step(Math.round(s * 120)); },

@@ -1,7 +1,7 @@
 {
   "name": "Mossbound",
   "short_name": "Mossbound",
-  "description": "Two little birds, one string. A co-op platformer for two.",
+  "description": "Two little sprouts, one vine. A co-op platformer for two.",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

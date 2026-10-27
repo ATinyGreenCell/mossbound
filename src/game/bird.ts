@@ -11,24 +11,23 @@ import {
   SLIDE_DECEL,
   SWING_DRAG,
   BIRD_H,
-  BIRD_W,
   BOUNCE_V,
   BOUNCE_V_SOFT,
   CLIMB_SPEED,
   COYOTE,
+  DASH_KEEP,
+  DASH_TIME,
+  DASH_V,
   DECEL_AIR,
   DECEL_GROUND,
   FALL_MULT,
   FLUTTER_FALL,
   FLUTTER_TIME,
   GHOST_TIME,
-  GRAVITY,
   HANG_HOP_V,
   INVULN_TIME,
   JUMP_BUFFER,
   JUMP_CUT,
-  JUMP_V,
-  LIFT_SPEED,
   MAX_SPEED,
   MAX_FALL,
   ROPE_LEN,
@@ -40,7 +39,12 @@ import {
   TURN_BOOST,
   VENT_ACCEL,
   VENT_MAX_UP,
+  WALL_DOWN,
+  WALL_JUMP_LOCK,
+  WALL_JUMP_VX,
+  WALL_UP,
 } from './tuning';
+import { type Kind, TRAITS, type Traits } from './traits';
 import type { BodyLike, World } from './world';
 
 /** Things a bird did this step, for sounds, particles and the network. */
@@ -56,7 +60,10 @@ export type BirdFx =
   | { k: 'respawn' }
   | { k: 'step' }
   | { k: 'grab' }
-  | { k: 'mantle' };
+  | { k: 'mantle' }
+  | { k: 'dash' }
+  | { k: 'cling' }
+  | { k: 'walljump' };
 
 /** The other bird, as this bird's step sees it. */
 export interface Partner extends BodyLike {
@@ -77,8 +84,11 @@ export const BIRD_COLORS: { name: string; body: string; dark: string; belly: str
 ];
 
 export class Bird implements RopeBird {
-  readonly w = BIRD_W;
-  readonly h = BIRD_H;
+  /** which sprout (see traits.ts): its body, its jump, its weight, its moves */
+  kind: Kind = 'even';
+  traits: Traits = TRAITS.even;
+  w = TRAITS.even.w;
+  h = TRAITS.even.h;
   x = 0;
   y = 0;
   vx = 0;
@@ -123,6 +133,14 @@ export class Bird implements RopeBird {
   swingE = NaN;
   /** ran into something this step */
   bumped = false;
+  /** clinging to a wall: on its left (-1) or right (1) */
+  cling: -1 | 0 | 1 = 0;
+  /** just jumped off a wall: pushing back toward it is ignored meanwhile */
+  wallJumpT = 0;
+  /** the air dash is there to use (once per jump) */
+  dashReady = true;
+  /** a dash under way: seconds left */
+  dashT = 0;
   // --- animation (drawn identically for local and mirrored birds)
   squash = 0;
   squashV = 0;
@@ -140,7 +158,37 @@ export class Bird implements RopeBird {
 
   constructor(readonly idx: 0 | 1) {}
 
+  /** Become this kind of sprout (feet where they were). */
+  setKind(kind: Kind) {
+    const feet = this.y + this.h / 2;
+    this.kind = kind;
+    this.traits = TRAITS[kind];
+    this.w = this.traits.w;
+    this.h = this.traits.h;
+    this.y = this.prevY = feet - this.h / 2;
+  }
+
+  /** gravity on this sprout (the string's swing energy is reckoned with it) */
+  get g() {
+    return this.traits.gravity;
+  }
+
+  get mass() {
+    return this.traits.mass;
+  }
+
+  /** where the string is tied, below the centre: 10 px above the feet, for every body (see tether.ts) */
+  get ropeOff() {
+    return this.h / 2 - BIRD_H / 2;
+  }
+
+  /** Stand at a spot from the level (spawns, lanterns — where a bird's centre goes): feet on the same ground, whatever the body. */
   place(p: Pt) {
+    this.placeCenter({ x: p.x, y: p.y + BIRD_H / 2 - this.h / 2 });
+  }
+
+  /** Put this body's centre exactly here. */
+  placeCenter(p: Pt) {
     this.x = this.prevX = p.x;
     this.y = this.prevY = p.y;
     this.vx = this.vy = 0;
@@ -153,6 +201,9 @@ export class Bird implements RopeBird {
     this.jumping = false;
     this.flutter = FLUTTER_TIME;
     this.tuggedT = 0;
+    this.cling = 0;
+    this.dashT = 0;
+    this.dashReady = true;
   }
 
   /** One physics step of a bird simulated on this screen. */
@@ -166,9 +217,11 @@ export class Bird implements RopeBird {
     this.bounceCd -= dt;
     this.dropT -= dt;
     this.tuggedT -= dt;
+    this.wallJumpT -= dt;
     this.swingE = NaN;
     this.bumped = false;
     if (this.ghost) return;
+    const T_ = this.traits;
 
     // ride the moving platform underfoot
     if (this.grounded && this.groundMover >= 0) {
@@ -177,16 +230,44 @@ export class Bird implements RopeBird {
       world.moveY(this, world.moverDY[m]);
     }
 
-    const mx = Math.abs(c.moveX) > 0.15 ? c.moveX : 0;
+    let mx = Math.abs(c.moveX) > 0.15 ? c.moveX : 0;
+    // (just off a wall: pushing back toward it doesn't stop the leap)
+    if (this.wallJumpT > 0 && mx * this.facing < 0) mx = 0;
     if (c.jumpPressed) this.jumpBuf = JUMP_BUFFER;
-    this.anchored = c.anchor && this.grounded && !this.hanging;
+    // holding on: feet planted — or, for a climber, gripping the wall
+    this.anchored = c.anchor && (this.grounded || this.cling !== 0) && !this.hanging;
     const rope = this.rope;
+
+    // --- the air dash: a burst toward where the stick points (straight ahead without one)
+    if (c.dashPressed && T_.dash && this.dashReady && !this.grounded && !this.hanging && this.cling === 0) {
+      let dx = mx;
+      let dy = Math.abs(c.moveY) > 0.3 ? -c.moveY : 0;
+      if (!dx && !dy) dx = this.facing;
+      const n = Math.hypot(dx, dy);
+      this.vx = (dx / n) * DASH_V;
+      this.vy = (dy / n) * DASH_V;
+      this.dashT = DASH_TIME;
+      this.dashReady = false;
+      this.jumping = false;
+      this.tuggedT = 0;
+      if (dx) this.facing = dx > 0 ? 1 : -1;
+      this.squash = -0.25;
+      this.fx.push({ k: 'dash' });
+    }
+    if (this.dashT > 0) {
+      this.dashT -= dt;
+      // (gravity and steering wait until it's over; then some of its speed carries on)
+      if (this.dashT <= 0) {
+        this.vx *= DASH_KEEP;
+        this.vy *= DASH_KEEP;
+      }
+    }
 
     // --- horizontal
     if (this.hanging && rope) {
       // swing: push along the arc, a pendulum does the rest
       const dx = this.x - rope.pivot.x;
-      const dy = this.y - rope.pivot.y;
+      const dy = this.y + this.ropeOff - rope.pivot.y;
       const len = Math.hypot(dx, dy) || 1;
       let tx = -dy / len;
       let ty = dx / len;
@@ -200,14 +281,17 @@ export class Bird implements RopeBird {
       const drag = 1 - SWING_DRAG * dt;
       this.vx *= drag;
       this.vy *= drag;
-      this.swingE = 0.5 * (this.vx * this.vx + this.vy * this.vy) - GRAVITY * this.y;
+      this.swingE = 0.5 * (this.vx * this.vx + this.vy * this.vy) - this.traits.gravity * this.y;
       if (Math.abs(this.vx) > 30) this.facing = this.vx > 0 ? 1 : -1;
     } else if (this.anchored) {
       this.vx = approach(this.vx, 0, DECEL_GROUND * 2 * dt);
+    } else if (this.dashT > 0 || this.cling !== 0) {
+      // (a dash holds its line; a climber holds the wall)
+      if (this.cling !== 0) this.vx = 0;
     } else {
       let max = RUN_MAX;
-      // lifting a partner who hangs on the string: hard work, slower steps
-      if (this.lifting && rope && mx * (this.x - rope.pivot.x) > 0) max *= LIFT_SPEED;
+      // lifting a partner who hangs on the string: hard work, slower steps — less so for the strong one
+      if (this.lifting && rope && mx * (this.x - rope.pivot.x) > 0) max *= T_.lift;
       const target = mx * max;
       const fast = Math.abs(this.vx) > max;
       const along = mx === 0 || Math.sign(mx) === Math.sign(this.vx);
@@ -233,10 +317,12 @@ export class Bird implements RopeBird {
         this.climbLen = clamp(cur - c.moveY * CLIMB_SPEED * dt, ROPE_MIN, ROPE_LEN);
         this.climbing = Math.sign(c.moveY);
       }
-    } else if (this.grounded && !this.anchored && c.moveY > 0.55 && rope && rope.taut) {
-      // stand under the string and push up: grab it and start climbing
+    } else if (this.grounded && !this.anchored && c.moveY > 0.55 && rope && (rope.taut || (rope.active && (!rope.pivotIsBird || !!partner?.grounded)))) {
+      // stand under the string and push up: grab it and start climbing — taut, or slack from something
+      // that holds still (a ledge, a peg, a partner standing there: the grip sets the length; never a
+      // partner in mid-jump, which would just be climbed after)
       const dx = rope.pivot.x - this.x;
-      const dy = rope.pivot.y - this.y;
+      const dy = rope.pivot.y - (this.y + this.ropeOff);
       if (dy < -T && Math.abs(dx) < -dy * 0.75) {
         this.hanging = true;
         this.grounded = false;
@@ -248,7 +334,21 @@ export class Bird implements RopeBird {
 
     // --- jumping
     if (this.jumpBuf > 0) {
-      if (this.hanging) {
+      if (this.cling !== 0) {
+        // off the wall, up and away from it
+        this.vx = -this.cling * WALL_JUMP_VX;
+        this.vy = -T_.jumpV * 0.92;
+        this.facing = this.cling > 0 ? -1 : 1;
+        this.cling = 0;
+        this.wallJumpT = WALL_JUMP_LOCK;
+        this.jumping = true;
+        this.jumpBuf = 0;
+        this.anchored = false;
+        this.dashReady = true;
+        this.flutter = FLUTTER_TIME;
+        this.squash = -0.3;
+        this.fx.push({ k: 'walljump' });
+      } else if (this.hanging) {
         // let go: fly off with the swing's own speed (plus a flourish) and a kick upward
         this.vx *= RELEASE_BOOST;
         this.vy = Math.min(this.vy * RELEASE_BOOST - HANG_HOP_V, -RELEASE_MIN_UP);
@@ -267,7 +367,7 @@ export class Bird implements RopeBird {
           this.grounded = false;
           this.groundMover = -1;
         } else {
-          this.vy = -JUMP_V;
+          this.vy = -T_.jumpV;
           this.jumping = true;
           this.squash = -0.3;
           this.fx.push({ k: 'jump' });
@@ -286,14 +386,20 @@ export class Bird implements RopeBird {
     if (this.vy >= 0) this.jumping = false;
 
     // --- gravity, flutter, updrafts
-    let g = GRAVITY;
+    let g = T_.gravity;
     // snappy falls — but not on the swing, where uneven gravity would pump a pendulum higher each pass
     if (this.vy > 0 && !this.hanging) g *= FALL_MULT;
     if (this.tuggedT > 0) g *= 0.55;
+    if (this.dashT > 0) g = 0;
+    // on a wall: hold still, or climb up or down it
+    if (this.cling !== 0) {
+      g = 0;
+      this.vy = c.moveY > 0.3 ? -WALL_UP : c.moveY < -0.3 ? WALL_DOWN : 0;
+    }
     this.vy += g * dt;
     const wasFluttering = this.fluttering;
     this.fluttering = false;
-    if (!this.grounded && !this.hanging && c.jump && this.vy > 0 && this.flutter > 0) {
+    if (!this.grounded && !this.hanging && this.cling === 0 && this.dashT <= 0 && c.jump && this.vy > 0 && this.flutter > 0) {
       this.flutter -= dt;
       this.fluttering = true;
       if (this.vy > FLUTTER_FALL) this.vy = approach(this.vy, FLUTTER_FALL, 5200 * dt);
@@ -309,7 +415,7 @@ export class Bird implements RopeBird {
       }
     }
     // terminal velocity for falls — but a swing's downstroke is bounded by the string, not air
-    if (this.vy > MAX_FALL && !this.hanging) this.vy = MAX_FALL;
+    if (this.vy > MAX_FALL && !this.hanging && this.dashT <= 0) this.vy = MAX_FALL;
 
     // --- move
     const wasGrounded = this.grounded;
@@ -339,6 +445,9 @@ export class Bird implements RopeBird {
       this.grounded = true;
       this.coyote = COYOTE;
       this.flutter = FLUTTER_TIME;
+      this.dashReady = true;
+      this.dashT = 0;
+      this.cling = 0;
     } else {
       if (r === -1) {
         if (this.vy < -120) this.fx.push({ k: 'bonk' });
@@ -366,6 +475,9 @@ export class Bird implements RopeBird {
         this.hanging = false;
         this.climbLen = Infinity;
         this.flutter = FLUTTER_TIME;
+        this.dashReady = true;
+        this.dashT = 0;
+        this.cling = 0;
         this.squash = -0.4;
         world.springT[i] = 0.35;
         this.fx.push({ k: 'spring', i });
@@ -378,18 +490,23 @@ export class Bird implements RopeBird {
       const myBot = this.y + this.h / 2;
       const prevBot = this.prevY + this.h / 2;
       const top = partner.y - partner.h / 2;
-      if (Math.abs(this.x - partner.x) < 20 && myBot >= top - 4 && myBot <= top + 14 && prevBot <= top + 8) {
+      if (Math.abs(this.x - partner.x) < (this.w + partner.w) / 2 + 2 && myBot >= top - 4 && myBot <= top + 14 && prevBot <= top + 8) {
         this.y = top - this.h / 2 - 0.5;
         this.vy = -(c.jump ? BOUNCE_V : BOUNCE_V_SOFT);
         this.jumping = c.jump;
         this.bounceCd = 0.25;
         this.flutter = FLUTTER_TIME;
+        this.dashReady = true;
+        this.dashT = 0;
         this.hanging = false;
         this.climbLen = Infinity;
         this.squash = -0.35;
         this.fx.push({ k: 'bounce' });
       }
     }
+
+    // --- climbing walls (the small sprout): push into one in the air to cling to it
+    if (T_.climb) this.stepWall(world, mx, c);
 
     // --- dangers
     if (this.invuln <= 0 && world.hazard(this)) this.die('spikes');
@@ -409,6 +526,71 @@ export class Bird implements RopeBird {
         this.fx.push({ k: 'step' });
       }
     }
+  }
+
+  /** Cling to a wall pushed against in the air, keep to it, climb over its top, or let go. */
+  private stepWall(world: World, mx: number, c: ControlFrame) {
+    const touching = (side: number, reach = 1.5) => !world.boxFree(this.x + side * reach, this.y, this.w, this.h);
+    if (this.cling !== 0) {
+      const side = this.cling;
+      // (a grip, not a touch: the vine tugging a climber a pixel or two off the wall doesn't shake it loose)
+      if (touching(side) === false && touching(side, 4)) this.x += side * (world.boxFree(this.x + side * 2.5, this.y, this.w, this.h) ? 2.5 : 1);
+      // climbing (or pushing) up to a lip: over it
+      if ((c.moveY > 0.3 || mx * side > 0.3) && this.ontoLip(world, side)) {
+        this.cling = 0;
+        return;
+      }
+      if (this.grounded || this.hanging || mx * side < -0.3 || !touching(side, 4)) {
+        // stick pulled away, or the wall ran out: climbing past its top steps up onto it
+        if (!this.grounded && !touching(side) && c.moveY > 0.3) this.overTop(world, side);
+        this.cling = 0;
+      }
+      return;
+    }
+    if (this.grounded || this.hanging || this.dashT > 0 || this.wallJumpT > 0 || mx === 0 || this.vy < -260) return;
+    const side = mx > 0 ? 1 : -1;
+    if (!touching(side)) return;
+    // a lip just above the feet is stepped up onto, not clung to underneath
+    if (this.ontoLip(world, side)) return;
+    this.cling = side as -1 | 1;
+    this.facing = side as -1 | 1;
+    this.vx = 0;
+    this.vy = 0;
+    this.dashReady = true;
+    this.jumping = false;
+    this.fx.push({ k: 'cling' });
+  }
+
+  /** A wall whose top is within half a tile above the feet: up onto it (true), as a walker steps up a lip. */
+  private ontoLip(world: World, side: number) {
+    for (const up of [3, 6, 9, 12, 15]) {
+      if (world.boxFree(this.x + side * 2, this.y - up, this.w, this.h)) {
+        this.y -= up;
+        this.x += side * 2;
+        this.vy = Math.min(this.vy, 0);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Climbed up past the top of a wall: step over onto the ledge beside it. */
+  private overTop(world: World, side: number) {
+    const x = this.x + side * (this.w / 2 + 3);
+    for (const dy of [0, -4, -8, -12]) {
+      if (world.boxFree(x, this.y + dy, this.w, this.h)) {
+        this.x = x;
+        this.y += dy;
+        this.vx = side * 40;
+        this.vy = -40;
+        this.squash = 0.2;
+        this.fx.push({ k: 'mantle' });
+        return;
+      }
+    }
+    // no room beside it yet: a hop up and over
+    this.vy = -320;
+    this.vx = side * 90;
   }
 
   /** Step up onto a lip no taller than 9 px, if there's room. */
@@ -446,7 +628,7 @@ export class Bird implements RopeBird {
       if (this.hanging && rope && !rope.taut && this.climbLen === Infinity) this.hanging = false;
       return;
     }
-    if (rope.pivot.y < this.y - 2) {
+    if (rope.pivot.y < this.y + this.ropeOff - 2) {
       if (!this.hanging) {
         this.hanging = true;
         this.climbLen = Infinity;
@@ -462,9 +644,9 @@ export class Bird implements RopeBird {
     const rope = this.rope!;
     const p = rope.pivot;
     if (!rope.pivotIsCorner && !rope.pivotIsBird) return;
-    // the side with ground under it: next to the partner, or just above a ledge corner
-    const y = rope.pivotIsBird ? p.y - 0.5 : p.y - this.h / 2 - 1.5;
-    const near = rope.pivotIsBird ? this.w + 2 : this.w / 2 + 3;
+    // the side with ground under it: next to the partner (feet level with theirs: the pivot is their knot), or just above a ledge corner
+    const y = rope.pivotIsBird ? p.y + BIRD_H / 2 - this.h / 2 - 0.5 : p.y - this.h / 2 - 1.5;
+    const near = rope.pivotIsBird ? this.w / 2 + 12 : this.w / 2 + 3;
     for (const off of [near, -near, near * 2, -near * 2, 0]) {
       const x = p.x + off;
       if (!world.boxFree(x, y, this.w, this.h)) continue;
@@ -492,6 +674,8 @@ export class Bird implements RopeBird {
     this.anchored = false;
     this.climbLen = Infinity;
     this.grounded = false;
+    this.cling = 0;
+    this.dashT = 0;
     this.fx.push({ k: 'die', cause });
   }
 
@@ -506,7 +690,7 @@ export class Bird implements RopeBird {
     this.ghostT += dt;
     const toPartner = !!partner && partner.present && !partner.ghost;
     const tx = toPartner ? partner!.x : home.x;
-    const ty = toPartner ? partner!.y - 26 : home.y;
+    const ty = toPartner ? partner!.y - partner!.h / 2 - 16 : home.y;
     const u = Math.min(1, this.ghostT / GHOST_TIME);
     const e = u * u * (3 - 2 * u);
     this.x = this.ghostFromX + (tx - this.ghostFromX) * e;
@@ -514,9 +698,9 @@ export class Bird implements RopeBird {
     const fromY = Math.min(this.ghostFromY, world.floorY);
     this.y = fromY + (ty - fromY) * e - Math.sin(u * Math.PI) * 40;
     if (u < 1) return;
-    const spot = toPartner ? freeSpotNear(world, partner!.x, partner!.y, this.w, this.h) : freeSpotNear(world, home.x, home.y, this.w, this.h);
-    const p = spot ?? home;
-    this.place(p);
+    const spot = toPartner ? freeSpotNear(world, partner!.x, partner!.y + partner!.h / 2 - this.h / 2, this.w, this.h) : freeSpotNear(world, home.x, home.y + BIRD_H / 2 - this.h / 2, this.w, this.h);
+    if (spot) this.placeCenter(spot);
+    else this.place(home);
     this.invuln = INVULN_TIME;
     this.vy = -200;
     this.squash = -0.3;

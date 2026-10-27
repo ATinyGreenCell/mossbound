@@ -108,13 +108,13 @@ function garden(): LevelDef {
     song: 'garden',
     map: m.build(),
     signs: [
-      'Hello, little birds! {move} to walk, {jump} to jump. The string keeps you two close.',
-      'Hold {jump} while falling to flutter a little further.',
-      'Fell in? If your partner is on the ground, the string catches you — push {climb} to climb back up.',
+      'Hello, little sprouts! {move} to walk, {jump} to jump. The vine keeps you two close.',
+      'Hold {jump} while falling to glide down on a leaf. The small sprout can {dash} in mid-air, and climb walls.',
+      'Fell in? If your partner is on the ground, the vine catches you — push {climb} to climb back up.',
       'Too high to jump? Stand still and let your partner hop on your head!',
-      'Left down here? Stand below and push {climb} to climb the string.',
-      'Too far to jump. Leap over the ring — the string wraps around it. Push {move} to pump the swing, {jump} to let go.',
-      'Too far again! Run and bounce off your partner’s head to sail across — then {tug} to yank them over.',
+      'Left down here? Stand below and push {climb} to climb the vine.',
+      'Too far to jump. Leap over the ring — the vine wraps around it. Push {move} to pump the swing, {jump} to let go.',
+      'Too far again! Run and bounce off your partner’s head to sail across — then {tug} to yank them over (too heavy? hold on while they climb).',
       'Flowers bounce. And send your partner a {heart} now and then.',
     ],
   };
@@ -185,7 +185,7 @@ function woods(): LevelDef {
     song: 'woods',
     map: m.build(),
     signs: [
-      'Old rings in the trees: the string wraps around them, so you can swing.',
+      'Old rings in the trees: the vine wraps around them, so you can swing.',
       'Swing, land, swing again. Push along the swing to build it up — {jump} to let go.',
       'This bridge is cracking! Cross it quickly — whoever falls, the other catches.',
       'A blossom! It bounces you up the old oak — or hop on your partner.',
@@ -260,7 +260,7 @@ function mill(): LevelDef {
     ],
     signs: [
       'Plates open the gates of their color. Stand on one so your partner can pass — then swap.',
-      'The lift goes up the mill wall. Hop on together — the string won’t stretch for one of you.',
+      'The lift goes up the mill wall. Hop on together — the vine won’t stretch for one of you.',
       'The ferry crosses the mill race. Ride it together!',
       'Fans in the floor: the warm air floats you up to the loft.',
       'Remember the springboard? Bounce, sail across, then {tug}!',
@@ -325,7 +325,7 @@ function paris(): LevelDef {
     movers: [{ x: 71, y: 6, w: 3, path: [[7, 0]], period: 8 }],
     signs: [
       'Paris at sunset! The streets are narrow up here — hop across.',
-      'Warm chimney air floats you up. Ride it together — the tall roof is out of one string’s reach!',
+      'Warm chimney air floats you up. Ride it together — the tall roof is out of one vine’s reach!',
       'Hop on the window-washer’s gondola together.',
       'Café awnings are bouncy!',
       'Loose tiles! Run across — they come back in a moment.',

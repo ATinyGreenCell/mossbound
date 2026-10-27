@@ -9,7 +9,7 @@ export interface PartnerStatus {
 }
 
 /**
- * The in-level HUD (DOM over the canvas): seeds and golden feathers on the left, the partner's
+ * The in-level HUD (DOM over the canvas): seeds and fireflies on the left, the partner's
  * connection on the right, the level banner, sign hints and toasts. Only touched when something
  * changes, never every frame.
  */

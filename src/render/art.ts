@@ -40,220 +40,13 @@ export function glow(ctx: CanvasRenderingContext2D, x: number, y: number, r: num
   ctx.globalAlpha = 1;
 }
 
-const hexRgb = (hex: string) => `${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)}`;
+export const hexRgb = (hex: string) => `${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)}`;
 
 export const PLATE_COLORS = ['#ffcf4a', '#4ad3c9', '#ff7fb0'];
 
-// ------------------------------------------------------------------ birds
+// ------------------------------------------------------------------ hats (drawn on the sprouts: see sprouts.ts)
 
-/**
- * A round little bird. Drawn around its body center: tilted toward the string while it hangs, leaning
- * back while it anchors, squashed and stretched by its springy `squash`.
- */
-export function drawBird(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: number, ink: string, hat: string, menu: boolean) {
-  ctx.save();
-  ctx.translate(b.x, b.y);
-  if (b.ghost) {
-    drawGhost(ctx, b, col, t);
-    ctx.restore();
-    return;
-  }
-  if (b.invuln > 0 && Math.floor(t * 14) % 2 === 0) ctx.globalAlpha = 0.45;
-  let rot = 0;
-  const rope = b.rope;
-  if (b.hanging && rope) {
-    rot = Math.atan2(rope.pivot.x - b.x, -(rope.pivot.y - b.y)) * 0.75;
-  } else if (b.anchored && rope) {
-    rot = -Math.sign(rope.pivot.x - b.x || b.facing) * 0.22;
-  } else if (b.grounded && Math.abs(b.vx) > 40) {
-    rot = Math.sign(b.vx) * 0.07 + (b.strain > 0.3 ? Math.sign(b.vx) * 0.12 : 0);
-  } else if (!b.grounded) {
-    rot = clamp(b.vx / 1600, -0.25, 0.25);
-  }
-  ctx.rotate(rot);
-  const sq = b.squash;
-  // squash around the feet
-  ctx.translate(0, 10);
-  ctx.scale(b.facing * (1 + sq * 0.85), 1 - sq);
-  ctx.translate(0, -10);
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = ink;
-
-  // feet
-  const walk = Math.sin(b.walkPhase);
-  const spread = b.anchored ? 2.5 : 0;
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#d98a1e';
-  if (b.grounded || b.anchored) {
-    ctx.beginPath();
-    ctx.moveTo(-3 - spread, 9);
-    ctx.lineTo(-4 - spread + walk * 2.5, 12);
-    ctx.moveTo(4 + spread, 9);
-    ctx.lineTo(5 + spread - walk * 2.5, 12);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(-3, 9);
-    ctx.lineTo(-4.5, 12.5);
-    ctx.moveTo(3, 9);
-    ctx.lineTo(2, 12.5);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = ink;
-
-  // tail
-  ctx.fillStyle = col.dark;
-  ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  ctx.moveTo(-9, -1);
-  ctx.lineTo(-17, -7 + walk);
-  ctx.lineTo(-16.5, -1.5);
-  ctx.lineTo(-18, 2.5);
-  ctx.lineTo(-9, 4);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // body
-  ctx.fillStyle = col.body;
-  ctx.lineWidth = 2.2;
-  ctx.beginPath();
-  ctx.arc(0, 0, 12, 0, TAU);
-  ctx.fill();
-  ctx.save();
-  ctx.clip();
-  ctx.fillStyle = col.belly;
-  ctx.beginPath();
-  ctx.ellipse(4, 4.5, 8, 7.5, -0.2, 0, TAU);
-  ctx.fill();
-  // a soft shade along the bottom
-  ctx.fillStyle = 'rgba(40,20,60,0.12)';
-  ctx.beginPath();
-  ctx.ellipse(0, 12, 14, 5, 0, 0, TAU);
-  ctx.fill();
-  ctx.restore();
-  ctx.beginPath();
-  ctx.arc(0, 0, 12, 0, TAU);
-  ctx.stroke();
-
-  // head tuft
-  ctx.fillStyle = col.dark;
-  ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.moveTo(-2, -11.5);
-  ctx.quadraticCurveTo(-4, -18, 1, -17.5);
-  ctx.quadraticCurveTo(-0.5, -15, 1.5, -11.8);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // wing
-  let wa = 0.25;
-  if (b.fluttering || b.ghost) wa = 0.4 + Math.sin(b.wingPhase) * 0.9;
-  else if (!b.grounded && !b.hanging) wa = b.vy < 0 ? -0.5 + Math.sin(b.wingPhase) * 0.5 : 0.9;
-  else if (b.hanging) wa = b.climbing ? Math.sin(b.wingPhase * 2) * 0.8 - 0.6 : -0.9 + Math.sin(b.wingPhase) * 0.15;
-  else if (b.anchored) wa = -0.7;
-  ctx.save();
-  ctx.translate(1, 0);
-  ctx.rotate(wa);
-  ctx.fillStyle = col.dark;
-  ctx.lineWidth = 1.8;
-  ctx.beginPath();
-  ctx.moveTo(1.5, -2);
-  ctx.quadraticCurveTo(-4, -6, -10, 1);
-  ctx.quadraticCurveTo(-5, 5.5, 1.5, 2.5);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-
-  // cheek
-  ctx.fillStyle = 'rgba(255,110,150,0.5)';
-  ctx.beginPath();
-  ctx.arc(6.5, 2.5, 2.3, 0, TAU);
-  ctx.fill();
-
-  // eye
-  const lx = b.lookX * b.facing;
-  const ly = b.lookY;
-  if (b.blinkT < 0 || menu) {
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-    ctx.moveTo(2, -4);
-    ctx.quadraticCurveTo(4.6, -2.2, 7.2, -4);
-    ctx.stroke();
-  } else {
-    ctx.fillStyle = '#ffffff';
-    ctx.lineWidth = 1.6;
-    ctx.beginPath();
-    ctx.ellipse(4.6, -4, 4.3, 4.8, 0, 0, TAU);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = ink;
-    const px = 4.6 + clamp(lx, -1, 1) * 1.5;
-    const py = -4 + clamp(ly, -1, 1) * 1.7;
-    ctx.beginPath();
-    ctx.arc(px, py, 2.5, 0, TAU);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(px - 0.9, py - 1, 0.95, 0, TAU);
-    ctx.fill();
-  }
-
-  // beak (open while bouncing/flapping hard)
-  ctx.fillStyle = '#ffb63c';
-  ctx.lineWidth = 1.6;
-  const open = b.fluttering || b.strain > 0.5 ? 1.6 : 0;
-  ctx.beginPath();
-  ctx.moveTo(10.5, -2.2);
-  ctx.lineTo(16.5, -0.3 - open * 0.3);
-  ctx.lineTo(10.5, 1.2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  if (open) {
-    ctx.beginPath();
-    ctx.moveTo(10.5, 1.4);
-    ctx.lineTo(15, 1.4 + open);
-    ctx.lineTo(10.5, 3);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  if (hat !== 'none') drawHat(ctx, hat, ink);
-
-  // a bead of effort while straining against the string
-  if (b.strain > 0.5 && b.grounded) {
-    ctx.fillStyle = '#9fdcff';
-    ctx.beginPath();
-    ctx.ellipse(-6, -13, 1.6, 2.4, -0.4, 0, TAU);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-function drawGhost(ctx: CanvasRenderingContext2D, _b: Bird, col: BirdColor, t: number) {
-  glow(ctx, 0, 0, 18, hexRgb(col.belly), 0.85);
-  glow(ctx, 0, 0, 9, '255,255,255', 0.7);
-  ctx.globalAlpha = 0.72;
-  ctx.fillStyle = col.body;
-  ctx.globalAlpha = 0.5;
-  ctx.beginPath();
-  ctx.arc(0, 0, 8 + Math.sin(t * 9) * 0.8, 0, TAU);
-  ctx.fill();
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = '#2b2140';
-  ctx.beginPath();
-  ctx.arc(-2.5, -1, 1.3, 0, TAU);
-  ctx.arc(2.5, -1, 1.3, 0, TAU);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-}
-
-function drawHat(ctx: CanvasRenderingContext2D, hat: string, ink: string) {
+export function drawHat(ctx: CanvasRenderingContext2D, hat: string, ink: string) {
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = ink;
   switch (hat) {
@@ -419,6 +212,7 @@ export function drawRope(ctx: CanvasRenderingContext2D, path: readonly Pt[], tot
       ropePts[i] = { x: ropePts[i].x - (dy / l) * off, y: ropePts[i].y + (dx / l) * off };
     }
   }
+  // a vine: a soft glow in the two players' colours, a green stem, and little leaves along it
   const a = path[0];
   const z = path[path.length - 1];
   const grad = ctx.createLinearGradient(a.x, a.y, z.x, z.y);
@@ -430,26 +224,59 @@ export function drawRope(ctx: CanvasRenderingContext2D, path: readonly Pt[], tot
   ctx.moveTo(ropePts[0].x, ropePts[0].y);
   for (let i = 1; i < ropePts.length; i++) ctx.lineTo(ropePts[i].x, ropePts[i].y);
   ctx.strokeStyle = grad;
-  ctx.globalAlpha = 0.16 + glow * 0.2 + tension * 0.12;
-  ctx.lineWidth = 7;
+  ctx.globalAlpha = 0.14 + glow * 0.2 + tension * 0.12;
+  ctx.lineWidth = 8;
   ctx.stroke();
   ctx.globalAlpha = 1;
-  ctx.lineWidth = 2.6 + tension * 0.4;
+  ctx.strokeStyle = VINE_DARK;
+  ctx.lineWidth = 3.4 + tension * 0.4;
   ctx.stroke();
-  ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-  ctx.lineWidth = 0.9;
+  ctx.strokeStyle = VINE;
+  ctx.lineWidth = 1.7 + tension * 0.3;
   ctx.stroke();
+  // a twist along it, and a leaf every so often (alternating sides, swaying)
+  ctx.lineWidth = 1;
+  let next = 14;
+  let side = 1;
+  for (let i = 1; i < ropePts.length; i++) {
+    if (ropeAcc[i] < next || ropeAcc[i] > acc - 10) continue;
+    next = ropeAcc[i] + 22;
+    const p = ropePts[i - 1];
+    const q = ropePts[i];
+    const ang = Math.atan2(q.y - p.y, q.x - p.x) + side * (1.0 + Math.sin(t * 2.6 + i) * 0.18);
+    ctx.save();
+    ctx.translate(q.x, q.y);
+    ctx.rotate(ang);
+    ctx.fillStyle = side > 0 ? '#a8d64a' : '#95c63e';
+    ctx.strokeStyle = VINE_DARK;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(4, -3.2, 8.5, 0);
+    ctx.quadraticCurveTo(4, 3.2, 0, 0);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    side = -side;
+  }
 }
 
-/** The string's end hanging loose from a bird whose partner is away. */
-export function drawLooseEnd(ctx: CanvasRenderingContext2D, b: Bird, col: string, t: number) {
-  ctx.strokeStyle = col;
-  ctx.lineWidth = 2.4;
+const VINE = '#8cc63f';
+const VINE_DARK = '#4a7a1c';
+
+/** The vine's end curling loose from a sprout whose partner is away (from its knot). */
+export function drawLooseEnd(ctx: CanvasRenderingContext2D, b: Bird, _col: string, t: number) {
+  const y = b.y + b.ropeOff;
+  const sway = Math.sin(t * 2) * 4;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(b.x, b.y);
-  const sway = Math.sin(t * 2) * 4;
-  ctx.quadraticCurveTo(b.x - b.facing * 8 + sway, b.y + 12, b.x - b.facing * 4 + sway * 1.5, b.y + 22);
+  ctx.moveTo(b.x, y);
+  ctx.quadraticCurveTo(b.x - b.facing * 9 + sway, y + 10, b.x - b.facing * 3 + sway * 1.5, y + 18);
+  ctx.quadraticCurveTo(b.x + b.facing * 2 + sway, y + 22, b.x + b.facing * 1 + sway, y + 17);
+  ctx.strokeStyle = VINE_DARK;
+  ctx.lineWidth = 3.2;
+  ctx.stroke();
+  ctx.strokeStyle = VINE;
+  ctx.lineWidth = 1.6;
   ctx.stroke();
 }
 
@@ -509,33 +336,34 @@ export function drawSeed(ctx: CanvasRenderingContext2D, x: number, y: number, t:
   ctx.restore();
 }
 
-let featherFill: CanvasGradient | null = null;
 
-export function drawFeather(ctx: CanvasRenderingContext2D, x: number, y: number, t: number) {
-  const bob = Math.sin(t * 2.2) * 3;
-  glow(ctx, x, y + bob, 24, '255,226,130', 0.6 + 0.15 * Math.sin(t * 3));
+/** A firefly (three hide in every level): a soft yellow-green glow, wandering a little, wings a-flicker. */
+export function drawFirefly(ctx: CanvasRenderingContext2D, x: number, y: number, t: number) {
+  const fx = x + Math.sin(t * 1.3 + x * 0.05) * 5;
+  const fy = y + Math.sin(t * 2.2) * 4;
+  const pulse = 0.65 + 0.35 * Math.sin(t * 4.1 + x);
+  glow(ctx, fx, fy, 40, '210,255,110', 0.4 + 0.3 * pulse);
+  glow(ctx, fx, fy + 5, 15, '250,255,190', 0.85 * pulse + 0.15);
   ctx.save();
-  ctx.translate(x, y + bob);
-  ctx.rotate(-0.6 + Math.sin(t * 1.6) * 0.25);
-  // (a gradient in the feather's own space, built once)
-  if (!featherFill) {
-    featherFill = ctx.createLinearGradient(0, -12, 0, 12);
-    featherFill.addColorStop(0, '#fff6c0');
-    featherFill.addColorStop(1, '#eba824');
-  }
-  ctx.fillStyle = featherFill;
-  ctx.strokeStyle = '#9a6410';
-  ctx.lineWidth = 1.4;
+  ctx.translate(fx, fy);
+  ctx.rotate(Math.sin(t * 1.7) * 0.25);
+  ctx.scale(1.6, 1.6);
+  // wings, a blur of flicker
+  ctx.fillStyle = 'rgba(235,250,255,0.75)';
+  const wing = 3.8 + Math.abs(Math.sin(t * 38)) * 1.6;
   ctx.beginPath();
-  ctx.moveTo(0, -13);
-  ctx.bezierCurveTo(7, -7, 6, 6, 0, 11);
-  ctx.bezierCurveTo(-6, 6, -7, -7, 0, -13);
+  ctx.ellipse(-3, -4, wing, 2.2, -0.5, 0, TAU);
+  ctx.ellipse(3, -4, wing, 2.2, 0.5, 0, TAU);
   ctx.fill();
-  ctx.stroke();
+  // body, and the glowing tail
+  ctx.fillStyle = '#3b3550';
   ctx.beginPath();
-  ctx.moveTo(0, -11);
-  ctx.lineTo(0, 15);
-  ctx.stroke();
+  ctx.ellipse(0, -2, 2.6, 3.2, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = `rgba(226,255,120,${0.75 + 0.25 * pulse})`;
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 3.1, 3.6, 0, 0, TAU);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -717,33 +545,51 @@ export function drawCheckpoint(ctx: CanvasRenderingContext2D, x: number, y: numb
 }
 
 /** The nest: both birds inside clears the level. */
+/** The goal: a cosy terracotta pot of soil, a heart bobbing over it (both sprouts in it = level clear). */
 export function drawNest(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, inside: number, th: Theme) {
   const base = y + T / 2;
-  glow(ctx, x, base - 20, 72, '255,220,150', 0.35 + 0.18 * Math.sin(t * 2) + inside * 0.25);
-  // a little floating heart over the nest
+  glow(ctx, x, base - 22, 76, '255,232,160', 0.35 + 0.18 * Math.sin(t * 2) + inside * 0.25);
   ctx.fillStyle = '#ff6f9a';
   ctx.globalAlpha = 0.8;
-  heartPath(ctx, x, base - 58 + Math.sin(t * 2.5) * 4, 14 + inside * 3);
+  heartPath(ctx, x, base - 66 + Math.sin(t * 2.5) * 4, 14 + inside * 3);
   ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.fillStyle = '#9a6b3e';
   ctx.strokeStyle = th.ink;
   ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  // the pot: tapering sides, a rim, soil
+  ctx.fillStyle = '#d8794a';
   ctx.beginPath();
-  ctx.moveTo(x - 46, base - 18);
-  ctx.quadraticCurveTo(x, base + 10, x + 46, base - 18);
-  ctx.quadraticCurveTo(x, base + 2, x - 46, base - 18);
+  ctx.moveTo(x - 40, base - 30);
+  ctx.lineTo(x + 40, base - 30);
+  ctx.lineTo(x + 31, base);
+  ctx.lineTo(x - 31, base);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
-  ctx.strokeStyle = '#c9965e';
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fillRect(x - 30, base - 24, 7, 20);
+  ctx.fillStyle = '#e68b58';
+  ctx.beginPath();
+  ctx.roundRect(x - 45, base - 38, 90, 10, 3);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#5a3a24';
+  ctx.beginPath();
+  ctx.ellipse(x, base - 38, 40, 4.5, 0, Math.PI, 0);
+  ctx.fill();
+  // a sprig already growing there, waiting for company
+  ctx.strokeStyle = '#4a7a1c';
   ctx.lineWidth = 1.6;
-  for (let k = 0; k < 7; k++) {
-    const u = k / 6;
+  ctx.beginPath();
+  ctx.moveTo(x + 24, base - 40);
+  ctx.quadraticCurveTo(x + 26, base - 50, x + 22, base - 56);
+  ctx.stroke();
+  ctx.fillStyle = '#a8d64a';
+  for (const s of [-1, 1]) {
     ctx.beginPath();
-    ctx.moveTo(x - 44 + u * 70, base - 16 + Math.sin(u * 9) * 2);
-    ctx.lineTo(x - 30 + u * 70, base - 6 - Math.cos(u * 7) * 2);
-    ctx.stroke();
+    ctx.ellipse(x + 22 + s * 4, base - 56, 4.5, 2.2, s * 0.6 + Math.sin(t * 2) * 0.1, 0, TAU);
+    ctx.fill();
   }
 }
 

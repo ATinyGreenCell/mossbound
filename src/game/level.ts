@@ -27,7 +27,7 @@ export interface MoverDef {
  *   o  peg (the string wraps around it)                S  spring
  *   U  updraft vent (blows up the column above it)
  *   p q r  pressure plates — holding any plate of a letter opens its doors P Q R
- *   *  seed            F  golden feather (3 per level)  C  checkpoint
+ *   *  seed            F  firefly (3 per level)          C  checkpoint (lantern)
  *   N  the nest (both birds in it = level clear)       1 2  where the birds start
  *   i  a sign — its text is the next entry of `signs`, signs taken left to right
  */

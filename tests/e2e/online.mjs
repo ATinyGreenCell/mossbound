@@ -54,7 +54,7 @@ if (MODE === 'both') {
   await third.evaluate((code) => window.__fb.flow.online({ joinCode: code }), code);
   const full = await waitFor(() => third.evaluate(() => window.__fb.app.current?.state === 'error' && document.querySelector('.online-screen .note')?.textContent), 25000, 'room full').catch(() => '');
   const pair = await Promise.all([host, guest].map((p) => p.evaluate(() => window.__fb.flow.link?.status)));
-  t.check('a third player is told the room is full, and the pair plays on', /two birds/.test(full) && pair.every((s) => s === 'connected'), { full, pair });
+  t.check('a third player is told the room is full, and the pair plays on', /two sprouts/.test(full) && pair.every((s) => s === 'connected'), { full, pair });
   await browser3.close();
 }
 
@@ -88,15 +88,15 @@ await guest.keyboard.up('ArrowLeft');
 const g1 = await guest.evaluate(() => window.__fbSession.birds[1].x);
 const g1h = await waitFor(async () => { const h = await host.evaluate(() => window.__fbSession.birds[1].x); const g = await guest.evaluate(() => window.__fbSession.birds[1].x); return Math.abs(g - h) < 12 ? h : null; }, 6000, 'host view settles').catch(() => null);
 t.check('the host sees the guest’s bird where it is', g1h !== null, { guest: g1, host: g1h });
-// stretch the string, then the guest tugs: the host's bird is yanked on the host's own screen
+// stretch the vine, then the host (the tall sprout) tugs: the guest's sprout is yanked on the guest's own screen
 await host.keyboard.down('ArrowRight');
 await waitFor(() => host.evaluate(() => window.__fbSession.tether.length > 200), 10000, 'string stretched');
 await host.keyboard.up('ArrowRight');
 await sleep(600);
-const before = await host.evaluate(() => ({ x: window.__fbSession.birds[0].x, len: window.__fbSession.tether.length }));
-await guest.keyboard.press('KeyE');
-const yanked = await waitFor(async () => { const x = await host.evaluate(() => window.__fbSession.birds[0].x); return x < before.x - 40 ? x : null; }, 4000, 'yank');
-t.check('a tug from the guest yanks the host’s bird', !!yanked, { before, after: yanked });
+const before = await guest.evaluate(() => ({ x: window.__fbSession.birds[1].x, len: window.__fbSession.tether.length }));
+await host.keyboard.press('KeyE');
+const yanked = await waitFor(async () => { const x = await guest.evaluate(() => window.__fbSession.birds[1].x); return x > before.x + 40 ? x : null; }, 4000, 'yank');
+t.check('a tug from the host yanks the guest’s sprout, on the guest’s screen', !!yanked, { before, after: yanked });
 await sleep(800);
 // hearts
 await guest.keyboard.press('KeyQ');

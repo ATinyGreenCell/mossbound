@@ -356,7 +356,7 @@ export class NetLink {
       const now = performance.now();
       if (!this.fullSince || now - this.fullLast > 3000) this.fullSince = now;
       this.fullLast = now;
-      if (now - this.fullSince > FULL_MS) this.fail('That room already has two birds in it.');
+      if (now - this.fullSince > FULL_MS) this.fail('That room already has two sprouts in it.');
       return;
     }
     if (m.t === 'bye') {

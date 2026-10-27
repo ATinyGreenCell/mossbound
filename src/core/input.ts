@@ -12,17 +12,19 @@ export interface ControlFrame {
   anchor: boolean;
   /** one-shot: yank the string */
   tugPressed: boolean;
+  /** one-shot: a burst through the air (the small sprout) */
+  dashPressed: boolean;
   heartPressed: boolean;
   heyPressed: boolean;
 }
 
 export function makeControls(): ControlFrame {
-  return { moveX: 0, moveY: 0, jump: false, jumpPressed: false, anchor: false, tugPressed: false, heartPressed: false, heyPressed: false };
+  return { moveX: 0, moveY: 0, jump: false, jumpPressed: false, anchor: false, tugPressed: false, dashPressed: false, heartPressed: false, heyPressed: false };
 }
 
 export function resetControls(c: ControlFrame) {
   c.moveX = c.moveY = 0;
-  c.jump = c.jumpPressed = c.anchor = c.tugPressed = c.heartPressed = c.heyPressed = false;
+  c.jump = c.jumpPressed = c.anchor = c.tugPressed = c.dashPressed = c.heartPressed = c.heyPressed = false;
 }
 
 /** Which kind of device the player touched last — drives the touch overlay and the button names in hints. */
@@ -40,6 +42,7 @@ export interface TouchState {
   /** a press since the last frame — a tap shorter than one frame still counts */
   jumpTap: boolean;
   tug: boolean;
+  dash: boolean;
   heart: boolean;
 }
 
@@ -121,15 +124,16 @@ interface Intent {
   /** presses since the last frame (key-downs and touch taps; polled pads get their edges from the levels) */
   jumpTap: boolean;
   tug: boolean;
+  dash: boolean;
   heart: boolean;
   hey: boolean;
 }
 
-const makeIntent = (): Intent => ({ mx: 0, my: 0, jump: false, anchor: false, jumpTap: false, tug: false, heart: false, hey: false });
+const makeIntent = (): Intent => ({ mx: 0, my: 0, jump: false, anchor: false, jumpTap: false, tug: false, dash: false, heart: false, hey: false });
 
 function clearIntent(i: Intent) {
   i.mx = i.my = 0;
-  i.jump = i.anchor = i.jumpTap = i.tug = i.heart = i.hey = false;
+  i.jump = i.anchor = i.jumpTap = i.tug = i.dash = i.heart = i.hey = false;
 }
 
 /** The stick value pushed furthest, of two. */
@@ -141,6 +145,7 @@ function addButtons(into: Intent, i: Intent) {
   into.anchor ||= i.anchor;
   into.jumpTap ||= i.jumpTap;
   into.tug ||= i.tug;
+  into.dash ||= i.dash;
   into.heart ||= i.heart;
   into.hey ||= i.hey;
 }
@@ -161,6 +166,7 @@ class Shaper {
     this.prevJump = jump;
     c.anchor = i.anchor;
     c.tugPressed = i.tug;
+    c.dashPressed = i.dash;
     c.heartPressed = i.heart;
     c.heyPressed = i.hey;
   }
@@ -168,7 +174,7 @@ class Shaper {
   /** One-shot presses must only be seen by the first physics sub-step of a frame. */
   clearEdges() {
     const c = this.out;
-    c.jumpPressed = c.tugPressed = c.heartPressed = c.heyPressed = false;
+    c.jumpPressed = c.tugPressed = c.dashPressed = c.heartPressed = c.heyPressed = false;
   }
 
   /** Let go of everything (held levels stay remembered, so a held button doesn't re-press). */
@@ -230,12 +236,13 @@ class Pad implements Device {
     let any = false;
     for (let i = 0; i < pad.buttons.length; i++) if (bp(i)) any = true;
 
-    // Standard (Xbox) layout: A jump · B tug · X / RB / LT / RT anchor · Y heart · LB hey · START pause
+    // Standard (Xbox) layout: A jump · B tug · X / LT / RT anchor · RB dash · Y heart · LB hey · START pause
     it.mx = ax(0) + (b(15) ? 1 : 0) - (b(14) ? 1 : 0);
     it.my = -ax(1) + (b(12) ? 1 : 0) - (b(13) ? 1 : 0);
     it.jump = b(0);
-    it.anchor = b(2) || b(5) || b(6) || b(7);
+    it.anchor = b(2) || b(6) || b(7);
     it.tug = bp(1);
+    it.dash = bp(5);
     it.heart = bp(3);
     it.hey = bp(4);
 
@@ -279,6 +286,7 @@ interface KeyMap {
   jump: string[];
   anchor: string[];
   tug: string[];
+  dash: string[];
   heart: string[];
   hey: string[];
   confirm: string[];
@@ -295,6 +303,7 @@ const LEFT: KeyMap = {
   jump: ['Space', 'KeyZ'],
   anchor: ['ShiftLeft', 'KeyX'],
   tug: ['KeyE', 'KeyC'],
+  dash: ['KeyR', 'KeyV'],
   heart: ['KeyQ'],
   hey: ['KeyF'],
   confirm: ['Space'],
@@ -307,8 +316,9 @@ const RIGHT: KeyMap = {
   up: ['ArrowUp'],
   down: ['ArrowDown'],
   jump: ['Slash', 'Numpad0', 'ControlRight', 'Enter', 'NumpadEnter'],
-  anchor: ['Period', 'ShiftRight', 'NumpadDecimal'],
+  anchor: ['Period', 'NumpadDecimal'],
   tug: ['Comma', 'Quote'],
+  dash: ['Semicolon', 'ShiftRight'],
   heart: ['KeyM'],
   hey: ['KeyN'],
   confirm: ['Enter', 'NumpadEnter'],
@@ -324,6 +334,7 @@ const ALL: KeyMap = {
   jump: [...LEFT.jump, ...RIGHT.jump, 'KeyK'],
   anchor: [...LEFT.anchor, ...RIGHT.anchor, 'KeyJ'],
   tug: [...LEFT.tug, ...RIGHT.tug, 'KeyL'],
+  dash: [...LEFT.dash, ...RIGHT.dash, 'KeyI'],
   heart: [...LEFT.heart, ...RIGHT.heart, 'KeyH'],
   hey: [...LEFT.hey, ...RIGHT.hey, 'KeyG'],
   confirm: ['Enter', 'NumpadEnter', 'Space', 'KeyK'],
@@ -361,6 +372,7 @@ class Keys implements Device {
     it.jump = any(m.jump, k);
     it.anchor = any(m.anchor, k);
     it.tug = any(m.tug, kp);
+    it.dash = any(m.dash, kp);
     it.heart = any(m.heart, kp);
     it.hey = any(m.hey, kp);
     const mn = this.menu;
@@ -371,7 +383,7 @@ class Keys implements Device {
     mn.confirm = any(m.confirm, kp);
     mn.back = any(m.back, kp);
     mn.pause = any(m.pause, kp);
-    mn.any = mn.up || mn.down || mn.left || mn.right || mn.confirm || it.jumpTap || it.tug || it.heart || it.hey || any(m.anchor, kp);
+    mn.any = mn.up || mn.down || mn.left || mn.right || mn.confirm || it.jumpTap || it.tug || it.dash || it.heart || it.hey || any(m.anchor, kp);
   }
 }
 
@@ -381,7 +393,7 @@ class Keys implements Device {
  */
 export class Input {
   readonly menu: MenuInput = makeMenu();
-  readonly touch: TouchState = { moveX: 0, moveY: 0, jump: false, anchor: false, jumpTap: false, tug: false, heart: false };
+  readonly touch: TouchState = { moveX: 0, moveY: 0, jump: false, anchor: false, jumpTap: false, tug: false, dash: false, heart: false };
   padConnected = false;
   /** a gamepad button went down in the latest update() */
   padPressed = false;
@@ -464,7 +476,7 @@ export class Input {
     this.pressed.clear();
     this.touchTap = false;
     const t = this.touch;
-    t.jumpTap = t.tug = t.heart = false;
+    t.jumpTap = t.tug = t.dash = t.heart = false;
     this.main.reset();
     this.keysAll.shaper.reset();
     this.keysL.shaper.reset();
@@ -546,8 +558,9 @@ export class Input {
     all.jump ||= t.jump;
     all.anchor ||= t.anchor;
     all.tug ||= t.tug;
+    all.dash ||= t.dash;
     all.heart ||= t.heart;
-    t.jumpTap = t.tug = t.heart = false;
+    t.jumpTap = t.tug = t.dash = t.heart = false;
 
     this.main.shape(all);
 
@@ -566,8 +579,8 @@ export function isTyping(t: EventTarget | null) {
 }
 
 /** Button names for hints, for whichever device the player used last. */
-export const BUTTON_NAMES: Record<InputDevice, Record<'jump' | 'anchor' | 'tug' | 'heart' | 'climb' | 'move', string>> = {
-  keyboard: { jump: 'SPACE', anchor: 'SHIFT', tug: 'E', heart: 'Q', climb: 'W / S', move: 'A / D' },
-  pad: { jump: 'Ⓐ', anchor: 'Ⓧ or a trigger', tug: 'Ⓑ', heart: 'Ⓨ', climb: 'stick up / down', move: 'stick' },
-  touch: { jump: 'JUMP', anchor: 'HOLD', tug: 'TUG', heart: '♥', climb: 'stick up / down', move: 'stick' },
+export const BUTTON_NAMES: Record<InputDevice, Record<'jump' | 'anchor' | 'tug' | 'dash' | 'heart' | 'climb' | 'move', string>> = {
+  keyboard: { jump: 'SPACE', anchor: 'SHIFT', tug: 'E', dash: 'R', heart: 'Q', climb: 'W / S', move: 'A / D' },
+  pad: { jump: 'Ⓐ', anchor: 'Ⓧ or a trigger', tug: 'Ⓑ', dash: 'RB', heart: 'Ⓨ', climb: 'stick up / down', move: 'stick' },
+  touch: { jump: 'JUMP', anchor: 'HOLD', tug: 'TUG', dash: 'DASH', heart: '♥', climb: 'stick up / down', move: 'stick' },
 };

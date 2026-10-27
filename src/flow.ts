@@ -2,9 +2,10 @@ import { audio } from './audio/audio';
 import type { App } from './app';
 import type { DeviceId } from './core/input';
 import { freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
-import { settings } from './core/settings';
+import { saveSettings, settings } from './core/settings';
 import { LEVELS } from './game/levels';
 import { Session } from './game/session';
+import { isKind, type Kind, kindsFor } from './game/traits';
 import { NetLink, type LinkStatus } from './net/link';
 import type { CtrlMsg, Profile, Resume, Role } from './net/protocol';
 import { CONTROLS_HTML, EndingScreen, LevelSelect, LocalScreen, OnlineScreen, TitleScreen } from './ui/screens';
@@ -49,6 +50,10 @@ export class Flow {
   private lastCmd = 0;
   /** host: the latest command (load / lobby / end), sent again whenever the partner reconnects */
   private lastSent: CtrlMsg | null = null;
+  /** guest: which sprout each bird is, as the host last said (null until they have) */
+  private hostKinds: [Kind, Kind] | null = null;
+  /** host: counts 'kinds' messages; guest: the newest one taken */
+  private kindsSeq = 0;
 
   constructor(readonly app: App) {
     app.onRecover = () => this.title();
@@ -104,6 +109,8 @@ export class Flow {
     // a new room: how far some earlier host's command counter got means nothing here
     this.lastCmd = 0;
     this.lastSent = null;
+    this.hostKinds = null;
+    this.kindsSeq = 0;
     link.onStatus = (s, d) => {
       if (s === 'connected') {
         // a new partner (or the same one after a reload): introduce ourselves and swap saves
@@ -113,6 +120,7 @@ export class Flow {
           this.peerGen = link.peerGen;
           // a different partner instance (e.g. their page reloaded): their command counter starts over
           this.lastCmd = 0;
+          if (this.role === 'guest') this.kindsSeq = 0;
           this.partnerRejoined();
         } else if (this.role === 'host' && this.lastSent) {
           // the same partner back from a dropout: whatever they missed meanwhile, the latest command
@@ -120,6 +128,8 @@ export class Flow {
           link.send(this.lastSent);
         }
       }
+      // (and who's which sprout)
+      if (s === 'connected') this.shareKinds();
       this.screen?.onLinkStatus?.(s, d);
     };
     link.onCtrl = (m) => this.onCtrl(m);
@@ -143,6 +153,14 @@ export class Flow {
         this.screen?.onProfile?.();
         break;
       }
+      case 'kinds': {
+        // the host's word on who's which sprout (the newest only: it can arrive by either path)
+        const k = m.k;
+        if (this.role !== 'guest' || !Number.isInteger(m.c) || m.c <= this.kindsSeq || !Array.isArray(k) || !isKind(k[0]) || !isKind(k[1])) return;
+        this.kindsSeq = m.c;
+        this.hostKinds = [k[0], k[1]];
+        break;
+      }
       case 'save': {
         const changed = mergeSave(m.s);
         // their copy was missing something of ours: send ours back (stops once both match)
@@ -157,6 +175,8 @@ export class Flow {
           const cur = this.app.next;
           if (cur instanceof Session && this.nonce === m.n) return; // a repeat of the load we're already in
           this.nonce = m.n;
+          const k = m.kinds;
+          if (Array.isArray(k) && isKind(k[0]) && isKind(k[1])) this.hostKinds = [k[0], k[1]];
           this.startSession(m.level, cleanResume(m.resume), Number.isInteger(m.gen) && (m.gen as number) > 0 ? m.gen : undefined);
           return;
         }
@@ -178,6 +198,24 @@ export class Flow {
         break;
     }
     this.screen?.onCtrl?.(m);
+  }
+
+  /** Which sprout each bird is (bird 0 = player 1, the host): online, the host decides for both. */
+  kinds(): [Kind, Kind] {
+    if (this.mode === 'online' && this.role === 'guest') return this.hostKinds ?? kindsFor(false, false);
+    return kindsFor(settings.even, settings.swap);
+  }
+
+  /** Trade sprouts (SWAP at the level select — whoever leads). */
+  swapSprouts() {
+    settings.swap = !settings.swap;
+    saveSettings();
+    this.shareKinds();
+  }
+
+  /** Host: tell the guest who's which sprout (on a change, and whenever they connect). */
+  shareKinds() {
+    if (this.mode === 'online' && this.role === 'host' && this.link) this.link.send({ t: 'kinds', k: this.kinds(), c: ++this.kindsSeq });
   }
 
   /** Host: a new command number (for 'pick' from the level select). */
@@ -244,7 +282,7 @@ export class Flow {
     if (this.mode === 'online') {
       if (this.role !== 'host' || !this.link) return;
       this.nonce = (this.nonce + 1 + Math.floor(Math.random() * 1000)) % 1_000_000_000;
-      const msg: CtrlMsg = { t: 'load', level: i, n: this.nonce, c: ++this.cmd, gen, ...(resume ? { resume } : {}) };
+      const msg: CtrlMsg = { t: 'load', level: i, n: this.nonce, c: ++this.cmd, gen, kinds: this.kinds(), ...(resume ? { resume } : {}) };
       this.command(msg);
       window.clearInterval(this.loadRetry);
       let tries = 0;
@@ -272,6 +310,7 @@ export class Flow {
         profiles: this.profiles(),
         resume,
         runGen: gen,
+        kinds: this.kinds(),
       }),
     );
   }

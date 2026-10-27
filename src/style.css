@@ -486,6 +486,23 @@ body {
   opacity: 0.8;
 }
 
+.sprouts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em 0.8em;
+  align-items: center;
+  justify-content: center;
+  margin: 0.2em 0 0.4em;
+  font-size: 0.85em;
+  opacity: 0.95;
+}
+
+.btn.inline {
+  display: inline-block;
+  margin: 0;
+  padding: 0.25em 0.9em;
+}
+
 .card .going {
   font-size: 0.75em;
   font-weight: 600;
@@ -587,22 +604,22 @@ body {
   vertical-align: -0.1em;
 }
 
+/* a firefly: a dim little lamp until it's found, then aglow (the class keeps its old name) */
 .feather-ico {
   display: inline-block;
-  width: 0.75em;
-  height: 1.3em;
-  margin: 0 0.12em;
-  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
-  background: rgba(255, 255, 255, 0.18);
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  transform: rotate(-25deg);
-  vertical-align: -0.25em;
+  width: 0.85em;
+  height: 0.85em;
+  margin: 0 0.16em;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  border: 2px solid rgba(255, 255, 255, 0.42);
+  vertical-align: -0.05em;
 }
 
 .feather-ico.on {
-  background: linear-gradient(#fff6c0, #eba824);
-  border-color: #9a6410;
-  box-shadow: 0 0 0.6em rgba(255, 220, 120, 0.7);
+  background: radial-gradient(circle at 50% 60%, #fbffd8 0%, #d8ff6e 45%, #8fc832 100%);
+  border-color: #5e8f22;
+  box-shadow: 0 0 0.7em rgba(214, 255, 110, 0.85);
 }
 
 /* ------------------------------------------------------------------ HUD */

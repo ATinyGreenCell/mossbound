@@ -1,5 +1,5 @@
 /**
- * The shared save ("the nest book"). Both players keep a full copy; whenever they're connected the
+ * The shared save ("the garden journal"). Both players keep a full copy; whenever they're connected the
  * copies are swapped and merged, so either device can pick the game back up — and nothing either of
  * you has ever earned can be lost by a merge:
  *   unlocked levels: max · feathers: OR (banked the moment they're found) · best seeds: max ·

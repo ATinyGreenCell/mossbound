@@ -1,6 +1,7 @@
-// Fuzz soak: random inputs for both birds on every level, checking invariants every physics step
-// (finite and bounded state, never inside a wall, the string within its tolerance, ghosts always
-// reform) — then real key-mashing through the real app on every level (rendering, HUD, pause).
+// Fuzz soak: random inputs for both sprouts on every level — tall and small both ways round, and two
+// alike; dashes, wall climbs and all — checking invariants every physics step (finite and bounded
+// state, never inside a wall, the vine within its tolerance, ghosts always reform) — then real
+// key-mashing through the real app on every level (rendering, HUD, pause).
 import { installRig, launch, open, reporter, sleep, waitFor } from './harness.mjs';
 
 const browser = await launch();
@@ -14,7 +15,7 @@ const fuzz = await page.evaluate(async () => {
   const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
   for (let li = 0; li < LEVELS.length; li++) {
     for (let run = 0; run < 3; run++) {
-      const s = __rig(li);
+      const s = __rig(li, [['tall', 'small'], ['small', 'tall'], ['even', 'even']][run]);
       const bad = [];
       let ghostFor = [0, 0];
       let maxLen = 0;
@@ -32,6 +33,7 @@ const fuzz = await page.evaluate(async () => {
             c.jump = rnd() < 0.4;
             if (c.jump && rnd() < 0.5) c.jumpPressed = true;
             c.anchor = rnd() < 0.15;
+            c.dashPressed = rnd() < 0.12;
           }
           if (rnd() < 0.08) s.yank(Math.floor(rnd() * 2));
         }
@@ -54,7 +56,7 @@ const fuzz = await page.evaluate(async () => {
 });
 
 // real app: mash keys on every level in local co-op (both keyboard halves)
-const KEYS = ['KeyA', 'KeyD', 'KeyW', 'KeyS', 'Space', 'ShiftLeft', 'KeyE', 'KeyQ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Slash', 'Period', 'Comma', 'KeyM'];
+const KEYS = ['KeyA', 'KeyD', 'KeyW', 'KeyS', 'Space', 'ShiftLeft', 'KeyE', 'KeyR', 'KeyQ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Slash', 'Period', 'Comma', 'Semicolon', 'KeyM'];
 const real = [];
 for (let li = 0; li < 5; li++) {
   await page.evaluate((li) => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.playLevel(li); }, li);

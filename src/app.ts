@@ -23,6 +23,8 @@ export interface Screen {
 export interface TouchHooks {
   /** Show the touch controls (only while a level is live and unpaused). */
   setPlayActive(on: boolean): void;
+  /** Offer the DASH button (this player's sprout can dash). */
+  setDash?(on: boolean): void;
   poll(): void;
 }
 

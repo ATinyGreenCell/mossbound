@@ -1,7 +1,7 @@
 import type { Save } from '../core/save';
 
 /** Bump whenever messages change shape; peers with different versions refuse to play. */
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 export const APP_ID = 'mossbound/coop/v1';
 
 export type Role = 'host' | 'guest';
@@ -30,8 +30,10 @@ export type CtrlMsg =
    * Host commands carry `c`, a number that only grows: messages can take different paths (direct /
    * relay) and arrive out of order, and a stale command must never undo a newer one.
    */
-  /** host: everyone into this level (`n` = level session nonce), optionally continuing a run */
-  | { t: 'load'; level: number; n: number; c: number; resume?: Resume; gen?: number }
+  /** host: everyone into this level (`n` = level session nonce), optionally continuing a run; `kinds`: which sprout each bird is */
+  | { t: 'load'; level: number; n: number; c: number; resume?: Resume; gen?: number; kinds?: string[] }
+  /** host: which sprout each bird is now (bird 0 = host), shown in the lobby */
+  | { t: 'kinds'; k: string[]; c: number }
   | { t: 'loaded'; n: number }
   /** host: back to the lobby / level select */
   | { t: 'lobby'; c: number }
@@ -76,6 +78,10 @@ export const F_MENU = 512;
 export const F_VENT = 1024;
 export const F_STRAIN = 2048;
 export const F_INVULN = 4096;
+/** clinging to a wall (on the side it faces) */
+export const F_CLING = 8192;
+/** an air dash under way */
+export const F_DASH = 16384;
 
 /**
  * [seq, senderMs, x*10, y*10, vx, vy, flags, mover, relX*10, relY*10, levelNonce]

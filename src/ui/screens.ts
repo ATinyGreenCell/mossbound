@@ -11,7 +11,9 @@ import { LEVELS } from '../game/levels';
 import { fmtTime } from '../game/session';
 import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type CtrlMsg } from '../net/protocol';
-import { drawBird, drawRope } from '../render/art';
+import { drawRope } from '../render/art';
+import { drawSprout, sproutTop } from '../render/sprouts';
+import { kindsFor } from '../game/traits';
 import { Backdrop } from '../render/backdrop';
 import { Particles, PK } from '../render/particles';
 import { THEMES, type Theme } from '../render/theme';
@@ -23,10 +25,11 @@ export const CONTROLS_HTML = `
     <h3>keyboard</h3>
     <dl>
       <dt>A D · ← →</dt><dd>walk</dd>
-      <dt>W S · ↑ ↓</dt><dd>climb the string</dd>
-      <dt>SPACE · Z · K</dt><dd>jump · hold while falling to flutter</dd>
-      <dt>SHIFT · X · J</dt><dd>hold on (plant your feet)</dd>
-      <dt>E · C · L</dt><dd>tug the string</dd>
+      <dt>W S · ↑ ↓</dt><dd>climb the vine (and walls)</dd>
+      <dt>SPACE · Z · K</dt><dd>jump · hold while falling to glide</dd>
+      <dt>SHIFT · X · J</dt><dd>hold on (plant your roots)</dd>
+      <dt>E · C · L</dt><dd>tug the vine</dd>
+      <dt>R · V · ;</dt><dd>dash (small sprout)</dd>
       <dt>Q · H</dt><dd>♥ to your partner</dd>
       <dt>ESC</dt><dd>menu</dd>
     </dl>
@@ -35,33 +38,36 @@ export const CONTROLS_HTML = `
     <h3>controller</h3>
     <dl>
       <dt>stick · d-pad</dt><dd>walk · up/down climbs</dd>
-      <dt>Ⓐ</dt><dd>jump · hold to flutter</dd>
-      <dt>Ⓧ · triggers · RB</dt><dd>hold on</dd>
-      <dt>Ⓑ</dt><dd>tug the string</dd>
+      <dt>Ⓐ</dt><dd>jump · hold to glide</dd>
+      <dt>Ⓧ · triggers</dt><dd>hold on</dd>
+      <dt>Ⓑ</dt><dd>tug the vine</dd>
+      <dt>RB</dt><dd>dash (small sprout)</dd>
       <dt>Ⓨ</dt><dd>♥</dd>
       <dt>☰</dt><dd>menu</dd>
     </dl>
     <h3>two on one keyboard</h3>
-    <p>left: WASD · SPACE jump · SHIFT hold · E tug · Q ♥<br>right: arrows · / jump · . hold · , tug · M ♥</p>
+    <p>left: WASD · SPACE jump · SHIFT hold · E tug · R dash · Q ♥<br>right: arrows · / jump · . hold · , tug · ; dash · M ♥</p>
   </div>
   <div class="ctl-col">
     <h3>phone</h3>
     <dl>
       <dt>left thumb</dt><dd>stick: walk · up/down climbs</dd>
-      <dt>JUMP</dt><dd>jump · hold to flutter</dd>
+      <dt>JUMP</dt><dd>jump · hold to glide</dd>
       <dt>HOLD</dt><dd>hold on</dd>
-      <dt>TUG</dt><dd>tug the string</dd>
+      <dt>TUG</dt><dd>tug the vine</dd>
+      <dt>DASH</dt><dd>dash (small sprout)</dd>
       <dt>♥</dt><dd>send a heart</dd>
     </dl>
   </div>
 </div>
 <div class="ctl-tips">
-  <span>The string keeps you within 8 tiles of each other — and catches you when you fall.</span>
+  <span>The vine keeps you within 8 tiles of each other — and catches you when you fall.</span>
+  <span>The tall sprout is strong: it can't be budged, and its tug flings the small one far. The small one jumps higher, climbs walls and dashes through the air.</span>
   <span>Jump on your partner's head to bounce up high.</span>
   <span>Hang under your partner and climb up with ↑.</span>
-  <span>The string wraps around corners and rings: swing under them.</span>
+  <span>The vine wraps around corners and rings: swing under them.</span>
   <span>TUG yanks your partner to you. If they're holding on, it yanks <i>you</i> to them.</span>
-  <span>Fall in? You float back to your partner.</span>
+  <span>Fall in? You float back to your partner as a little seed.</span>
 </div>`;
 
 const HATS: { id: string; name: string; level: number }[] = [
@@ -72,7 +78,7 @@ const HATS: { id: string; name: string; level: number }[] = [
   { id: 'star', name: 'star', level: 4 },
 ];
 
-/** Hats you've earned: all three golden feathers of a level. */
+/** Hats you've earned: all three fireflies of a level. */
 export function unlockedHats() {
   return HATS.filter((h) => levelRecord(LEVELS[h.level]?.id ?? '').feathers === 7);
 }
@@ -155,11 +161,13 @@ class MenuScene {
     ctx.fillRect(0, ground - 4 * s, W, 9 * s);
     ctx.fillStyle = this.theme.ground.topDark;
     ctx.fillRect(0, ground + 5 * s, W, 4 * s);
-    // birds idle, blink, hop now and then, and swap hearts
+    // sprouts idle, blink, hop now and then, and swap hearts
     const cx = W * 0.5;
     const [A, B] = this.birds;
+    const kinds = kindsFor(settings.even, settings.swap);
     for (let i = 0; i < 2; i++) {
       const b = this.birds[i];
+      if (b.kind !== kinds[i]) b.setKind(kinds[i]);
       const homeX = (cx + (i === 0 ? -34 : 34) * s) / s;
       this.hopT[i] -= dt;
       if (this.hopT[i] <= 0 && b.grounded) {
@@ -172,13 +180,13 @@ class MenuScene {
       if (!b.grounded) {
         b.vy += 1900 * dt;
         b.y += b.vy * dt;
-        if (b.y >= ground / s - 10) {
-          b.y = ground / s - 10;
+        if (b.y >= ground / s - b.h / 2) {
+          b.y = ground / s - b.h / 2;
           b.vy = 0;
           b.grounded = true;
           b.squash = 0.25;
         }
-      } else b.y = ground / s - 10;
+      } else b.y = ground / s - b.h / 2;
       b.facing = i === 0 ? 1 : -1;
       b.animate(dt, this.birds[1 - i]);
     }
@@ -188,16 +196,17 @@ class MenuScene {
       const b = this.birds[Math.random() < 0.5 ? 0 : 1];
       b.emote = 'heart';
       b.emoteT = 1.6;
-      this.fx.burst(PK.Heart, b.x, b.y - 18, 5, 50, 1.4, 7, '#ff6f9a', -70, 2, 30);
+      this.fx.burst(PK.Heart, b.x, b.y - sproutTop(b) + 6, 5, 50, 1.4, 7, '#ff6f9a', -70, 2, 30);
     }
     this.fx.update(dt);
     ctx.setTransform(s, 0, 0, s, 0, 0);
     const ca = BIRD_COLORS[colors[0] % BIRD_COLORS.length];
     let cb = BIRD_COLORS[colors[1] % BIRD_COLORS.length];
     if (cb === ca) cb = BIRD_COLORS[(colors[1] + 1) % BIRD_COLORS.length];
-    drawRope(ctx, [A, B], Math.abs(B.x - A.x), ca.body, cb.body, 0, 0, 0, t, this.theme.glow);
-    drawBird(ctx, A, ca, t, this.theme.ink, settings.hat, false);
-    drawBird(ctx, B, cb, t, this.theme.ink, 'none', false);
+    const floor = ground / s - 2;
+    drawRope(ctx, [{ x: A.x, y: A.y + A.ropeOff }, { x: B.x, y: B.y + B.ropeOff }], Math.abs(B.x - A.x), ca.body, cb.body, 0, 0, 0, t, this.theme.glow, (_x, y) => y > floor);
+    drawSprout(ctx, A, ca, t, this.theme.ink, settings.hat, false);
+    drawSprout(ctx, B, cb, t, this.theme.ink, 'none', false);
     this.fx.draw(ctx, -1e5, -1e5, 1e5, 1e5, s, 0, 0);
   }
 }
@@ -225,7 +234,7 @@ export class TitleScreen implements Screen {
   private buildMain() {
     const iosHint = IS_IOS && !IS_STANDALONE ? '<div class="foot-hint">tip: Share → <b>Add to Home Screen</b> to play full screen</div>' : '';
     this.el.innerHTML = `
-      <div class="logo-wrap"><div class="logo">moss<span>bound</span></div><div class="logo-sub">two little birds · one string · any distance</div></div>
+      <div class="logo-wrap"><div class="logo">moss<span>bound</span></div><div class="logo-sub">two little sprouts · one vine · any distance</div></div>
       <div class="menu">
         <div class="btn" data-act="online">PLAY ONLINE</div>
         <div class="btn" data-act="local">PLAY ON ONE SCREEN</div>
@@ -292,8 +301,9 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
       <div class="panel settings">
         <div class="panel-title">settings</div>
         <label class="field"><span>your name</span><input class="name-input" maxlength="12" value="${esc(settings.name)}" placeholder="a cute name" autocomplete="off" spellcheck="false"></label>
-        <div class="field"><span>your bird</span><div class="swatches">${sw}</div></div>
-        <div class="row" data-act="hat"><span>hat</span><b>${esc(hats.find((h) => h.id === settings.hat)?.name ?? (settings.hat === 'none' ? 'none' : 'none'))}</b>${hatOpts.length > 1 ? arrows : '<em>find all 3 golden feathers in a level</em>'}</div>
+        <div class="field"><span>your sprout</span><div class="swatches">${sw}</div></div>
+        <div class="row" data-act="hat"><span>hat</span><b>${esc(hats.find((h) => h.id === settings.hat)?.name ?? (settings.hat === 'none' ? 'none' : 'none'))}</b>${hatOpts.length > 1 ? arrows : '<em>find all 3 fireflies in a level</em>'}</div>
+        <div class="row" data-act="even"><span>sprouts</span><b>${settings.even ? 'ALIKE' : 'TALL & SMALL'}</b></div>
         <div class="row" data-act="music"><span>music</span><b>${Math.round(settings.music * 10)}</b>${arrows}</div>
         <div class="row" data-act="sfx"><span>sounds</span><b>${Math.round(settings.sfx * 10)}</b>${arrows}</div>
         <div class="row" data-act="shake"><span>screen shake</span><b>${settings.shake ? 'ON' : 'OFF'}</b></div>
@@ -354,6 +364,7 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
     } else if (a === 'music') settings.music = Math.min(1, Math.max(0, Math.round(settings.music * 10 + dir) / 10));
     else if (a === 'sfx') settings.sfx = Math.min(1, Math.max(0, Math.round(settings.sfx * 10 + dir) / 10));
     else if (a === 'shake') settings.shake = !settings.shake;
+    else if (a === 'even') settings.even = !settings.even;
     else if (a === 'perf') {
       const o: PerfMode[] = ['auto', 'high', 'low'];
       settings.perf = o[(o.indexOf(settings.perf) + (dir > 0 ? 1 : 2)) % 3];
@@ -466,7 +477,7 @@ export class LocalScreen implements Screen {
     const touchOnly = !this.app.input.padConnected && this.app.input.lastDevice === 'touch';
     this.el.innerHTML = `
       <div class="panel">
-        <div class="panel-title">two birds, one screen</div>
+        <div class="panel-title">two sprouts, one screen</div>
         <div class="seats">${seat(0)}${seat(1)}</div>
         <p class="note">${touchOnly ? 'This mode needs a keyboard or controllers. On phones, play online — each of you on your own phone.' : 'Keyboard players: left side uses WASD + SPACE, right side uses the arrows + / . ,'}</p>
         <div class="btn small" data-act="back">BACK</div>
@@ -861,10 +872,19 @@ export class LevelSelect implements Screen {
     else if (this.online && link?.status === 'reconnecting') status = `<div class="status small"><span class="spinner"></span><span>waiting for ${esc(partner)}…</span></div>`;
     else if (this.online) status = `<div class="status ok small">${link?.via === 'relay' ? 'relay' : 'direct'} · ${Math.round(link?.rtt ?? 0)} ms · with ${esc(partner)}</div>`;
     if (!canSave()) status += `<div class="status small warn">${SAVE_BLOCKED}</div>`;
+    // who's which sprout (whoever leads can trade)
+    const [k0] = this.flow.kinds();
+    const [p0, p1] = this.flow.profiles();
+    const [tall, small] = k0 === 'small' ? [p1, p0] : [p0, p1];
+    const who =
+      k0 === 'even'
+        ? '<div class="sprouts">two sprouts alike · Settings can make one tall and one small</div>'
+        : `<div class="sprouts"><span><b>${esc(tall.name || 'player 1')}</b> is the tall sprout · <b>${esc(small.name || 'player 2')}</b> the small one</span>${this.lead ? '<span class="btn small inline" data-act="swap">SWAP</span>' : ''}</div>`;
     this.el.innerHTML = `
       <div class="panel wide">
         <div class="panel-title">${this.online && !this.lead ? (gone ? `${esc(partner)} left` : `${esc(partner)} is picking…`) : 'pick a level'}</div>
         <div class="cards">${cont}${cards}</div>
+        ${who}
         ${status}
         <div class="btn small" data-act="back">${this.online ? 'LEAVE ROOM' : 'BACK'}</div>
       </div>`;
@@ -906,6 +926,12 @@ export class LevelSelect implements Screen {
       if (r) this.flow.enterLevel(r.index);
       return;
     }
+    if (a === 'swap') {
+      this.flow.swapSprouts();
+      audio.play('uiMove');
+      this.build();
+      return;
+    }
     if (a.startsWith('lvl:')) this.flow.enterLevel(Number(a.slice(4)));
   }
 
@@ -918,7 +944,7 @@ export class LevelSelect implements Screen {
     if (m.t === 'pick' && !this.lead && m.level >= 0 && m.level < LEVELS.length) {
       this.pick(m.level);
       this.build();
-    } else if (m.t === 'profile') this.build();
+    } else if (m.t === 'profile' || m.t === 'kinds') this.build();
   }
 
   /** The partner left, dropped out or came back: say so (the guest would otherwise wait on "picking…"). */

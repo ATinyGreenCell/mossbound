@@ -1,27 +1,41 @@
 # Mossbound
 
-Two little birds, one string. A cozy co-op platformer for two — on one keyboard, two controllers,
+Two little sprouts, one vine. A cozy co-op platformer for two — on one keyboard, two controllers,
 or two phones on opposite sides of the world.
 
 **Play:** https://atinygreencell.github.io/mossbound/
 
-The string keeps you within eight tiles of each other. It catches you when you fall, swings you
+The vine keeps you within eight tiles of each other. It catches you when you fall, swings you
 across gaps, wraps around rings and corners, and lets you yank your partner over the edge. Neither
-bird gets anywhere alone.
+sprout gets anywhere alone.
+
+## The two sprouts
+
+- **The tall one** is sturdy. It's heavy on the vine: it holds the small one without budging, drags
+  it along rather than being stopped by it, and its tug flings it far. But it jumps a little lower,
+  and it can't fit through a one-tile gap.
+- **The small one** is nimble. It jumps higher, fits through tight spaces, climbs walls like ivy (and
+  jumps off them), and has a burst of speed through the air once per jump. Its tug barely budges the
+  tall one, so when the tall one is the one stuck below, the small one holds on while it climbs up.
+
+Both run at the same speed. Whoever made the room (or holds the first controller) starts as the tall
+one; either of you can **swap** at the level select. *Settings → sprouts → alike* gives both of you
+the same body with every move, if you'd rather not have different powers. Online, the host's choice
+holds for both.
 
 ## Playing together
 
 - **On one device** — *Play on one screen*: split one keyboard, use two controllers, or mix them. If a
-  controller drops out (or dozes off), reconnect it and press Ⓐ to take your bird back.
+  controller drops out (or dozes off), reconnect it and press Ⓐ to take your sprout back.
 - **Far apart** — *Play online*: one of you makes a room and reads out the four-letter code; the other
   joins with it (or opens the invite link, `…/mossbound/#join=CODE`). Phones play in landscape.
 - **Xbox** — open the game in Edge, hold **☰ Menu → Use game controls**, hold **⧉ View** for full screen.
 
-Progress lives in a shared **nest book**. Each device keeps a copy, and the copies merge whenever you
-play together: cleared levels, feathers and best times are never lost, whoever played. Every level
+Progress lives in a shared **garden journal**. Each device keeps a copy, and the copies merge whenever you
+play together: cleared levels, fireflies and best times are never lost, whoever played. Every level
 remembers where you got to, so **Continue** (or that level's own card) picks it back up from its last
-lit lantern, and replaying another level for a missing feather never costs you that. A level can be
-started over on purpose from its menu. Lanterns and feathers are saved the moment you reach them, and
+lit lantern, and replaying another level for a missing firefly never costs you that. A level can be
+started over on purpose from its menu. Lanterns and fireflies are saved the moment you reach them, and
 everything else the moment the game is hidden or closed. To move progress to another device, copy the
 save code from *Settings* and paste it on the other device.
 
@@ -32,14 +46,17 @@ save code from *Settings* and paste it on the other device.
 | walk       | A D · ← →           | stick · d-pad       | left thumb   |
 | climb      | W S · ↑ ↓           | up / down           | up / down    |
 | jump       | Space · Z · K       | Ⓐ                   | JUMP         |
-| flutter    | hold jump (falling) | hold Ⓐ              | hold JUMP    |
-| hold on    | Shift · X · J       | Ⓧ · triggers · RB   | HOLD         |
+| leaf glide | hold jump (falling) | hold Ⓐ              | hold JUMP    |
+| hold on    | Shift · X · J       | Ⓧ · triggers        | HOLD         |
 | tug        | E · C · L           | Ⓑ                   | TUG          |
+| dash (small sprout) | R · V · ;  | RB                  | DASH         |
 | ♥          | Q · H               | Ⓨ                   | ♥            |
 | menu       | Esc                 | ☰                   | ❚❚           |
 
-Two on one keyboard: the left player uses WASD, Space, Shift, E, Q; the right player uses the
-arrows, `/` jump, `.` hold, `,` tug, `M` ♥. The backquote key toggles a frame-rate meter.
+Two on one keyboard: the left player uses WASD, Space, Shift, E, R, Q; the right player uses the
+arrows, `/` jump, `.` hold, `,` tug, `;` dash, `M` ♥. The backquote key toggles a frame-rate meter.
+Climbing walls (small sprout): push into a wall in the air to cling to it, up / down to climb, jump
+to leap off it.
 
 ## Levels
 
@@ -49,12 +66,12 @@ arrows, `/` jump, `.` hold, `,` tug, `M` ♥. The backquote key toggles a frame-
 4. **Rooftops of Paris** — sunset · chimneys and awnings
 5. **The Iron Lady** — night · up, up, together
 
-Each level hides three golden feathers. Finding all three earns a hat (flower crown, acorn cap,
+Each level hides three fireflies. Finding all three earns a hat (flower crown, acorn cap,
 straw hat, beret, star).
 
 ## How online play stays smooth
 
-- **No input lag.** Each player's bird is simulated on their own device. The partner's bird plays back
+- **No input lag.** Each player's sprout is simulated on their own device. The partner's sprout plays back
   from a stream of snapshots (40 a second) through an adaptive jitter buffer. That buffer follows
   smooth curves, slows down rather than freezing when packets go missing, and eases out corrections.
   It stays smooth even with 30% packet loss.

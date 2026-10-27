@@ -9,6 +9,8 @@ import type { NetLink } from '../net/link';
 import {
   F_ANCHOR,
   F_CLIMB_DOWN,
+  F_CLING,
+  F_DASH,
   F_CLIMB_UP,
   F_FLUTTER,
   F_GHOST,
@@ -27,9 +29,10 @@ import {
   type Profile,
   type Resume,
 } from '../net/protocol';
-import { drawBird, drawBubble, drawCheckpoint, drawCrumble, drawDoor, drawFeather, drawLooseEnd, drawMover, drawNest, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSpring, nameLabel } from '../render/art';
+import { drawBubble, drawCheckpoint, drawCrumble, drawDoor, drawFirefly, drawLooseEnd, drawMover, drawNest, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSpring, nameLabel } from '../render/art';
 import { Backdrop } from '../render/backdrop';
 import { Particles, PK } from '../render/particles';
+import { drawSprout, sproutTop } from '../render/sprouts';
 import { THEMES, type Theme } from '../render/theme';
 import { TileCache } from '../render/tiles';
 import { ButtonList, esc } from '../ui/menu';
@@ -41,6 +44,7 @@ import { LEVELS } from './levels';
 import { menuOpen, RemoteFeed } from './remote';
 import { Tether } from './tether';
 import { T, TUG_COOLDOWN, TUG_MIN } from './tuning';
+import type { Kind } from './traits';
 import { World } from './world';
 
 export interface SessionOpts {
@@ -64,6 +68,8 @@ export interface SessionOpts {
   resume?: Resume;
   /** which fresh start of this level the run is (see save.ts): online, the host's number for both */
   runGen?: number;
+  /** which sprout each bird is (see traits.ts); both "even" if left out */
+  kinds?: [Kind, Kind];
 }
 
 /** Snapshots per second to the partner (the relay path thins this to what its broker allows). */
@@ -151,11 +157,18 @@ export class Session implements Screen {
     this.auth = this.online ? [this.me === 0, this.me === 1] : [true, true];
     this.feed = this.online ? new RemoteFeed() : null;
     this.birds = [new Bird(0), new Bird(1)];
+    const kinds = opts.kinds ?? ['even', 'even'];
     this.birds.forEach((b, i) => {
       b.local = this.auth[i];
+      b.setKind(kinds[i]);
       b.place(this.L.spawns[i]);
       b.facing = i === 0 ? 1 : -1;
     });
+    // (the partner's motion between snapshots is guessed with their sprout's body)
+    if (this.feed) {
+      const p = this.birds[1 - this.me];
+      this.feed.body = { g: p.traits.gravity, w: p.w, h: p.h };
+    }
     this.tether = new Tether(this.world);
     this.tether.slackTol = this.online ? 44 : 8;
     this.tether.reset(this.birds[0], this.birds[1]);
@@ -196,6 +209,7 @@ export class Session implements Screen {
   }
 
   enter() {
+    this.app.touch?.setDash?.(this.birds[this.me].traits.dash);
     if (this.state === 'play' && !this.overlay) this.app.touch?.setPlayActive(true);
     this.app.keepAwake(true);
   }
@@ -241,7 +255,7 @@ export class Session implements Screen {
     const other = this.birds[1 - this.me];
     switch (e.k) {
       case 'tug':
-        if (!mine.anchored && !mine.ghost) this.yank(mine, other.idx);
+        if (!mine.anchored && !mine.ghost) this.yank(mine, other.idx, tugPower(other, mine));
         this.tether.twang = 1;
         this.tether.twangFrom = other.idx;
         audio.play('tug', 0.8);
@@ -373,6 +387,8 @@ export class Session implements Screen {
     if (b.climbing < 0) f |= F_CLIMB_DOWN;
     if (this.overlay || this.paused) f |= F_MENU;
     if (b.inVent) f |= F_VENT;
+    if (b.cling !== 0) f |= F_CLING;
+    if (b.dashT > 0) f |= F_DASH;
     if (b.strain > 0.5) f |= F_STRAIN;
     if (b.invuln > 0) f |= F_INVULN;
     const m = b.grounded ? b.groundMover : -1;
@@ -549,7 +565,7 @@ export class Session implements Screen {
     this.fx.add(PK.Ring, s.x, s.y, 0, 0, 0.6, 22, '#ffe9a8');
     audio.play('feather', mine ? 0.8 : 0.6);
     this.hud.setFeathers(this.feathers);
-    this.hud.toast(`golden feather ${popcount(this.feathers)} / 3`);
+    this.hud.toast(`firefly ${popcount(this.feathers)} / 3`);
   }
 
   private light(i: number, mine: boolean) {
@@ -592,7 +608,7 @@ export class Session implements Screen {
       this.yank(b, other.idx);
       audio.play('zip', 0.8);
     } else if (other.local) {
-      this.yank(other, b.idx);
+      this.yank(other, b.idx, tugPower(b, other));
       audio.play('tug', 0.9);
     } else {
       // their screen yanks their bird
@@ -601,8 +617,8 @@ export class Session implements Screen {
     }
   }
 
-  /** Throw a bird along the string toward its pivot (the nearest bend, or the partner). */
-  private yank(b: Bird, _toward: number) {
+  /** Throw a bird along the string toward its pivot (the nearest bend, or the partner), `power` times as hard as usual. */
+  private yank(b: Bird, _toward: number, power = 1) {
     const end = this.tether.ends[b.idx];
     const dx = end.pivot.x - b.x;
     const dy = end.pivot.y - b.y;
@@ -610,13 +626,17 @@ export class Session implements Screen {
     if (d < 20) return;
     // aim to arrive in a fraction of a second, a little short of the pivot, with an arc
     const tau = clamp(d / 640, 0.28, 0.5);
-    const g = 1900 * 0.55;
+    const g = b.traits.gravity * 0.55;
     let vx = (dx / tau) * 0.88;
     let vy = (dy * 0.88) / tau - 0.5 * g * tau - 140;
+    // (a strong tug carries further and faster; a weak one hardly moves its partner)
+    const cap = 980 * Math.min(1.25, power);
+    vx *= power;
+    vy = vy < 0 ? vy * power : vy;
     const sp = Math.hypot(vx, vy);
-    if (sp > 980) {
-      vx *= 980 / sp;
-      vy *= 980 / sp;
+    if (sp > cap) {
+      vx *= cap / sp;
+      vy *= cap / sp;
     }
     b.vx = vx;
     b.vy = vy;
@@ -628,7 +648,7 @@ export class Session implements Screen {
     b.jumping = false;
     b.squash = -0.35;
     b.groundMover = -1;
-    this.fx.burst(PK.Dust, b.x, b.y + 8, 6, 90, 0.4, 5, '#f4ead8', 0, 4);
+    this.fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 2, 6, 90, 0.4, 5, '#f4ead8', 0, 4);
   }
 
   private emote(b: Bird, kind: 'heart' | 'hey', mine: boolean) {
@@ -637,7 +657,7 @@ export class Session implements Screen {
     const other = this.birds[1 - b.idx];
     const close = Math.hypot(b.x - other.x, b.y - other.y) < 44 && !other.ghost && other.present;
     if (kind === 'heart') {
-      this.fx.burst(PK.Heart, b.x, b.y - 18, close ? 10 : 4, close ? 90 : 50, 1.2, close ? 9 : 7, '#ff6f9a', -80, 2.5, 30);
+      this.fx.burst(PK.Heart, b.x, b.y - sproutTop(b) + 6, close ? 10 : 4, close ? 90 : 50, 1.2, close ? 9 : 7, '#ff6f9a', -80, 2.5, 30);
       audio.play(close ? 'nuzzle' : 'heart', 0.7, 0, 0.95 + b.idx * 0.1);
       if (close) {
         b.squash = other.squash = 0.25;
@@ -663,23 +683,23 @@ export class Session implements Screen {
     switch (e.k) {
       case 'jump':
         audio.play('jump', 0.55 * vol, pan, 0.95 + b.idx * 0.08);
-        fx.burst(PK.Dust, b.x, b.y + 9, 4, 60, 0.35, 4, '#f2e8d8', 0, 5);
+        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 1, 4, 60, 0.35, 4, '#f2e8d8', 0, 5);
         break;
       case 'hop':
         audio.play('hop', 0.6 * vol, pan);
         break;
       case 'land':
         audio.play('land', clamp(e.v / 900, 0.25, 0.9) * vol, pan);
-        fx.burst(PK.Dust, b.x, b.y + 9, Math.round(clamp(e.v / 120, 3, 10)), 90, 0.4, 5, '#f2e8d8', 0, 5);
+        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 1, Math.round(clamp(e.v / 120, 3, 10)), 90, 0.4, 5, '#f2e8d8', 0, 5);
         if (e.v > 700 && b.local) this.cam.shake(1.2);
         break;
       case 'flutter':
         audio.play('flutter', 0.5 * vol, pan, 1 + b.idx * 0.1);
-        fx.burst(PK.Feather, b.x, b.y, 2, 40, 0.8, 4, this.colors[b.idx].body, 60, 1);
+        fx.burst(PK.Leaf, b.x, b.y - b.h / 2, 2, 40, 0.8, 4, '#a8d64a', 60, 1);
         break;
       case 'spring':
         audio.play('spring', 0.7 * vol, pan);
-        fx.burst(PK.Spark, b.x, b.y + 8, 8, 160, 0.4, 4, '#ffffff', 0, 4);
+        fx.burst(PK.Spark, b.x, b.y + b.h / 2 - 2, 8, 160, 0.4, 4, '#ffffff', 0, 4);
         break;
       case 'bounce':
         audio.play('bounce', 0.7 * vol, pan);
@@ -694,7 +714,7 @@ export class Session implements Screen {
         break;
       case 'die':
         audio.play('die', 0.7 * vol, pan);
-        fx.burst(PK.Feather, b.x, Math.min(b.y, this.world.floorY), 10, 160, 1.2, 5, this.colors[b.idx].body, 120, 1.5);
+        fx.burst(PK.Leaf, b.x, Math.min(b.y, this.world.floorY), 10, 160, 1.2, 5, '#a8d64a', 120, 1.5);
         if (b.local) this.cam.shake(2);
         break;
       case 'respawn':
@@ -702,7 +722,7 @@ export class Session implements Screen {
         fx.burst(PK.Star, b.x, b.y, 10, 120, 0.6, 5, '#fff3c0', 0, 3);
         break;
       case 'step':
-        if (Math.random() < 0.5) fx.add(PK.Dust, b.x - b.facing * 6, b.y + 9, -b.facing * 20, -10, 0.3, 3, '#efe4d2', 0, 4);
+        if (Math.random() < 0.5) fx.add(PK.Dust, b.x - b.facing * 6, b.y + b.h / 2 - 1, -b.facing * 20, -10, 0.3, 3, '#efe4d2', 0, 4);
         audio.play('step', 0.25 * vol, pan, 0.9 + Math.random() * 0.25);
         break;
       case 'grab':
@@ -710,7 +730,19 @@ export class Session implements Screen {
         break;
       case 'mantle':
         audio.play('mantle', 0.5 * vol, pan);
-        fx.burst(PK.Dust, b.x, b.y + 8, 4, 50, 0.3, 4, '#f2e8d8', 0, 5);
+        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 2, 4, 50, 0.3, 4, '#f2e8d8', 0, 5);
+        break;
+      case 'dash':
+        audio.play('zip', 0.55 * vol, pan, 1.25);
+        fx.burst(PK.Leaf, b.x, b.y, 6, 120, 0.5, 4, '#b9e45a', 0, 2);
+        break;
+      case 'cling':
+        audio.play('grab', 0.4 * vol, pan, 1.2);
+        fx.burst(PK.Leaf, b.x + b.cling * (b.w / 2), b.y, 3, 50, 0.4, 3, '#9fd24a', 40, 2);
+        break;
+      case 'walljump':
+        audio.play('jump', 0.55 * vol, pan, 1.15);
+        fx.burst(PK.Dust, b.x - b.facing * (b.w / 2), b.y, 4, 70, 0.3, 4, '#f2e8d8', 0, 5);
         break;
     }
   }
@@ -743,7 +775,7 @@ export class Session implements Screen {
              <div class="btn small" data-act="levels">LEVELS</div>`
           : `<p class="ov-note">waiting for ${esc(partner)} to pick what's next…</p><div class="btn small" data-act="leave">LEAVE ROOM</div>`;
         this.openOverlay(
-          `<div class="ov-title">home sweet nest!</div>
+          `<div class="ov-title">home sweet pot!</div>
            <div class="ov-stats"><span><i class="seed-ico"></i> ${seeds} / ${this.L.seeds.length}</span><span class="feathers">${stars}</span><span>⏱ ${fmtTime(time)}</span></div>
            <div class="ov-buttons">${buttons}</div>`,
           (a) => {
@@ -1024,7 +1056,7 @@ export class Session implements Screen {
     for (let i = 0; i < this.L.feathers.length; i++) {
       if (this.feathers & (1 << i)) continue;
       const f = this.L.feathers[i];
-      if (vis(f.x, f.y, T)) drawFeather(ctx, f.x, f.y, t);
+      if (vis(f.x, f.y, T)) drawFirefly(ctx, f.x, f.y, t);
     }
     // the string
     const [A, B] = this.birds;
@@ -1040,18 +1072,19 @@ export class Session implements Screen {
       const b = this.birds[i];
       if (!b.present && !b.local) continue;
       const prof = this.profiles[i];
-      drawBird(ctx, b, this.colors[i], t, ink, prof.hat || 'none', !b.local && (menuOpen.get(b) ?? false));
+      drawSprout(ctx, b, this.colors[i], t, ink, prof.hat || 'none', !b.local && (menuOpen.get(b) ?? false));
     }
     this.fx.draw(ctx, x0, y0, x1, y1, s, cam.ox, cam.oy);
     for (const i of order) {
       const b = this.birds[i];
       if (!b.present && !b.local) continue;
-      if (b.emote) drawBubble(ctx, b.x + 10, b.y - 30, b.emote, 2.2 - b.emoteT, ink);
-      else if (!b.local && menuOpen.get(b)) drawBubble(ctx, b.x + 10, b.y - 30, 'menu', t, ink);
+      if (b.emote) drawBubble(ctx, b.x + 10, b.y - sproutTop(b) - 8, b.emote, 2.2 - b.emoteT, ink);
+      else if (!b.local && menuOpen.get(b)) drawBubble(ctx, b.x + 10, b.y - sproutTop(b) - 8, 'menu', t, ink);
     }
     // names, crisp in screen space
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const px = Math.round(clamp(11 * r.pixelRatio, 10, 26));
+    const placed: { x: number; y: number; w: number; h: number }[] = [];
     for (const i of order) {
       const b = this.birds[i];
       const name = this.profiles[i].name;
@@ -1059,7 +1092,10 @@ export class Session implements Screen {
       if (this.online && i === this.me) continue;
       const lab = nameLabel(name, '#ffffff', px);
       const sx = Math.round(b.x * s - cam.ox - lab.width / 2);
-      const sy = Math.round((b.y - 28) * s - cam.oy - lab.height - (b.emote ? 26 * s : 0));
+      let sy = Math.round((b.y - sproutTop(b) - 4) * s - cam.oy - lab.height - (b.emote ? 26 * s : 0));
+      // (two sprouts side by side: the second name goes above the first, not over it)
+      for (const q of placed) if (sx < q.x + q.w && sx + lab.width > q.x && sy < q.y + q.h && sy + lab.height > q.y) sy = q.y - lab.height - 2;
+      placed.push({ x: sx, y: sy, w: lab.width, h: lab.height });
       ctx.drawImage(lab, sx, sy);
     }
     if (th.tint) {
@@ -1091,6 +1127,9 @@ export class Session implements Screen {
 }
 
 const popcount = (m: number) => (m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1);
+
+/** How hard `from`'s tug throws `to`: the tall sprout flings the small one, the small one barely budges the tall one. */
+const tugPower = (from: Bird, to: Bird) => from.traits.tug / Math.sqrt(to.mass);
 
 function colorsOf(p: [Profile, Profile]): [(typeof BIRD_COLORS)[number], (typeof BIRD_COLORS)[number]] {
   const c0 = BIRD_COLORS[Math.abs(p[0].color) % BIRD_COLORS.length];

@@ -1,5 +1,5 @@
 import type { Pt } from './level';
-import { CATCH_BOUNCE, GRAVITY, ROPE_LEN, T } from './tuning';
+import { CATCH_BOUNCE, ROPE_LEN, T } from './tuning';
 import type { Body, World } from './world';
 
 /** A point the string bends around: a convex tile corner or a peg. */
@@ -43,7 +43,20 @@ export interface RopeBird extends Body {
   swingE: number;
   /** it ran into something this step (a swing that bumps loses energy, as it should) */
   bumped: boolean;
+  /** weight on the string: the heavier end drags the lighter one (see traits.ts) */
+  mass: number;
+  /** its gravity (a swing's energy is reckoned with it) */
+  g: number;
+  /** the string is tied this far below the body's centre: at the same height above the feet for every body (see knotY) */
+  ropeOff: number;
 }
+
+/**
+ * Where the string is tied to a body: 10 px above its feet, whatever its height — so a tall sprout and
+ * a small one swing, hang and reach exactly as far as the levels were made for.
+ */
+const knotY = (b: Pt & { ropeOff?: number }) => b.y + (b.ropeOff ?? 0);
+const knot = (b: Pt & { ropeOff?: number }): Pt => ({ x: b.x, y: knotY(b) });
 
 const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx;
 /** corner points sit this far outside the tile, so the string never lies inside it */
@@ -95,12 +108,12 @@ export class Tether {
   constructor(private readonly world: World) {}
 
   /** Straighten the string between two fresh positions (spawn, respawn, level start). */
-  reset(a: Pt, b: Pt) {
+  reset(a: Pt & { ropeOff?: number }, b: Pt & { ropeOff?: number }) {
     this.pts.length = 0;
     this.ax = a.x;
-    this.ay = a.y;
+    this.ay = knotY(a);
     this.bx = b.x;
-    this.by = b.y;
+    this.by = knotY(b);
     this.repair();
     this.measure();
   }
@@ -110,7 +123,7 @@ export class Tether {
    * wrap around whatever a ghost flies through, and it's tied afresh, straight, the moment both birds
    * are back — on both screens alike, whichever screen simulates the bird that died.
    */
-  follow(a: Pt & { present: boolean; ghost: boolean }, b: Pt & { present: boolean; ghost: boolean }) {
+  follow(a: Pt & { present: boolean; ghost: boolean; ropeOff?: number }, b: Pt & { present: boolean; ghost: boolean; ropeOff?: number }) {
     if (a.present && b.present && !a.ghost && !b.ghost) {
       if (this.retie) this.reset(a, b);
       else this.update(a, b);
@@ -119,9 +132,11 @@ export class Tether {
   }
 
   /** Move the ends to new positions, wrapping around anything the string swept past. */
-  update(a: Pt, b: Pt) {
-    if (a.x !== this.ax || a.y !== this.ay) this.sweep(0, a.x, a.y);
-    if (b.x !== this.bx || b.y !== this.by) this.sweep(1, b.x, b.y);
+  update(a: Pt & { ropeOff?: number }, b: Pt & { ropeOff?: number }) {
+    const ay = knotY(a);
+    const by = knotY(b);
+    if (a.x !== this.ax || ay !== this.ay) this.sweep(0, a.x, ay);
+    if (b.x !== this.bx || by !== this.by) this.sweep(1, b.x, by);
     this.unwrap();
     this.measure();
   }
@@ -349,12 +364,12 @@ export class Tether {
     for (let end = 0 as 0 | 1; end <= 1; end = (end + 1) as 0 | 1) {
       const me = birds[end];
       const e = this.ends[end];
-      const piv = end === 0 ? (n ? this.pts[0] : B) : n ? this.pts[n - 1] : A;
+      const piv = end === 0 ? (n ? this.pts[0] : knot(B)) : n ? this.pts[n - 1] : knot(A);
       e.pivot.x = piv.x;
       e.pivot.y = piv.y;
       e.pivotIsBird = n === 0;
       e.pivotIsCorner = n > 0 && !(end === 0 ? this.pts[0].peg : this.pts[n - 1].peg);
-      e.seg = Math.hypot(me.x - piv.x, me.y - piv.y);
+      e.seg = Math.hypot(me.x - piv.x, knotY(me) - piv.y);
       e.limit = Math.min(ROPE_LEN - (total - e.seg), me.climbLen);
       e.taut = active && e.seg >= e.limit - 0.75;
       e.active = active;
@@ -377,7 +392,7 @@ export class Tether {
       if (corr <= 0) continue;
       maxPull = Math.max(maxPull, corr);
       const ux = (me.x - e.pivot.x) / seg;
-      const uy = (me.y - e.pivot.y) / seg;
+      const uy = (knotY(me) - e.pivot.y) / seg;
       // pull toward the pivot (through the world, so the string never drags a bird into a wall)
       this.world.moveX(me, -ux * corr);
       if (this.world.moveY(me, -uy * corr) === 1 && me.vy > 0) me.vy = 0;
@@ -401,7 +416,7 @@ export class Tether {
           const still = !e.pivotIsBird || other.anchored || (other.grounded && Math.abs(other.vx) + Math.abs(other.vy) < 5);
           const sp = Math.hypot(me.vx, me.vy);
           if (still && !me.bumped && Number.isFinite(me.swingE) && sp > 1) {
-            const v2 = 2 * (me.swingE + GRAVITY * me.y);
+            const v2 = 2 * (me.swingE + me.g * me.y);
             if (v2 > 0) {
               const k2 = Math.sqrt(v2) / sp;
               me.vx *= k2;
@@ -422,10 +437,10 @@ export class Tether {
   }
 
   /** Unit direction from a bird toward its pivot (for tugs), or null when it sits on it. */
-  pullDir(end: 0 | 1, me: Pt): Pt | null {
+  pullDir(end: 0 | 1, me: Pt & { ropeOff?: number }): Pt | null {
     const piv = this.ends[end].pivot;
     const dx = piv.x - me.x;
-    const dy = piv.y - me.y;
+    const dy = piv.y - knotY(me);
     const d = Math.hypot(dx, dy);
     return d < 1 ? null : { x: dx / d, y: dy / d };
   }
@@ -441,15 +456,24 @@ function shareOf(me: RopeBird, other: RopeBird, end: 0 | 1, rope: Tether): numbe
   if (me.grounded && !other.grounded) return 0; // I'm the anchor for my airborne partner
   if (!me.grounded && other.grounded) return 1; // I hang from my grounded partner
   if (me.grounded && other.grounded) {
-    // on the ground: whoever walks away from the other gets stopped by the string
+    // on the ground: whoever walks away from the other gets stopped by the string — unless they're the
+    // heavier one, who drags the lighter one along instead
     const em = rope.ends[end];
     const eo = rope.ends[1 - end];
     const om = outward(me, em.pivot);
     const oo = outward(other, eo.pivot);
-    if (om + oo < 1) return 0.5;
-    return om / (om + oo);
+    if (om + oo < 1) return other.mass / (me.mass + other.mass);
+    // (shares from both screens add up to one: each walker's part, plus what the other walker leaves)
+    const wm = om / (om + oo);
+    return wm * walkerShare(me, other) + (1 - wm) * (1 - walkerShare(other, me));
   }
-  return 0.5;
+  // both in the air: the lighter one gives way
+  return other.mass / (me.mass + other.mass);
+}
+
+/** How much of the stretch a bird walking away from a standing one takes up: all of it (it's stopped) — unless it's the heavier, which drags the lighter one along. */
+function walkerShare(walker: RopeBird, stander: RopeBird) {
+  return walker.mass <= stander.mass ? 1 : stander.mass / (walker.mass + stander.mass);
 }
 
 function outward(b: Body, piv: Pt) {

@@ -2,6 +2,8 @@ import { clamp } from '../core/math';
 import {
   F_ANCHOR,
   F_CLIMB_DOWN,
+  F_CLING,
+  F_DASH,
   F_CLIMB_UP,
   F_FLUTTER,
   F_GHOST,
@@ -50,6 +52,8 @@ const SNAP_DIST = 96;
  *  - a bird standing on a moving platform is drawn relative to it, so it never slides off.
  */
 export class RemoteFeed {
+  /** the partner's body (its sprout): set by the session */
+  body: FeedBody = { g: GRAVITY, w: BIRD_W, h: BIRD_H };
   private buf: Snap[] = [];
   private lastSeq = -1;
   private offs: { at: number; off: number }[] = [];
@@ -248,7 +252,7 @@ export class RemoteFeed {
       o.mover = s.mover;
       o.x = world.moverX[s.mover] + s.rx;
       o.y = world.moverY[s.mover] + s.ry;
-    } else coast(s, clamp((rt - s.t) / 1000, 0, MAX_EXTRAP_S), world, o);
+    } else coast(s, clamp((rt - s.t) / 1000, 0, MAX_EXTRAP_S), world, o, this.body);
     return o;
   }
 
@@ -268,6 +272,8 @@ export class RemoteFeed {
     bird.climbing = (f & F_CLIMB_UP) !== 0 ? 1 : (f & F_CLIMB_DOWN) !== 0 ? -1 : 0;
     bird.inVent = (f & F_VENT) !== 0;
     bird.invuln = (f & F_INVULN) !== 0 ? 0.5 : 0;
+    bird.cling = (f & F_CLING) !== 0 ? bird.facing : 0;
+    bird.dashT = (f & F_DASH) !== 0 ? 0.05 : 0;
     if ((f & F_STRAIN) !== 0) bird.strain = 1;
     menuOpen.set(bird, (f & F_MENU) !== 0);
   }
@@ -297,9 +303,17 @@ const THEN: Point = { ...CUR };
  * free flight follows its arc (gravity, flutter, terminal speed), one on the ground slows down, one
  * on the string or in a draft carries on straight; nothing goes through walls or floors.
  */
-function coast(s: Snap, ahead: number, world: World, o: Point) {
+/** The partner's body, as far as guessing its motion goes (see traits.ts). */
+export interface FeedBody {
+  g: number;
+  w: number;
+  h: number;
+}
+
+function coast(s: Snap, ahead: number, world: World, o: Point, body: FeedBody) {
   const grounded = (s.flags & F_GROUND) !== 0;
-  const free = !grounded && (s.flags & (F_HANG | F_ANCHOR | F_VENT)) === 0;
+  // (on a wall, on the string, in a dash or an updraft: no free fall to guess)
+  const free = !grounded && (s.flags & (F_HANG | F_ANCHOR | F_VENT | F_CLING | F_DASH)) === 0;
   const flutter = (s.flags & F_FLUTTER) !== 0;
   const vx = s.vx * (grounded || (s.flags & F_ANCHOR) !== 0 ? 0.5 : 1);
   let vy = grounded ? 0 : s.vy;
@@ -309,13 +323,13 @@ function coast(s: Snap, ahead: number, world: World, o: Point) {
     const h = Math.min(1 / 120, ahead - t);
     t += h;
     if (free) {
-      vy += (vy > 0 ? GRAVITY * FALL_MULT : GRAVITY) * h;
+      vy += (vy > 0 ? body.g * FALL_MULT : body.g) * h;
       if (flutter && vy > FLUTTER_FALL) vy = FLUTTER_FALL;
       if (vy > MAX_FALL) vy = MAX_FALL;
     }
     const nx = x + vx * h;
     const ny = y + vy * h;
-    if (!world.boxFree(nx, ny, BIRD_W, BIRD_H)) break;
+    if (!world.boxFree(nx, ny, body.w, body.h)) break;
     x = nx;
     y = ny;
   }
