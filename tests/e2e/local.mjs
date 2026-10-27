@@ -96,7 +96,7 @@ await sleep(500);
 await padPress(page, 0, A);
 const next = await waitFor(() => page.evaluate(() => window.__fbSession?.L?.index === 1), 5000, 'level 2');
 t.check('both in the nest clears the level; NEXT LEVEL', cleared && next);
-const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v2') ?? '{}'));
+const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v3') ?? '{}'));
 t.check('the clear is saved', saved.unlocked >= 1 && saved.levels?.garden?.clears === 1, { unlocked: saved.unlocked });
 await page.screenshot({ path: `${process.env.E2E_OUT ?? './.out'}/local-level2.png` });
 await browser.close();

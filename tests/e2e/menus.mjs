@@ -102,16 +102,26 @@ const sel = (page) => page.evaluate(() => document.querySelector('.sel')?.textCo
   const kept = await act();
   t.check('CONTINUE is highlighted; a rebuild keeps the highlight where it was', first === 'continue' && moved !== 'continue' && kept === moved, { first, moved, kept });
   // scrolling through the levels doesn't repaint the scenery behind them at every step
+  // (first the scenery for the step above settles and paints — that one isn't part of the scroll)
+  await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'scenery settled');
+  await frames(page, 3);
   let paints = 0;
   await page.evaluate(() => {
     const get = HTMLCanvasElement.prototype.getContext;
     window.__paints = 0;
     HTMLCanvasElement.prototype.getContext = function (...a) { if (this.id !== 'view') window.__paints++; return get.apply(this, a); };
   });
-  for (let i = 0; i < 4; i++) await key(page, 'ArrowRight');
+  // (one frame between presses — quick scrolling: a frame is at most 0.1 s of game time, inside the
+  // highlight's 0.15 s settle, however slow a busy machine makes the frames)
+  const from = await act();
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press('ArrowRight');
+    await frames(page, 1);
+  }
+  const to = await act();
   await sleep(600);
   paints = await page.evaluate(() => window.__paints);
-  t.check('scrolling the levels paints one backdrop, not one per step', paints <= 10, paints);
+  t.check('scrolling the levels paints one backdrop, not one per step', paints <= 10 && to !== from, { paints, from, to });
   t.check('no errors (level select)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }

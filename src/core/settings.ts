@@ -18,6 +18,8 @@ export interface Settings {
   shake: boolean;
   /** last room code used online (offered as "back to our room") */
   lastRoom: string;
+  /** whether we made that room or joined it (a guest rejoins; only the host reopens) */
+  lastRole: 'host' | 'guest';
   /** optional TURN relay for networks that block direct connections */
   turn: TurnServer;
 }
@@ -33,6 +35,7 @@ const defaults: Settings = {
   sfx: 0.9,
   shake: true,
   lastRoom: '',
+  lastRole: 'host',
   turn: { urls: '', username: '', credential: '' },
 };
 
@@ -52,6 +55,7 @@ function load(): Settings {
     if (typeof v.sfx === 'number') s.sfx = Math.min(1, Math.max(0, v.sfx));
     if (typeof v.shake === 'boolean') s.shake = v.shake;
     s.lastRoom = str(v.lastRoom, 8) ?? s.lastRoom;
+    if (v.lastRole === 'host' || v.lastRole === 'guest') s.lastRole = v.lastRole;
     if (v.turn && typeof v.turn === 'object') {
       s.turn.urls = str(v.turn.urls, 300) ?? '';
       s.turn.username = str(v.turn.username, 200) ?? '';

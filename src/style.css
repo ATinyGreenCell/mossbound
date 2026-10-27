@@ -486,6 +486,40 @@ body {
   opacity: 0.8;
 }
 
+.card .going {
+  font-size: 0.75em;
+  font-weight: 600;
+  color: #6b4a00;
+}
+
+.status.warn,
+.advanced .warn {
+  color: #ffd27a;
+  max-width: 32em;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+}
+
+.save-code {
+  display: block;
+  max-height: 6em;
+  overflow: auto;
+  margin: 0.5em 0;
+  padding: 0.5em 0.6em;
+  border-radius: 0.6em;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 0.7em;
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+  pointer-events: auto;
+}
+
+.save-code[hidden] {
+  display: none;
+}
+
 .card.t-garden {
   background: linear-gradient(#c4eaff, #a9e08e);
 }

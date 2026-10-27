@@ -72,7 +72,7 @@ async function boot() {
     flow.title();
   }
   app.start();
-  if (import.meta.env.DEV) Object.assign(window, { __fb: { app, flow, audio } });
+  if (import.meta.env.DEV) Object.assign(window, { __fb: { app, flow, audio, save: await import('./core/save') } });
 }
 
 void boot();

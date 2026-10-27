@@ -73,27 +73,29 @@ t.check('a snapshot from the far future can’t derail playback, a stuck clock c
 
 // ---- the shared save against junk and dead heats
 const saves = await page.evaluate(async () => {
-  const S = await import('/src/core/save.ts');
+  const S = window.__fb.save;
   const reset = (o) => {
     for (const k of Object.keys(S.save.levels)) delete S.save.levels[k];
+    for (const k of Object.keys(S.save.runs)) delete S.save.runs[k];
     Object.assign(S.save, structuredClone(o));
   };
   // a real record, then a copy whose level list is 64 made-up ids (which sort before real ones)
-  reset({ unlocked: 1, levels: { garden: { seeds: 10, feathers: 5, time: 100, clears: 1 } }, finished: false, run: null, runAt: 0 });
+  reset({ unlocked: 1, levels: { garden: { seeds: 10, feathers: 5, time: 100, clears: 1 } }, finished: false, runs: {}, clock: 0 });
   S.persist();
-  const junk = { unlocked: 1, levels: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [String(i), { seeds: 1, feathers: 0, time: 0, clears: 0 }])), finished: false, run: null, runAt: 0 };
+  const junk = { unlocked: 1, levels: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [String(i), { seeds: 1, feathers: 0, time: 0, clears: 0 }])), finished: false, runs: {} };
   S.mergeSave(junk);
-  const stored = S.cleanSave(JSON.parse(localStorage.getItem('mossbound.save.v2')));
+  const stored = S.cleanSave(JSON.parse(localStorage.getItem('mossbound.save.v3')));
   const survived = stored?.levels.garden?.feathers === 5 && !Object.keys(stored.levels).some((k) => /^\d+$/.test(k));
-  // both devices touched their run in the same millisecond: they must still end up agreeing
-  const A = { unlocked: 1, levels: {}, finished: false, run: { level: 0, cp: 1, seeds: [1], feathers: 0, time: 10, with: 'A' }, runAt: 5000 };
-  const B = { ...A, run: { ...A.run, time: 12, with: 'B' } };
+  // both devices touched a level's run at the same moment of the shared count: they must still end up agreeing
+  const run = (time, w) => ({ cp: 1, seeds: [1], feathers: 0, time, with: w, sig: '' });
+  const A = { unlocked: 1, levels: {}, finished: false, runs: { garden: { gen: 1, at: 5000, run: run(10, 'A') } }, clock: 5000 };
+  const B = { ...A, runs: { garden: { gen: 1, at: 5000, run: run(12, 'B') } } };
   reset(A);
   S.mergeSave(B);
-  const one = JSON.stringify(S.save.run);
+  const one = JSON.stringify(S.save.runs.garden);
   reset(B);
   S.mergeSave(A);
-  const two = JSON.stringify(S.save.run);
+  const two = JSON.stringify(S.save.runs.garden);
   return { survived, kept: Object.keys(stored?.levels ?? {}), agree: one === two, one, two };
 });
 t.check('a save full of made-up levels can’t crowd out the real records', saves.survived, saves.kept);

@@ -7,7 +7,8 @@ export const APP_ID = 'mossbound/coop/v1';
 export type Role = 'host' | 'guest';
 
 /** Where a continued level picks up (mirrors save.ts Run). */
-export type Resume = { cp: number; seeds: number[]; feathers: number; time: number };
+/** Where a continued run picks up — and which fresh start of the level it belongs to (see save.ts). */
+export type Resume = { cp: number; seeds: number[]; feathers: number; time: number; gen?: number };
 
 export type Profile = {
   name: string;
@@ -30,7 +31,7 @@ export type CtrlMsg =
    * relay) and arrive out of order, and a stale command must never undo a newer one.
    */
   /** host: everyone into this level (`n` = level session nonce), optionally continuing a run */
-  | { t: 'load'; level: number; n: number; c: number; resume?: Resume }
+  | { t: 'load'; level: number; n: number; c: number; resume?: Resume; gen?: number }
   | { t: 'loaded'; n: number }
   /** host: back to the lobby / level select */
   | { t: 'lobby'; c: number }

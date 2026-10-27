@@ -30,6 +30,7 @@ const TESTS = [
   { name: 'menus', file: 'menus.mjs', est: 35, pass: passed('menus') },
   { name: 'resize', file: 'resize.mjs', est: 25, pass: passed('resize') },
   { name: 'save', file: 'save.mjs', est: 15, pass: passed('save') },
+  { name: 'continue', file: 'continue.mjs', est: 75, pass: passed('continue') },
   { name: 'units', file: 'units.mjs', est: 20, pass: passed('units') },
   { name: 'render', file: 'render.mjs', est: 25, pass: passed('render') },
 ].filter((t) => !only || only.includes(t.name));

@@ -2,7 +2,7 @@ import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
 import { BUTTON_NAMES, makeControls, type ControlFrame, type Device, type DeviceId } from '../core/input';
 import { clamp } from '../core/math';
-import { recordClear, setRun } from '../core/save';
+import { bankFeathers, freshGen, levelSig, onFlush, recordClear, save, setRun } from '../core/save';
 import { ceremony } from '../core/testmode';
 import type { Flow } from '../flow';
 import type { NetLink } from '../net/link';
@@ -62,6 +62,8 @@ export interface SessionOpts {
   profiles: [Profile, Profile];
   /** continue a run: from this lantern, with these seeds and feathers already found */
   resume?: Resume;
+  /** which fresh start of this level the run is (see save.ts): online, the host's number for both */
+  runGen?: number;
 }
 
 /** Snapshots per second to the partner (the relay path thins this to what its broker allows). */
@@ -120,6 +122,13 @@ export class Session implements Screen {
   /** the shared save's run needs updating (seed, feather, lantern) */
   private runDirty = false;
   private runT = 0;
+  /** the next run save goes to storage at once (a lantern, a feather), not with the next batch */
+  private runUrgent = false;
+  /** `time` when the run was last saved */
+  private savedTime = -1;
+  private readonly runGen: number;
+  private readonly sig: string;
+  private readonly offFlush: () => void;
   private clearRepeat = 0;
   private readonly offResize: () => void;
   private seatLost = [false, false];
@@ -163,9 +172,15 @@ export class Session implements Screen {
       this.feathers = r.feathers & ((1 << this.L.feathers.length) - 1);
       this.checkpoint = r.cp >= 0 && r.cp < this.L.checkpoints.length ? r.cp : -1;
       this.time = r.time;
+      this.savedTime = r.time;
       for (const b of this.birds) b.place(this.home(b.idx));
       this.tether.reset(this.birds[0], this.birds[1]);
     }
+    const id = this.L.def.id;
+    this.runGen = opts.runGen ?? (r ? (save.runs[id]?.gen ?? 1) : freshGen(id));
+    this.sig = levelSig(this.L.index);
+    // the page going away (hidden, closed) saves where we are first
+    this.offFlush = onFlush(() => this.flushRun());
     let seeds = 0;
     for (const v of this.seedTaken) seeds += v;
     this.hud.setSeeds(seeds, this.L.seeds.length);
@@ -480,18 +495,32 @@ export class Session implements Screen {
   resumeState(): Resume {
     const seeds: number[] = [];
     this.seedTaken.forEach((v, i) => v && seeds.push(i));
-    return { cp: this.checkpoint, seeds, feathers: this.feathers, time: this.time };
+    return { cp: this.checkpoint, seeds, feathers: this.feathers, time: this.time, gen: this.runGen };
   }
 
   private saveRun() {
-    this.runDirty = false;
+    const now = this.runUrgent;
+    this.runDirty = this.runUrgent = false;
     this.runT = 1.5;
     if (this.state !== 'play') return;
     const r = this.resumeState();
+    // nothing found yet and barely begun: not worth a CONTINUE card (and an older run of this level stays)
+    if (r.cp < 0 && !r.seeds.length && !r.feathers && r.time < 20) return;
     // both names (the run is shared: "with" reads the same on either device)
     const [a, b] = this.profiles;
-    setRun({ level: this.L.index, ...r, with: this.online ? [a.name, b.name].filter(Boolean).join(' & ') : '' });
+    const run = { cp: r.cp, seeds: r.seeds, feathers: r.feathers, time: r.time, with: this.online ? [a.name, b.name].filter(Boolean).join(' & ') : '', sig: this.sig };
+    setRun(this.L.def.id, this.runGen, run, now);
+    this.savedTime = r.time;
     this.flow.shareSave();
+  }
+
+  /** Save the run now if anything (even just time) has happened since it was last saved. */
+  private flushRun() {
+    if (this.state !== 'play') return;
+    if (this.runDirty || this.time - this.savedTime > 1) {
+      this.runUrgent = true;
+      this.saveRun();
+    }
   }
 
   private takeSeed(i: number, mine: boolean) {
@@ -510,7 +539,9 @@ export class Session implements Screen {
   private takeFeather(i: number, mine: boolean) {
     if (this.feathers & (1 << i)) return;
     this.feathers |= 1 << i;
-    this.runDirty = true;
+    // found is found: it counts (for hats too) even if this level never gets finished
+    bankFeathers(this.L.def.id, 1 << i);
+    this.runDirty = this.runUrgent = true;
     this.runT = 0;
     const s = this.L.feathers[i];
     if (!s) return;
@@ -524,7 +555,7 @@ export class Session implements Screen {
   private light(i: number, mine: boolean) {
     if (i <= this.checkpoint || i >= this.L.checkpoints.length) return;
     this.checkpoint = i;
-    this.runDirty = true;
+    this.runDirty = this.runUrgent = true;
     this.runT = 0;
     const c = this.L.checkpoints[i];
     this.fx.burst(PK.Spark, c.x + 7, c.y - 6, 12, 140, 0.7, 4, '#ffd68a', -60, 3);
@@ -695,7 +726,7 @@ export class Session implements Screen {
     for (let k = 0; k < 3; k++) this.fx.burst(PK.Heart, n.x, n.y - 20, 8, 160, 1.6, 9, ['#ff6f9a', '#ffb3c8', '#ffd75a'][k], -60, 1.5, 40);
     let seeds = 0;
     for (const v of this.seedTaken) seeds += v;
-    recordClear(this.L.def.id, this.L.index, seeds, this.feathers, time);
+    recordClear(this.L.def.id, this.L.index, seeds, this.feathers, time, this.runGen);
     this.flow.shareSave();
     // a 'clear' lost in a path hand-over would strand the guest in the level: keep repeating it
     if (this.online && this.me === 0) this.clearRepeat = window.setInterval(() => this.link?.send({ t: 'clear', n: this.nonce, time }), 1500);
@@ -716,7 +747,7 @@ export class Session implements Screen {
            <div class="ov-stats"><span><i class="seed-ico"></i> ${seeds} / ${this.L.seeds.length}</span><span class="feathers">${stars}</span><span>⏱ ${fmtTime(time)}</span></div>
            <div class="ov-buttons">${buttons}</div>`,
           (a) => {
-            if (a === 'next') this.flow.playLevel(this.L.index + 1);
+            if (a === 'next') this.flow.enterLevel(this.L.index + 1);
             else if (a === 'again') this.flow.playLevel(this.L.index);
             else if (a === 'levels') this.flow.levels();
             else if (a === 'ending') this.flow.ending();
@@ -747,6 +778,7 @@ export class Session implements Screen {
        <div class="ov-buttons">
          <div class="btn" data-act="resume">RESUME</div>
          <div class="btn small" data-act="regroup">REGROUP AT THE LANTERN</div>
+         ${this.online && this.me === 1 ? '' : '<div class="btn small" data-act="restart">START THE LEVEL OVER</div>'}
          <div class="btn small" data-act="controls">HOW TO PLAY</div>
          <div class="btn small" data-act="quit">${leave}</div>
        </div>`,
@@ -756,7 +788,8 @@ export class Session implements Screen {
           this.closeOverlay();
           for (const b of this.birds) if (b.local) b.die('fall');
           this.send({ k: 'regroup' });
-        } else if (a === 'controls') this.flow.showControls();
+        } else if (a === 'restart') this.flow.playLevel(this.L.index);
+        else if (a === 'controls') this.flow.showControls();
         else if (a === 'quit') {
           if (this.online && this.me === 1) this.flow.leaveOnline();
           else this.flow.levels();
@@ -1040,6 +1073,9 @@ export class Session implements Screen {
   private disposed = false;
 
   dispose() {
+    // leaving the level (quit, back to the levels, the host moved on): where we got to is kept
+    this.flushRun();
+    this.offFlush();
     this.disposed = true;
     window.clearInterval(this.clearRepeat);
     this.closeOverlay();

@@ -1,7 +1,7 @@
 import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
 import { deviceLabel, isTyping, type Device, type DeviceId } from '../core/input';
-import { exportCode, importCode, levelRecord, save } from '../core/save';
+import { canSave, exportCode, importCode, latestRun, levelRecord, runSlot, save } from '../core/save';
 import { saveSettings, settings, type PerfMode } from '../core/settings';
 import { ceremony } from '../core/testmode';
 import { IS_IOS, IS_STANDALONE, IS_XBOX, XBOX_HINT } from '../core/platform';
@@ -97,6 +97,9 @@ function typingIn(app: App, m: { back: boolean; up: boolean; down: boolean }) {
  * Backdrops behind the menus, newest first. Painting one is a few full-screen strips (tens of ms on a
  * phone, tens of MB): the last few themes stay ready, older ones give their memory back.
  */
+/** Shown wherever progress is, when this browser won't keep it (blocked or full storage). */
+const SAVE_BLOCKED = 'This browser isn’t keeping your progress on this device. Playing together keeps it on your partner’s device too, and Settings has a save code to copy.';
+
 const menuBackdrops: Backdrop[] = [];
 const MENU_BACKDROPS = 2;
 
@@ -297,7 +300,9 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
         <div class="row" data-act="perf"><span>graphics</span><b>${perfLabel[settings.perf]}</b></div>
         <details class="advanced"><summary>your shared save</summary>
           <p>Your progress is shared with your partner every time you play together. To move it to a new device, copy the save code here and paste it there.</p>
+          ${canSave() ? '' : `<p class="warn">${SAVE_BLOCKED}</p>`}
           <div class="btn small" data-act="copysave">COPY SAVE CODE</div>
+          <code class="save-code" hidden></code>
           <label class="field"><span>paste a code</span><input class="save-input" placeholder="MB1-…" autocomplete="off" spellcheck="false"></label>
         </details>
         <details class="advanced"><summary>connection help</summary>
@@ -368,12 +373,21 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
       if (a === 'back') done();
       else if (a === 'copysave') {
         const code = exportCode();
-        void navigator.clipboard
-          ?.writeText(code)
-          .then(() => (el.textContent = 'COPIED ✓'))
-          .catch(() => {
-            el.textContent = 'COPY FAILED';
-          });
+        // the clipboard said no (or there isn't one): show the code, to copy by hand
+        const show = () => {
+          el.textContent = 'COPY IT FROM BELOW';
+          const box = host.querySelector<HTMLElement>('.save-code');
+          if (!box) return;
+          box.textContent = code;
+          box.hidden = false;
+        };
+        const clip = navigator.clipboard;
+        if (!clip?.writeText) show();
+        else
+          void clip
+            .writeText(code)
+            .then(() => (el.textContent = 'COPIED ✓'))
+            .catch(show);
       } else step(a, 1);
     },
     done,
@@ -532,6 +546,8 @@ export class OnlineScreen implements Screen {
   private list: ButtonList;
   private state: OnlineState = 'menu';
   private error = '';
+  /** the room a join was trying (TRY AGAIN tries it again) */
+  private retryCode = '';
   private dt = 0;
   private codeInput: HTMLInputElement | null = null;
   private moveOnT = 0;
@@ -565,7 +581,7 @@ export class OnlineScreen implements Screen {
             <div class="swatches small">${BIRD_COLORS.map((c, i) => `<i class="swatch${i === settings.color ? ' on' : ''}" data-act="color:${i}" style="background:${c.body}"></i>`).join('')}</div>
             <div class="btn" data-act="host">MAKE A ROOM</div>
             <div class="btn" data-act="join">JOIN A ROOM</div>
-            ${settings.lastRoom ? `<div class="btn small" data-act="rehost">REOPEN ROOM ${esc(settings.lastRoom)}</div>` : ''}
+            ${!settings.lastRoom ? '' : settings.lastRole === 'guest' ? `<div class="btn small" data-act="rejoin">REJOIN ROOM ${esc(settings.lastRoom)}</div>` : `<div class="btn small" data-act="rehost">REOPEN ROOM ${esc(settings.lastRoom)}</div>`}
             <div class="btn small" data-act="back">BACK</div>
           </div>`;
         this.bindName();
@@ -625,7 +641,7 @@ export class OnlineScreen implements Screen {
           <div class="panel">
             <div class="panel-title">no connection</div>
             <p class="note">${esc(this.error)}</p>
-            <div class="btn" data-act="menu">TRY AGAIN</div>
+            <div class="btn" data-act="retry">TRY AGAIN</div>
             <div class="btn small" data-act="back">BACK</div>
           </div>`;
         break;
@@ -658,6 +674,9 @@ export class OnlineScreen implements Screen {
       case 'rehost': {
         const code = a === 'rehost' ? settings.lastRoom : makeRoomCode();
         settings.lastRoom = code;
+        // (only the one who made a room offers to reopen it: two devices both hosting one code clash)
+        settings.lastRole = 'host';
+        this.retryCode = '';
         saveSettings();
         this.flow.adopt(NetLink.open('host', code));
         this.go('host');
@@ -665,6 +684,14 @@ export class OnlineScreen implements Screen {
       }
       case 'join':
         this.go('join');
+        break;
+      case 'rejoin':
+        if (isValidCode(settings.lastRoom)) this.join(settings.lastRoom);
+        break;
+      case 'retry':
+        // a join that timed out tries the same room again; anything else starts over at the menu
+        if (this.retryCode) this.join(this.retryCode);
+        else this.act('menu');
         break;
       case 'go': {
         const code = normalizeCode(this.codeInput?.value ?? '');
@@ -701,6 +728,8 @@ export class OnlineScreen implements Screen {
 
   private join(code: string) {
     settings.lastRoom = code;
+    settings.lastRole = 'guest';
+    this.retryCode = code;
     saveSettings();
     this.flow.adopt(NetLink.open('guest', code));
     this.go('connecting');
@@ -789,7 +818,7 @@ export class LevelSelect implements Screen {
   ) {
     this.online = flow.mode === 'online';
     this.lead = !this.online || flow.role === 'host';
-    this.sel = Math.min(save.run?.level ?? save.unlocked, LEVELS.length - 1);
+    this.sel = Math.min(latestRun()?.index ?? save.unlocked, LEVELS.length - 1);
     this.scene = new MenuScene(THEMES[LEVELS[this.sel].theme]);
     this.el = document.createElement('div');
     this.el.className = 'screen levels-screen';
@@ -803,10 +832,11 @@ export class LevelSelect implements Screen {
     const partner = this.flow.partner.name || 'your partner';
     // a rebuild (every save or profile from the partner) keeps the highlight where it was
     const was = this.built ? this.list.items()[this.list.sel]?.dataset.act : undefined;
-    const run = save.run && save.run.level < LEVELS.length ? save.run : null;
+    const latest = latestRun();
+    const run = latest?.slot.run ?? null;
     let cont = '';
-    if (run) {
-      const L = LEVELS[run.level];
+    if (latest && run) {
+      const L = LEVELS[latest.index];
       const where = run.cp >= 0 ? `lantern ${run.cp + 1}` : 'the start';
       cont = `<div class="card continue t-${L.theme}" ${this.lead ? 'data-act="continue"' : ''}>
         <span class="num">▶</span><b>continue</b><em>${esc(L.name)} · from ${where}</em>
@@ -817,9 +847,12 @@ export class LevelSelect implements Screen {
       const locked = i > save.unlocked;
       const f = rec?.feathers ?? 0;
       const feathers = [0, 1, 2].map((k) => `<i class="feather-ico${f & (1 << k) ? ' on' : ''}"></i>`).join('');
+      // a level part-way through carries on from there (START THE LEVEL OVER is in its menu)
+      const going = locked ? null : runSlot(L.id)?.run;
+      const at = going ? `<span class="going">▶ ${going.cp >= 0 ? `lantern ${going.cp + 1}` : 'under way'}</span>` : '';
       return `<div class="card t-${L.theme}${locked ? ' locked off' : ''}${i === this.sel ? ' picked' : ''}" ${this.lead && !locked ? `data-act="lvl:${i}"` : ''}>
         <span class="num">${i + 1}</span><b>${esc(L.name)}</b><em>${esc(L.subtitle)}</em>
-        <span class="feathers">${feathers}</span>${rec?.time ? `<span class="best">⏱ ${fmtTime(rec.time)}</span>` : ''}${locked ? '<span class="lock">🔒</span>' : ''}</div>`;
+        <span class="feathers">${feathers}</span>${at}${rec?.time ? `<span class="best">⏱ ${fmtTime(rec.time)}</span>` : ''}${locked ? '<span class="lock">🔒</span>' : ''}</div>`;
     }).join('');
     const link = this.flow.link;
     const gone = this.online && link?.status === 'lost';
@@ -827,6 +860,7 @@ export class LevelSelect implements Screen {
     if (gone) status = `<div class="status small">${esc(partner)} left the room · they can come back with the code <b>${esc(link?.code ?? '')}</b></div>`;
     else if (this.online && link?.status === 'reconnecting') status = `<div class="status small"><span class="spinner"></span><span>waiting for ${esc(partner)}…</span></div>`;
     else if (this.online) status = `<div class="status ok small">${link?.via === 'relay' ? 'relay' : 'direct'} · ${Math.round(link?.rtt ?? 0)} ms · with ${esc(partner)}</div>`;
+    if (!canSave()) status += `<div class="status small warn">${SAVE_BLOCKED}</div>`;
     this.el.innerHTML = `
       <div class="panel wide">
         <div class="panel-title">${this.online && !this.lead ? (gone ? `${esc(partner)} left` : `${esc(partner)} is picking…`) : 'pick a level'}</div>
@@ -867,15 +901,12 @@ export class LevelSelect implements Screen {
       else this.flow.title();
       return;
     }
-    if (a === 'continue' && save.run) {
-      const r = save.run;
-      this.flow.playLevel(r.level, { cp: r.cp, seeds: r.seeds, feathers: r.feathers, time: r.time });
+    if (a === 'continue') {
+      const r = latestRun();
+      if (r) this.flow.enterLevel(r.index);
       return;
     }
-    if (a.startsWith('lvl:')) {
-      const i = Number(a.slice(4));
-      this.flow.playLevel(i);
-    }
+    if (a.startsWith('lvl:')) this.flow.enterLevel(Number(a.slice(4)));
   }
 
   /** The partner's half of the save arrived: show what they've unlocked too. */
@@ -907,7 +938,7 @@ export class LevelSelect implements Screen {
     this.list.update(m);
     if (this.list.sel !== before && this.lead) {
       const a = this.list.items()[this.list.sel]?.dataset.act ?? '';
-      const level = a.startsWith('lvl:') ? Number(a.slice(4)) : a === 'continue' && save.run ? save.run.level : -1;
+      const level = a.startsWith('lvl:') ? Number(a.slice(4)) : a === 'continue' ? (latestRun()?.index ?? -1) : -1;
       if (level >= 0 && level < LEVELS.length) {
         this.pick(level);
         if (this.online) this.flow.link?.send({ t: 'pick', level: this.sel, c: this.flow.nextCmd() });

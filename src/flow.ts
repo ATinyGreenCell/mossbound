@@ -1,7 +1,7 @@
 import { audio } from './audio/audio';
 import type { App } from './app';
 import type { DeviceId } from './core/input';
-import { mergeSave, persist, sameSave, save } from './core/save';
+import { freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
 import { settings } from './core/settings';
 import { LEVELS } from './game/levels';
 import { Session } from './game/session';
@@ -52,6 +52,8 @@ export class Flow {
 
   constructor(readonly app: App) {
     app.onRecover = () => this.title();
+    // another tab of the game saved: whatever shows the save catches up
+    onSaveChange(() => this.screen?.onSave?.());
   }
 
   /** where the partner's messages go: the screen taking over, if one is (see App.next) */
@@ -155,7 +157,7 @@ export class Flow {
           const cur = this.app.next;
           if (cur instanceof Session && this.nonce === m.n) return; // a repeat of the load we're already in
           this.nonce = m.n;
-          this.startSession(m.level, cleanResume(m.resume));
+          this.startSession(m.level, cleanResume(m.resume), Number.isInteger(m.gen) && (m.gen as number) > 0 ? m.gen : undefined);
           return;
         }
         break;
@@ -209,7 +211,8 @@ export class Flow {
 
   levels() {
     if (this.mode === 'online') {
-      if (!this.link || this.link.status === 'lost' || this.link.status === 'error') {
+      // (a partner who left can come back to the room: it stays open — only a dead link ends it)
+      if (!this.link || this.link.status === 'error') {
         this.title();
         return;
       }
@@ -219,16 +222,29 @@ export class Flow {
     this.app.setScreen(new LevelSelect(this.app, this));
   }
 
-  /** Start a level: locally right away; online the host tells the guest to follow (until they confirm). */
+  /** Go into level `i`: where its run got to, if it has one, else from the start. */
+  enterLevel(i: number) {
+    this.playLevel(i, resumeOf(i) ?? undefined);
+  }
+
+  /**
+   * Start a level — continuing `resume`, or (without one) a fresh start of it: locally right away;
+   * online the host tells the guest to follow (until they confirm).
+   */
   playLevel(i: number, resume?: Resume) {
     if (i >= LEVELS.length) {
       this.ending();
       return;
     }
+    // (there's progress worth keeping now: ask the browser not to clear it away)
+    keepStorage();
+    const id = LEVELS[i].id;
+    // which start of this level the run is: both devices record it under the same number
+    const gen = resume ? (resume.gen ?? save.runs[id]?.gen ?? 1) : freshGen(id);
     if (this.mode === 'online') {
       if (this.role !== 'host' || !this.link) return;
       this.nonce = (this.nonce + 1 + Math.floor(Math.random() * 1000)) % 1_000_000_000;
-      const msg: CtrlMsg = { t: 'load', level: i, n: this.nonce, c: ++this.cmd, ...(resume ? { resume } : {}) };
+      const msg: CtrlMsg = { t: 'load', level: i, n: this.nonce, c: ++this.cmd, gen, ...(resume ? { resume } : {}) };
       this.command(msg);
       window.clearInterval(this.loadRetry);
       let tries = 0;
@@ -239,10 +255,10 @@ export class Flow {
         else this.link.send(msg);
       }, LOAD_RETRY_MS);
     }
-    this.startSession(i, resume);
+    this.startSession(i, resume, gen);
   }
 
-  private startSession(i: number, resume?: Resume) {
+  private startSession(i: number, resume?: Resume, gen?: number) {
     const online = this.mode === 'online';
     this.app.setScreen(
       new Session(this.app, this, {
@@ -255,6 +271,7 @@ export class Flow {
         seatGen: online ? undefined : this.seatGen,
         profiles: this.profiles(),
         resume,
+        runGen: gen,
       }),
     );
   }
@@ -325,5 +342,6 @@ function cleanResume(r: unknown): Resume | undefined {
     seeds,
     feathers: Number.isInteger(o.feathers) ? (o.feathers as number) & 7 : 0,
     time: typeof o.time === 'number' && Number.isFinite(o.time) ? Math.max(0, Math.min(360000, o.time)) : 0,
+    ...(Number.isInteger(o.gen) && (o.gen as number) > 0 ? { gen: o.gen } : {}),
   };
 }

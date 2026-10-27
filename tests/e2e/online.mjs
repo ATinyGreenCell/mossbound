@@ -12,14 +12,14 @@ const extra = RELAY ? 'relay&norender' : MODE === 'p2p' ? 'p2p&norender' : 'nore
 const browser = await launch();
 const browser2 = await launch();
 const t = reporter();
-const save = (o) => ({ unlocked: 0, levels: {}, finished: false, run: null, runAt: 0, ...o });
+const save = (o) => ({ v: 3, unlocked: 0, levels: {}, finished: false, runs: {}, clock: 0, ...o });
 const host = await open(browser, {
   query: { extra },
-  storage: { 'mossbound.settings.v1': { name: 'Pip', color: 0 }, 'mossbound.save.v2': save({ unlocked: 2, levels: { garden: { seeds: 20, feathers: 1, time: 300, clears: 1 } } }) },
+  storage: { 'mossbound.settings.v1': { name: 'Pip', color: 0 }, 'mossbound.save.v3': save({ unlocked: 2, levels: { garden: { seeds: 20, feathers: 1, time: 300, clears: 1 } } }) },
 });
 const guest = await open(browser2, {
   query: { extra },
-  storage: { 'mossbound.settings.v1': { name: 'Bo', color: 1 }, 'mossbound.save.v2': save({ unlocked: 1, levels: { woods: { seeds: 5, feathers: 2, time: 0, clears: 0 } } }) },
+  storage: { 'mossbound.settings.v1': { name: 'Bo', color: 1 }, 'mossbound.save.v3': save({ unlocked: 1, levels: { woods: { seeds: 5, feathers: 2, time: 0, clears: 0 } } }) },
 });
 const errors = () => [...host.errors, ...guest.errors];
 
@@ -45,7 +45,7 @@ await waitFor(() => Promise.all([host, guest].map((p) => p.evaluate(() => window
 await sleep(1500);
 const names = { host: await host.evaluate(() => window.__fb.flow.partner.name), guest: await guest.evaluate(() => window.__fb.flow.partner.name) };
 t.check('each sees the other’s name', names.host === 'Bo' && names.guest === 'Pip', names);
-const saves = await Promise.all([host, guest].map((p) => p.evaluate(() => { const s = JSON.parse(localStorage.getItem('mossbound.save.v2')); return { unlocked: s.unlocked, garden: s.levels.garden?.feathers, woods: s.levels.woods?.feathers }; })));
+const saves = await Promise.all([host, guest].map((p) => p.evaluate(() => { const s = JSON.parse(localStorage.getItem('mossbound.save.v3')); return { unlocked: s.unlocked, garden: s.levels.garden?.feathers, woods: s.levels.woods?.feathers }; })));
 t.check('the shared save merged on both devices', saves.every((s) => s.unlocked === 2 && s.garden === 1 && s.woods === 2), saves);
 // a third player with the same code is told the room is full (not, half a minute later, that nobody's there)
 if (MODE === 'both') {
@@ -112,8 +112,8 @@ t.check('seeds are shared', seedSynced, seedIdx);
 await guest.evaluate(() => { const s = window.__fbSession; s.light(0, true); s.send({ k: 'cp', i: 0 }); });
 const cp = await waitFor(() => host.evaluate(() => window.__fbSession.checkpoint === 0), 5000, 'lantern sync');
 await sleep(2500);
-const runs = await Promise.all([host, guest].map((p) => p.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v2')).run)));
-t.check('lanterns are shared, and the run is saved on both devices', cp && runs.every((r) => r && r.level === 0 && r.cp === 0 && r.with === 'Pip & Bo'), runs);
+const runs = await Promise.all([host, guest].map((p) => p.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v3')).runs)));
+t.check('lanterns are shared, and the run is saved on both devices', cp && runs.every((r) => r?.garden?.run?.cp === 0 && r.garden.run.with === 'Pip & Bo'), runs);
 // latency shows in the HUD
 const hud = await host.evaluate(() => document.querySelector('.hud-partner')?.textContent ?? '');
 t.check('the HUD shows the partner and the latency', /Bo/.test(hud) && /ms/.test(hud), hud);
@@ -124,7 +124,7 @@ t.check('the level clears for both', cleared);
 await sleep(600);
 await host.evaluate(() => window.__fb.flow.playLevel(1));
 const next = await waitFor(() => Promise.all([host, guest].map((p) => p.evaluate(() => window.__fbSession?.L?.index === 1))).then((v) => v.every(Boolean)), 10000, 'level 2 on both');
-const unlocked = await Promise.all([host, guest].map((p) => p.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v2')).unlocked)));
+const unlocked = await Promise.all([host, guest].map((p) => p.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v3')).unlocked)));
 t.check('the next level loads for both; the clear is in both saves', next && unlocked.every((u) => u >= 2), unlocked);
 // the guest leaves: the host is told
 await guest.close();

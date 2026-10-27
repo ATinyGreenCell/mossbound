@@ -18,9 +18,12 @@ bird gets anywhere alone.
 - **Xbox** — open the game in Edge, hold **☰ Menu → Use game controls**, hold **⧉ View** for full screen.
 
 Progress lives in a shared **nest book**. Each device keeps a copy, and the copies merge whenever you
-play together: cleared levels, feathers and best times are never lost, whoever played. **Continue**
-picks a run back up from its last lit lantern. To move progress to another device, copy the save code
-from *Settings* and paste it on the other device.
+play together: cleared levels, feathers and best times are never lost, whoever played. Every level
+remembers where you got to, so **Continue** (or that level's own card) picks it back up from its last
+lit lantern, and replaying another level for a missing feather never costs you that. A level can be
+started over on purpose from its menu. Lanterns and feathers are saved the moment you reach them, and
+everything else the moment the game is hidden or closed. To move progress to another device, copy the
+save code from *Settings* and paste it on the other device.
 
 ## Controls
 
@@ -78,7 +81,7 @@ npm run test:e2e   # end-to-end suite in headless Chrome (online tests need inte
 The e2e suite (`tests/e2e/`) drives the real game: physics and swing-energy checks, a scripted run
 through every level, a fuzzed input soak, two-browser online play over both paths, outages and
 reloads, packet loss and jitter, local multiplayer, touch, menus, resizing, rendering (tile cache,
-GPU resets, the quality governor) and saves. It runs with
+GPU resets, the quality governor), saves, and quitting and coming back. It runs with
 `node tests/e2e/run.mjs [--only online,physics] [-j 6]`. Chrome comes from `/usr/bin/google-chrome`,
 or set `CHROME_PATH`.
 
