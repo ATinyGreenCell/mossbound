@@ -28,6 +28,7 @@ import {
   INVULN_TIME,
   JUMP_BUFFER,
   JUMP_CUT,
+  JUMP_MIN_HOLD,
   MAX_SPEED,
   MAX_FALL,
   ROPE_LEN,
@@ -106,6 +107,8 @@ export class Bird implements RopeBird {
   coyote = 0;
   jumpBuf = 0;
   jumping = false;
+  /** a jump under way rises this much longer before letting go can cut it short (see JUMP_MIN_HOLD) */
+  jumpHold = 0;
   flutter = FLUTTER_TIME;
   fluttering = false;
   anchored = false;
@@ -199,6 +202,7 @@ export class Bird implements RopeBird {
     this.climbLen = Infinity;
     this.ghost = false;
     this.jumping = false;
+    this.jumpHold = 0;
     this.flutter = FLUTTER_TIME;
     this.tuggedT = 0;
     this.cling = 0;
@@ -328,6 +332,7 @@ export class Bird implements RopeBird {
         this.cling = 0;
         this.wallJumpT = WALL_JUMP_LOCK;
         this.jumping = true;
+        this.jumpHold = JUMP_MIN_HOLD;
         this.jumpBuf = 0;
         this.anchored = false;
         this.dashReady = true;
@@ -355,6 +360,7 @@ export class Bird implements RopeBird {
         } else {
           this.vy = -T_.jumpV;
           this.jumping = true;
+          this.jumpHold = JUMP_MIN_HOLD;
           this.squash = -0.3;
           this.fx.push({ k: 'jump' });
         }
@@ -392,11 +398,14 @@ export class Bird implements RopeBird {
       }
     }
 
-    // let go early for a short hop
-    if (this.jumping && !c.jump && this.vy < 0) {
+    // Let go early for a short hop — but not before the jump has had JUMP_MIN_HOLD to rise. A tap is
+    // one animation frame long, so cutting it the moment the button is seen released made the shortest
+    // hop a measure of the screen's refresh rate rather than of the tap.
+    if (this.jumping && !c.jump && this.vy < 0 && this.jumpHold <= 0) {
       this.vy *= JUMP_CUT;
       this.jumping = false;
     }
+    if (this.jumpHold > 0) this.jumpHold -= dt;
     if (this.vy >= 0) this.jumping = false;
 
     // --- gravity, flutter, updrafts
@@ -519,6 +528,7 @@ export class Bird implements RopeBird {
         if (world.boxFree(this.x, ny, this.w, this.h)) this.y = ny;
         this.vy = -(c.jump ? BOUNCE_V : BOUNCE_V_SOFT);
         this.jumping = c.jump;
+        this.jumpHold = JUMP_MIN_HOLD;
         this.bounceCd = 0.25;
         this.flutter = FLUTTER_TIME;
         this.dashReady = true;

@@ -157,25 +157,38 @@ export async function installRig(page) {
         reset() { tether.reset(birds[0], birds[1]); },
         /** set the clock that moving platforms run on */
         at(s) { t = s; world.setTime(s); },
-        step(n = 1) {
-          for (let k = 0; k < n; k++) {
-            const dt = 1 / 120;
-            t += dt;
-            world.stepMovers(t);
-            for (let i = 0; i < 2; i++) {
-              const b = birds[i];
-              const o = birds[1 - i];
-              if (b.ghost) { b.stepGhost(dt, world, o, L.spawns[i]); continue; }
-              b.rope = tether.ends[i];
-              b.lifting = b.grounded && b.rope.taut && !o.grounded && o.hanging;
-              b.step(dt, c[i], world, o);
-            }
-            tether.follow(birds[0], birds[1]);
-            tether.solve(birds, [true, true], dt);
-            for (let i = 0; i < 2; i++) { birds[i].rope = tether.ends[i]; birds[i].afterRope(world); birds[i].fx.length = 0; }
-            world.stepDynamic(dt, birds);
-            for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.dashPressed = cc.heartPressed = cc.heyPressed = false;
+        /** one physics step of `dt` seconds, leaving the one-shot presses for step()/frame() to spend */
+        one(dt) {
+          t += dt;
+          world.stepMovers(t);
+          for (let i = 0; i < 2; i++) {
+            const b = birds[i];
+            const o = birds[1 - i];
+            if (b.ghost) { b.stepGhost(dt, world, o, L.spawns[i]); continue; }
+            b.rope = tether.ends[i];
+            b.lifting = b.grounded && b.rope.taut && !o.grounded && o.hanging;
+            b.step(dt, c[i], world, o);
           }
+          tether.follow(birds[0], birds[1]);
+          tether.solve(birds, [true, true], dt);
+          for (let i = 0; i < 2; i++) { birds[i].rope = tether.ends[i]; birds[i].afterRope(world); birds[i].fx.length = 0; }
+          world.stepDynamic(dt, birds);
+        },
+        edges() { for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.dashPressed = cc.heartPressed = cc.heyPressed = false; },
+        step(n = 1) { for (let k = 0; k < n; k++) { this.one(1 / 120); this.edges(); } },
+        /**
+         * One animation frame of `dt` seconds: sub-stepped and spending the one-shot presses on the
+         * first sub-step, exactly as app.ts does. A held button stays held for the whole frame — so
+         * this is what a test asks when the question is what a screen's refresh rate changes.
+         */
+        frame(dt) {
+          const steps = Math.min(10, Math.max(1, Math.ceil(dt * 120 - 1e-6)));
+          const h = dt / steps;
+          for (let i = 0; i < steps; i++) {
+            this.one(h);
+            if (i === 0) this.edges();
+          }
+          this.edges();
         },
         secs(s) { this.step(Math.round(s * 120)); },
         /** run until pred() or timeout (s); returns seconds taken or -1 */
@@ -188,7 +201,8 @@ export async function installRig(page) {
           const tau = Math.min(0.5, Math.max(0.28, d / 640));
           let vx = (dx / tau) * 0.88, vy = (dy * 0.88) / tau - 0.5 * 1900 * 0.55 * tau - 140;
           const sp = Math.hypot(vx, vy); if (sp > 980) { vx *= 980 / sp; vy *= 980 / sp; }
-          Object.assign(b, { vx, vy, grounded: false, hanging: false, anchored: false, climbLen: Infinity, tuggedT: 0.45, jumping: false, groundMover: -1 });
+          // (as Session.yank does, down to spending the coyote window — the throw is the launch)
+          Object.assign(b, { vx, vy, grounded: false, hanging: false, anchored: false, cling: 0, climbLen: Infinity, tuggedT: 0.45, jumping: false, groundMover: -1, coyote: 0, jumpBuf: 0, jumpHold: 0 });
         },
         tile(i) { return { tx: +(birds[i].x / 32).toFixed(2), ty: +((birds[i].y + 10) / 32).toFixed(2) }; },
       };

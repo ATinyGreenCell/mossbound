@@ -263,7 +263,7 @@ function mill(): LevelDef {
       'The lift goes up the mill wall. Hop on together — the vine won’t stretch for one of you.',
       'The ferry crosses the mill race. Ride it together!',
       'Fans in the floor: the warm air floats you up to the loft.',
-      'Remember the springboard? Bounce, sail across, then {tug}!',
+      'Remember the springboard? Bounce, sail across, then {tug} (too heavy? hold on while they climb).',
     ],
   };
 }
@@ -373,10 +373,13 @@ function tower(): LevelDef {
   m.set(32, 68, 'o');
   plank(23, 28, 72);
   plank(15, 20, 69);
-  plank(22, 27, 66);
+  // (girder 66 reaches left to column 20, over the end of girder 63: the step up to 63 is three rows,
+  // all a tall sprout's jump has, so it needs a takeoff edge above the landing rather than two
+  // columns short of it. At 22-27 it was the tightest step in the game — a tenth of a second wide.)
+  plank(20, 25, 66);
   plank(14, 19, 63);
   plank(21, 26, 61, '%');
-  for (const [x, y] of [[37, 69], [25, 71], [17, 68], [24, 65], [16, 62]]) m.set(x, y, '*');
+  for (const [x, y] of [[37, 69], [25, 71], [17, 68], [22, 65], [16, 62]]) m.set(x, y, '*');
   plank(7, 38, 58);
   m.set(20, 57, 'C');
   m.set(36, 52, 'F');

@@ -683,6 +683,12 @@ export class Session implements Screen {
     b.climbLen = Infinity;
     b.tuggedT = 0.45;
     b.jumping = false;
+    // A throw is a launch of its own, like letting go of the vine: the coyote window and a buffered
+    // press are both spent. Left live, a jump in the next tenth of a second replaced the throw's
+    // rise with a jump's — so the same tug carried you somewhere else depending on your thumb.
+    b.coyote = 0;
+    b.jumpBuf = 0;
+    b.jumpHold = 0;
     b.squash = -0.35;
     b.groundMover = -1;
     this.fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 2, 6, 90, 0.4, 5, '#f4ead8', 0, 4);

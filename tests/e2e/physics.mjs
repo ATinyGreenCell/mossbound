@@ -293,6 +293,71 @@ t.check('a jump just after a blossom launch keeps the launch', e.springJump.laun
 t.check('a ghost’s flight home doesn’t wind the string; it’s tied straight when they’re back', e.retie.wraps === 0 && Math.abs(e.retie.len - e.retie.straight) < 2, e.retie);
 t.check('a sprout whose state goes non-finite comes back instead of vanishing', e.nanRevive.back && e.nanRevive.finite, e.nanRevive);
 
+// ---- the same tap on every screen, and the vine's limit when both sprouts hold on (1.1.3). The hop
+// is driven through whole animation frames, sub-stepped as the app does, because what used to decide
+// its height was the length of the frame the press landed in.
+const f = await page.evaluate(() => {
+  const W = 60, H = 26, F = 20;
+  const g = Array.from({ length: H }, () => Array(W).fill(' '));
+  for (let y = F; y < H; y++) for (let x = 0; x < W; x++) g[y][x] = '#';
+  g[F - 1][2] = '1'; g[F - 1][4] = '2'; g[F - 1][55] = 'N';
+  const def = { id: 'hop', name: 'h', subtitle: '', theme: 'garden', song: 'garden', map: g.map((r) => r.join('')) };
+  /** the rise from a jump held for `heldFrames` frames at `hz`, in px */
+  const hop = (kind, hz, heldFrames) => {
+    const s = __rig(def, [kind, kind]);
+    s.place(0, 10, 20); s.place(1, 13, 20); s.reset();
+    for (let i = 0; i < Math.ceil(hz / 4); i++) s.frame(1 / hz);
+    const y0 = s.birds[0].y;
+    let min = y0;
+    s.jump(0);
+    for (let i = 0; i < 2 * hz; i++) {
+      s.c[0].jump = i < heldFrames;
+      s.frame(1 / hz);
+      min = Math.min(min, s.birds[0].y);
+      if (i > 4 && s.birds[0].grounded) break;
+    }
+    return +(y0 - min).toFixed(1);
+  };
+  const out = { tap: {}, held: {} };
+  for (const kind of ['tall', 'small', 'even']) {
+    // a one-frame tap on a 144 Hz laptop, a 120 Hz phone, a 60 Hz TV, and a 50 Hz one
+    const taps = [144, 120, 60, 50].map((hz) => hop(kind, hz, 1));
+    out.tap[kind] = { taps, spread: +(((Math.max(...taps) - Math.min(...taps)) / Math.min(...taps)) * 100).toFixed(1) };
+    // and holding it down must still give the full jump, at any rate
+    out.held[kind] = [60, 144].map((hz) => hop(kind, hz, 1000));
+  }
+  // both holding on while the mill's lift carries one of them up
+  out.grip = {};
+  for (const kinds of [['tall', 'small'], ['even', 'even']]) {
+    const s = __rig(2, kinds);
+    s.place(0, 47, 16); s.place(1, 50, 16); s.reset();
+    s.at(0); s.secs(0.5);
+    s.c[0].anchor = true; s.c[1].anchor = true;
+    let worst = 0;
+    for (let i = 0; i < 120 * 12; i++) { s.step(); worst = Math.max(worst, s.tether.length); }
+    out.grip[kinds.join('/')] = { worst: +worst.toFixed(1), stillHolding: s.birds[0].anchored && s.birds[1].anchored };
+  }
+  // one holding on while the other swings below is untouched by that limit
+  {
+    const s = __rig(0, ['even', 'even']);
+    s.place(1, 64, 9);
+    s.birds[0].placeCenter({ x: 66.5 * 32, y: 8 * 32 });
+    s.reset();
+    s.c[1].anchor = true;
+    const caught = s.until(() => s.birds[0].hanging, 3);
+    const ax = s.birds[1].x;
+    let worst = 0;
+    for (let i = 0; i < 600; i++) { s.step(); worst = Math.max(worst, s.tether.length); }
+    out.anchorHold = { caught, worst: +worst.toFixed(1), moved: +Math.abs(s.birds[1].x - ax).toFixed(1), hanging: s.birds[0].hanging };
+  }
+  return out;
+});
+for (const [k, v] of Object.entries(f)) console.log(`  ${k.padEnd(12)} ${JSON.stringify(v)}`);
+t.check('the shortest hop is the same height on a 50, 60, 120 or 144 Hz screen', Object.values(f.tap).every((v) => v.spread < 12), f.tap);
+t.check('a tap is still a short hop, and holding it down still gives the whole jump', Object.entries(f.held).every(([k, v]) => v.every((h) => h > 3 * f.tap[k].taps[0]) && Math.abs(v[0] - v[1]) < 2), f.held);
+t.check('the vine can’t be stretched for ever by two sprouts holding on', Object.values(f.grip).every((v) => v.worst < 285 && !v.stillHolding), f.grip);
+t.check('holding on while your partner swings below still doesn’t budge you', f.anchorHold.caught > 0 && f.anchorHold.hanging && f.anchorHold.worst < 258.5 && f.anchorHold.moved < 1, f.anchorHold);
+
 // ---- tight corners: a wall that steps in, so every row has an overhang with open air beneath it
 // (the tower's wall steps, and the underside of any ledge lip)
 const w = await page.evaluate(() => {
@@ -653,6 +718,37 @@ const co = await page.evaluate(() => {
     sim.place(0, 9, 14); sim.reset();
     sim.c[1].moveX = 1; sim.secs(0.3); sim.c[1].moveX = 0; sim.secs(0.1);
   });
+  // a jump pressed during the throw: the arc is the throw's, not a jump's. The coyote window was
+  // still live for a tenth of a second after being flung, so a press in there swapped the throw's
+  // rise for a jump's — the same tug landed you somewhere else depending on your thumb.
+  out.zipJump = {};
+  for (const afterMs of [0, 16, 33, 50, 80, 150]) {
+    const sim = __sim(0, ['tall', 'small']);
+    sim.place(0, 20, 14); sim.place(1, 27, 14); sim.reset(); sim.secs(0.3);
+    const b = sim.birds[1];
+    const floor = b.y;
+    sim.tug(sim.birds[0]);
+    let top = b.y;
+    for (let k = 0; k < 120; k++) {
+      if (afterMs >= 0 && Math.abs(k * (1000 / 60) - afterMs) < 1000 / 120) sim.jump(1);
+      sim.c[1].jump = k * (1000 / 60) >= afterMs;
+      sim.frame(1 / 60);
+      top = Math.min(top, b.y);
+      if (k > 2 && b.grounded) break;
+    }
+    out.zipJump[afterMs] = { rise: +((floor - top) / T).toFixed(2), x: +((b.x - 27 * T) / T).toFixed(2) };
+  }
+  // …and no jump at all, for comparison
+  {
+    const sim = __sim(0, ['tall', 'small']);
+    sim.place(0, 20, 14); sim.place(1, 27, 14); sim.reset(); sim.secs(0.3);
+    const b = sim.birds[1];
+    const floor = b.y;
+    sim.tug(sim.birds[0]);
+    let top = b.y;
+    for (let k = 0; k < 120; k++) { sim.frame(1 / 60); top = Math.min(top, b.y); if (k > 2 && b.grounded) break; }
+    out.zipJump.none = { rise: +((floor - top) / T).toFixed(2), x: +((b.x - 27 * T) / T).toFixed(2) };
+  }
   return out;
 });
 t.check('two sprouts can’t tug each other into the sky', co.skyClimb < 9, co.skyClimb);
@@ -660,6 +756,7 @@ t.check('a tug from the ground still flings the partner', co.tugStanding.foot ==
 t.check('a zip from the string still carries you to the partner holding on', co.zipHanging.foot === 'string' && co.zipHanging.fired && co.zipHanging.me > 2, co.zipHanging);
 t.check('a zip from a wall grip carries you to the partner holding on', co.tugClinging.foot === 'wall' && co.tugClinging.fired && co.tugClinging.me > 2, co.tugClinging);
 t.check('a tug moves a partner gripping a wall instead of doing nothing', co.tugClinger.partnerFoot === 'wall' && co.tugClinger.fired && co.tugClinger.partner > 2, co.tugClinger);
+t.check('a jump during a tug’s throw doesn’t replace its arc', Object.entries(co.zipJump).every(([, v]) => Math.abs(v.rise - co.zipJump.none.rise) < 0.4), co.zipJump);
 
 await browser.close();
 t.finish('physics', page.errors);

@@ -25,6 +25,11 @@ const r = await page.evaluate(async () => {
     for (const p of [...L.spawns, L.nest, ...L.checkpoints]) if (solid(p.x, p.y)) issues.push(`point in wall at ${p.x / T},${p.y / T}`);
     out.lint[def.id] = issues;
   });
+  // Both springboard pits are crossed by one sprout bouncing over and then tugging the other across —
+  // except that a small sprout's tug can't lift a tall one that far (measured: it lands half a tile
+  // short even over the garden's narrower pit). The way over is then to hold on while they climb the
+  // vine, so both signs have to say so; only the garden's did.
+  out.fallbackSigns = Object.fromEntries(['garden', 'mill'].map((id) => [id, (LEVELS.find((d) => d.id === id)?.signs ?? []).filter((s) => /hold on while they climb/.test(s)).length]));
   /** steer bird i toward tile column tx (returns when within a third of a tile) */
   const walkTo = (s, i, tx, secs = 6) => s.until(() => { const d = tx * T + 16 - s.birds[i].x; s.c[i].moveX = Math.abs(d) < 10 ? 0 : Math.sign(d); return Math.abs(d) < 10; }, secs);
   const feet = (s, i) => +((s.birds[i].y + s.birds[i].h / 2) / T).toFixed(2);
@@ -44,6 +49,17 @@ const r = await page.evaluate(async () => {
     }, secs) > 0;
   };
   const col = (s, i) => +(s.birds[i].x / T).toFixed(2);
+  /** walk bird i to column `fromX`, run `runUp` seconds toward `dir`, then hold the jump to land on the ledge whose top is `toRow` */
+  const leap = (s, i, fromX, dir, toRow, secs = 5, runUp = 0.3) => {
+    if (walkTo(s, i, fromX, 4) < 0) return false;
+    s.c[i].moveX = dir;
+    if (runUp) s.secs(runUp);
+    s.jump(i);
+    const ok = s.until(() => { s.c[i].jump = true; return s.birds[i].grounded && feet(s, i) === toRow; }, secs) > 0;
+    s.c[i].jump = false;
+    s.c[i].moveX = 0;
+    return ok;
+  };
 
   const play = (K) => {
     const res = {};
@@ -195,6 +211,21 @@ const r = await page.evaluate(async () => {
       s.until(() => s.birds[0].y < 8 * T && s.birds[1].y < 8 * T, 5);
       s.c[0].moveX = s.c[1].moveX = -1; s.secs(0.5); s.c[0].moveX = s.c[1].moveX = 0; s.secs(0.4);
       t.spireFan = feet(s, 0) === 9 && feet(s, 1) === 9;
+      // Stage 2's girders are each three rows up — all a jump has. Girder 66 reaches left over the end
+      // of 63, so the step up to 63 has a takeoff edge above its landing; two columns short of it, the
+      // tall sprout had about a tenth of a second to get it right and a standing jump simply failed.
+      // One sprout leaps while the other waits on the girder, then follows up the vine, as the level's
+      // first sign teaches and stage 1's big step is played above.
+      for (const [name, edge, dir, from, to] of [['69to66', 20, 1, 69, 66], ['66to63', 20, -1, 66, 63]]) {
+        s = __rig(4, K); s.place(0, edge - dir * 2, from); s.place(1, edge - dir * 3, from); s.reset(); s.secs(0.3);
+        // from the very edge, standing: the step is there to be taken, not timed to a frame
+        t[`stair${name}`] = leap(s, 0, edge, dir, to, 5, 0);
+        // then the one left behind walks under them and climbs the vine up to the same girder
+        s.c[0].moveX = 0; s.secs(0.3);
+        walkTo(s, 1, col(s, 0), 4);
+        s.c[1].moveY = 1;
+        t[`stair${name}Follow`] = s.until(() => s.birds[1].grounded && Math.abs(feet(s, 1) - to) < 0.1, 8) > 0;
+      }
       res.tower = t;
     }
     return res;
@@ -206,5 +237,6 @@ await browser.close();
 
 const t = reporter();
 for (const [id, issues] of Object.entries(r.lint)) t.check(`lint ${id}`, issues.length === 0, issues.join('; '));
+t.check('both springboard signs teach holding on while your partner climbs', Object.values(r.fallbackSigns).every((n) => n === 1), r.fallbackSigns);
 for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v);
 t.finish('levels', page.errors);

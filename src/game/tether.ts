@@ -77,6 +77,8 @@ const FOLD_DOT = -0.866;
 const MAX_WRAPS = 24;
 /** the string corrects a bird at most this far per step: a big stretch resolves over a few steps, never a teleport */
 const MAX_CORR = 24;
+/** how far the string may stretch while both birds hold on, before even a grip has to give ground */
+const GRIP_TOL = 20;
 
 /**
  * The string between the two birds, as a path that bends around tile corners and pegs (a "ninja
@@ -465,8 +467,12 @@ export class Tether {
       if (!auth[end] || seg < 1e-3) continue;
       const personal = Math.max(0, seg - me.climbLen);
       const share = shareOf(me, other, end, this);
-      // (a bird holding on never budges, not even for the stretch limit)
-      const corr = Math.min(MAX_CORR, Math.max(personal, Math.max(0, excess) * share, me.anchored ? 0 : excess - this.slackTol));
+      // A bird holding on doesn't budge for the ordinary share — but with BOTH of them holding on,
+      // nobody took any of the stretch and a mover carrying one away from the other pulled the vine
+      // to 1.2× its length. Past GRIP_TOL the grips give ground: half each, so the two screens' halves
+      // add up to the whole, and whoever gets pulled off their footing simply stops holding on.
+      const grip = me.anchored && other.anchored ? (Math.max(0, excess) - GRIP_TOL) * 0.5 : 0;
+      const corr = Math.min(MAX_CORR, Math.max(personal, Math.max(0, excess) * share, grip, me.anchored ? 0 : excess - this.slackTol));
       if (corr <= 0) continue;
       maxPull = Math.max(maxPull, corr);
       const ux = (me.x - e.pivot.x) / seg;

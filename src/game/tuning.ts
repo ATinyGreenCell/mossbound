@@ -23,6 +23,13 @@ export const FALL_MULT = 1.6;
 export const JUMP_V = 640;
 /** letting go of jump while rising keeps this much of the upward speed */
 export const JUMP_CUT = 0.45;
+/**
+ * A jump rises for at least this long before letting go can cut it short. Without it the shortest hop
+ * is "one animation frame at full speed" — 24 px on a 144 Hz laptop, 28 on a 60 Hz TV, 36 on a phone
+ * the browser has dropped to 30 — so the same tap gave a different hop on every screen. 1/60 s keeps
+ * the hop a 60 Hz screen always gave, which is the one most of this game is played on.
+ */
+export const JUMP_MIN_HOLD = 1 / 60;
 export const MAX_FALL = 840;
 /** nothing moves a bird faster than this (springs, tugs and big swings stay well under it) */
 export const MAX_SPEED = 2000;
