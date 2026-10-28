@@ -46,5 +46,16 @@ for (let i = 0; i < 30; i++) await page.setViewport({ width: 400 + ((i * 137) % 
 await sleep(500);
 const last = await page.evaluate(() => { const rr = window.__fb.app.renderer; return { w: rr.width, cssW: rr.cssW, inner: innerWidth, gen: rr.generation }; });
 t.check('rapid resizing settles on the final size', last.cssW === last.inner, last);
+// ---- a touch-screen laptop in a window taller than wide: "turn your phone sideways" is for phones,
+// and must never take the game away from a laptop someone happened to touch
+await page.setViewport({ width: 960, height: 1040, deviceScaleFactor: 1 });
+await sleep(400);
+const rotateEl = () => page.evaluate(() => getComputedStyle(document.querySelector('.tc-rotate')).display);
+const before = await page.evaluate(() => ({ coarse: matchMedia('(pointer: coarse)').matches, portrait: matchMedia('(orientation: portrait)').matches }));
+// one touch of the screen (a pen, a stray thumb) — the pointer stays a mouse's, as on a laptop
+await page.evaluate(() => document.getElementById('app')?.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true, isPrimary: true, pointerId: 7 })));
+await sleep(300);
+const after = await page.evaluate(() => ({ bodyTouch: document.body.classList.contains('touch'), screen: window.__fb.app.current?.constructor.name }));
+t.check('a touch on a laptop in a tall window keeps the game', after.bodyTouch && !before.coarse && before.portrait && (await rotateEl()) === 'none', { before, after, rotate: await rotateEl() });
 await browser.close();
 t.finish('resize', page.errors);

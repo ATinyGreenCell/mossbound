@@ -35,6 +35,8 @@ const REORDER_SEQ = 64;
 const MAX_BUF = 256;
 /** How fast a correction to the drawn position melts away (seconds). */
 const SMOOTH_TAU = 0.1;
+/** The slower melt for stepping off a moving platform (or onto one): a bigger difference to absorb. */
+const PLATFORM_TAU = 0.25;
 /** Corrections bigger than this snap instead (a respawn or a teleport). */
 const SNAP_DIST = 96;
 
@@ -77,6 +79,12 @@ export class RemoteFeed {
   private rawY = 0;
   private errX = 0;
   private errY = 0;
+  /** the platform the last drawn position was on (-1: none) and where on it */
+  private lastMover = -1;
+  private lastRelX = 0;
+  private lastRelY = 0;
+  /** which melt is in use right now (the slower one while a platform switch is being absorbed) */
+  private meltTau = SMOOTH_TAU;
 
   reset() {
     this.buf.length = 0;
@@ -87,6 +95,7 @@ export class RemoteFeed {
     this.play = NaN;
     this.rawX = NaN;
     this.errX = this.errY = 0;
+    this.lastMover = -1;
   }
 
   get hasData() {
@@ -178,19 +187,33 @@ export class RemoteFeed {
     // (a guess corrected, a gap filled), the jump becomes an offset that melts away. The test is
     // exact: today's curve at last frame's time vs. what was drawn from it then. Platforms (which
     // move between frames) and real teleports are exempt.
-    if (!Number.isNaN(this.rawX) && !cur.snap && cur.mover < 0) {
+    if (!Number.isNaN(this.rawX) && !cur.snap && cur.mover !== this.lastMover) {
+      // stepping off a moving platform (or onto one). A rider is drawn on the platform as it is NOW;
+      // off it, the partner is drawn where they were a playback delay ago — and the platform has
+      // travelled since. Carry on from where they were drawn and let that difference melt away.
+      const ox = this.lastMover >= 0 ? world.moverX[this.lastMover] + this.lastRelX : this.rawX + this.errX;
+      const oy = this.lastMover >= 0 ? world.moverY[this.lastMover] + this.lastRelY : this.rawY + this.errY;
+      this.errX = ox - cur.x;
+      this.errY = oy - cur.y;
+      this.meltTau = PLATFORM_TAU;
+    } else if (!Number.isNaN(this.rawX) && !cur.snap && cur.mover < 0) {
       const then = this.at(prevPlay, world, THEN);
       if (!then.snap && then.mover < 0) {
         this.errX -= then.x - this.rawX;
         this.errY -= then.y - this.rawY;
       }
     }
+    this.lastMover = cur.mover;
+    this.lastRelX = cur.mover >= 0 ? cur.x - world.moverX[cur.mover] : 0;
+    this.lastRelY = cur.mover >= 0 ? cur.y - world.moverY[cur.mover] : 0;
     this.rawX = cur.x;
     this.rawY = cur.y;
-    const keep = Math.exp(-dt / SMOOTH_TAU);
+    const keep = Math.exp(-dt / this.meltTau);
     this.errX *= keep;
     this.errY *= keep;
-    if (cur.snap || cur.mover >= 0 || Math.hypot(this.errX, this.errY) > SNAP_DIST) this.errX = this.errY = 0;
+    if (cur.snap || Math.hypot(this.errX, this.errY) > SNAP_DIST) this.errX = this.errY = 0;
+    // (back to the quicker melt once the switch has been absorbed)
+    if (Math.hypot(this.errX, this.errY) < 0.05) this.meltTau = SMOOTH_TAU;
     bird.prevX = bird.x;
     bird.prevY = bird.y;
     bird.x = cur.x + this.errX;

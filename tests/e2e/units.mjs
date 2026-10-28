@@ -71,6 +71,76 @@ t.check(`our clock stopped for 6 s (we slept): playback re-locks (${feed.usSlept
 t.check(`their clock stopped for 6 s: playback re-locks (${feed.themSlept.worst} ms behind)`, feed.themSlept.worst < 400 && feed.themSlept.best > -150, feed.themSlept);
 t.check('a snapshot from the far future can’t derail playback, a stuck clock can’t grow the buffer', feed.hostile.finite && feed.hostile.worstLag < 400 && feed.hostile.stuckBuffer <= 256, feed.hostile);
 
+// ---- a snapshot counter from nowhere: every honest one after it looks ancient by comparison, and the
+// partner's sprout stops being drawn where it is
+const counter = await page.evaluate(async () => {
+  const { packSnap, unpackSnap } = await import('/src/net/protocol.ts');
+  const { RemoteFeed } = await import('/src/game/remote.ts');
+  const world = { L: { movers: [] }, moverX: [], moverY: [], boxFree: () => true };
+  const snap = (seq, t) => ({ seq, t, x: 100 + 0.2 * t, y: 0, vx: 200, vy: 0, flags: 1, mover: -1, rx: 0, ry: 0, n: 1 });
+  const f = new RemoteFeed();
+  const bird = { x: 0, y: 0 };
+  let seq = 0;
+  let last = NaN;
+  const steps = [];
+  // a sender 40 times a second, walking right at a steady 200 px/s — with one counter from nowhere
+  for (let T = 0; T < 4000; T += 1000 / 60) {
+    if (Math.round(T) % 25 < 17) {
+      const wire = packSnap(snap(Math.abs(T - 2000) < 9 ? 2 ** 40 : ++seq, T));
+      const s = unpackSnap(wire);
+      if (s) f.push(s, T + 40);
+    }
+    f.sample(bird, world, 1 / 60, T + 40);
+    if (T > 1000) steps.push(bird.x - last);
+    last = bird.x;
+  }
+  steps.shift();
+  return { rejected: unpackSnap(packSnap(snap(2 ** 40, 1000))) === null, kept: !!unpackSnap(packSnap(snap(9, 1000))), back: +Math.min(...steps).toFixed(2), leap: +Math.max(...steps).toFixed(2) };
+});
+t.check(`a snapshot counter from nowhere can’t stall the partner’s sprout (steps ${counter.back}…${counter.leap} px)`, counter.rejected && counter.kept && counter.back > 0 && counter.leap < 12, counter);
+
+// ---- stepping off a moving platform (and back on). A rider is drawn on the platform where it is now;
+// off it, the partner is drawn where they were a playback delay ago — and the platform has travelled
+// since. That difference must melt away, not land as a jump.
+const stepOff = await page.evaluate(async () => {
+  const { RemoteFeed } = await import('/src/game/remote.ts');
+  const { F_GROUND } = await import('/src/net/protocol.ts');
+  // one platform sliding right at `speed` px/s past a sprout who waits for it, rides it, then gets off
+  // (the stream is continuous throughout: standing still, then the platform's own motion, then still)
+  const run = (speed, hz) => {
+    const world = { L: { movers: [{}] }, moverX: [0], moverY: [200], boxFree: () => true };
+    const f = new RemoteFeed();
+    const bird = { x: 0, y: 0 };
+    const at = (t) => speed * (t / 1000);
+    const X0 = 400;
+    const rx = X0 - at(2000);
+    let seq = 0;
+    let sent = 0;
+    let lastX = NaN;
+    let lastY = 0;
+    const steps = [];
+    for (let T = 0; T < 6000; T += 1000 / 60) {
+      world.moverX[0] = at(T);
+      while (sent <= T) {
+        // waiting on the ground, aboard from 2 s to 4 s, then off again where it dropped them
+        const on = sent >= 2000 && sent < 4000;
+        const x = sent < 2000 ? X0 : on ? at(sent) + rx : at(4000) + rx;
+        f.push({ seq: ++seq, t: sent, x, y: 190, vx: on ? speed : 0, vy: 0, flags: F_GROUND, mover: on ? 0 : -1, rx, ry: -10, n: 1 }, sent);
+        sent += 1000 / hz;
+      }
+      f.sample(bird, world, 1 / 60, T);
+      if (T > 1000 && !Number.isNaN(lastX)) steps.push(Math.hypot(bird.x - lastX, bird.y - lastY));
+      lastX = bird.x;
+      lastY = bird.y;
+    }
+    // riding, the sprout moves a platform-step a frame; a teleport is a multiple of that
+    return { worst: +Math.max(...steps).toFixed(1), ride: +(speed / 60).toFixed(1) };
+  };
+  return { slow30: run(120, 30), fast30: run(260, 30), fast15: run(260, 15), fast60: run(260, 60) };
+});
+const rates = Object.entries(stepOff);
+t.check(`stepping off a moving platform doesn’t teleport the partner (worst step ${rates.map(([k, v]) => `${k}: ${v.worst}/${v.ride}`).join(', ')} px)`, rates.every(([, v]) => v.worst < v.ride + 2), stepOff);
+
 // ---- the shared save against junk and dead heats
 const saves = await page.evaluate(async () => {
   const S = window.__fb.save;
@@ -201,6 +271,265 @@ const ride = await page.evaluate(async () => {
 });
 t.check('online at 30 fps a bird rides the lift for 10 s (the platform clock never jumps)', ride.airborneFrames === 0 && ride.framesBelowTop === 0 && ride.clockJumps === 0, ride);
 
+// ---- in-level messages from a partner on a damaged build (or from no partner of ours at all): a
+// nonsense index must be ignored, never throw inside the handler (which drops the whole update) and
+// never leave the level's own state holding a value that isn't one
+const ctrl = await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { app, flow } = window.__fb;
+  const link = { role: 'host', status: 'connected', connected: true, rtt: 30, via: 'direct', peerGen: 0, sharedNow: () => performance.now(), send() {}, sendSnap: () => true };
+  const s = new Session(app, flow, { level: 0, mode: 'online', link, me: 0, nonce: 1, profiles: flow.profiles() });
+  const fire = (m) => {
+    try {
+      s.onCtrl(m);
+      return 'ok';
+    } catch (e) {
+      return `THREW: ${e.message.slice(0, 60)}`;
+    }
+  };
+  try {
+    const o = {};
+    o.seedsNotArray = fire({ t: 'world', n: 1, seeds: 5, feathers: 0, cp: -1 });
+    // a million indices would be walked on the main thread: there are only ever as many as the level holds
+    const t0 = performance.now();
+    o.seedsFlood = fire({ t: 'world', n: 1, seeds: new Array(1e6).fill(1e6), feathers: 0, cp: -1 });
+    o.floodMs = Math.round(performance.now() - t0);
+    o.worldCpFraction = fire({ t: 'world', n: 1, seeds: [], feathers: 0, cp: 1.5 });
+    o.evSeedOutOfRange = fire({ t: 'ev', n: 1, e: { k: 'seed', i: 999999 } });
+    o.evSeedFraction = fire({ t: 'ev', n: 1, e: { k: 'seed', i: 1.5 } });
+    o.evFeatherOutOfRange = fire({ t: 'ev', n: 1, e: { k: 'feather', i: 999999 } });
+    o.evCpString = fire({ t: 'ev', n: 1, e: { k: 'cp', i: 'x' } });
+    o.evCpFraction = fire({ t: 'ev', n: 1, e: { k: 'cp', i: 1.5 } });
+    o.left = { cp: s.checkpoint, feathers: s.feathers, seeds: [...s.seedTaken].reduce((a, b) => a + b, 0) };
+    // and the real thing still arrives
+    o.realSeed = fire({ t: 'ev', n: 1, e: { k: 'seed', i: 0 } });
+    o.realWorld = fire({ t: 'world', n: 1, seeds: [1], feathers: 1, cp: 0 });
+    o.took = { seeds: [...s.seedTaken].reduce((a, b) => a + b, 0), cp: s.checkpoint, feathers: s.feathers };
+    return o;
+  } finally {
+    s.dispose();
+  }
+});
+const threw = Object.entries(ctrl).filter(([, v]) => typeof v === 'string' && v.startsWith('THREW'));
+t.check('a nonsense seed / firefly / lantern index from the partner is ignored, not thrown on', threw.length === 0, threw.length ? threw : ctrl);
+t.check('…and leaves the lantern, the fireflies and the seeds as they were', ctrl.left.cp === -1 && ctrl.left.feathers === 0 && ctrl.left.seeds === 0, ctrl.left);
+t.check(`…while a flood of seed indices can’t eat a frame (${ctrl.floodMs} ms)`, ctrl.floodMs < 20, ctrl.floodMs);
+t.check('the partner’s real pickups still arrive', ctrl.took.seeds === 2 && ctrl.took.cp === 0 && ctrl.took.feathers === 1, ctrl.took);
+
+// ---- the same guard one layer in. Every caller checks its index now, but these two write level state
+// from one, and both used to take anything: a shift by a huge index silently wraps (1 << 999999 is
+// 1 << 31, banking a firefly the level doesn't have) and the lantern comparisons are false for a
+// string, which would then be stored as the lantern we're standing at.
+const inner = await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { app, flow } = window.__fb;
+  const link = { role: 'host', status: 'connected', connected: true, rtt: 30, via: 'direct', peerGen: 0, sharedNow: () => performance.now(), send() {}, sendSnap: () => true };
+  const s = new Session(app, flow, { level: 0, mode: 'online', link, me: 0, nonce: 1, profiles: flow.profiles() });
+  const call = (name, i) => {
+    try {
+      s[name](i, false);
+      return 'ok';
+    } catch (e) {
+      return `THREW: ${e.message.slice(0, 50)}`;
+    }
+  };
+  try {
+    const o = {};
+    o.featherHuge = call('takeFeather', 999999);
+    o.featherFraction = call('takeFeather', 1.5);
+    o.featherNegative = call('takeFeather', -1);
+    o.lanternString = call('light', 'x');
+    o.lanternFraction = call('light', 1.5);
+    o.left = { cp: s.checkpoint, feathers: s.feathers };
+    o.realFeather = call('takeFeather', 0);
+    o.realLantern = call('light', 0);
+    o.took = { cp: s.checkpoint, feathers: s.feathers };
+    return o;
+  } finally {
+    s.dispose();
+  }
+});
+const innerThrew = Object.entries(inner).filter(([, v]) => typeof v === 'string' && v.startsWith('THREW'));
+t.check('an index that isn’t one reaches neither the fireflies nor the lanterns', innerThrew.length === 0 && inner.left.cp === -1 && inner.left.feathers === 0, innerThrew.length ? innerThrew : inner);
+t.check('…and a real firefly and lantern still count', inner.took.feathers === 1 && inner.took.cp === 0, inner.took);
+
+// ---- the shared clock (the host's: it runs the moving platforms and the level timer on both screens).
+// It's built from 'pong' replies, and a partner on a damaged build can put anything in one.
+const clock = await page.evaluate(async () => {
+  const { NetLink } = await import('/src/net/link.ts');
+  // a guest's clock machinery on its own: the guest is the side that applies an offset
+  const link = NetLink.bare('guest');
+  try {
+    // a pong whose sender's clock reads `ahead` ms more than ours, over a healthy 30 ms round trip
+    const pong = (ahead) => link.recvPing({ t: 'pong', a: performance.now() - 30, b: performance.now() + ahead }, 'direct');
+    const skew = () => Math.round(link.sharedNow() - performance.now());
+    const o = {};
+    for (let i = 0; i < 4; i++) pong(500);
+    o.locked = skew();
+    // one made-up reply time: a finite number, a healthy round trip, a clock reading from nowhere
+    pong(1e15);
+    o.afterWild = skew();
+    // and one that's within reason but still a jump nobody's clock made
+    pong(6e5);
+    o.afterJump = skew();
+    for (let i = 0; i < 2; i++) pong(500);
+    o.back = skew();
+    // their phone slept with its clock stopped: a step that's really there is on the next ping too
+    pong(90500);
+    o.stepOnce = skew();
+    pong(90500);
+    o.stepTwice = skew();
+    return o;
+  } finally {
+    link.close();
+  }
+});
+t.check(`a made-up ‘pong’ can’t move the shared clock (${clock.afterWild} ms, locked at ${clock.locked})`, Math.abs(clock.afterWild - clock.locked) < 50 && Math.abs(clock.afterJump - clock.locked) < 50 && Math.abs(clock.back - clock.locked) < 50, clock);
+t.check(`a clock step that’s really there is taken on the next ping (${clock.stepTwice} ms)`, Math.abs(clock.stepOnce - clock.locked) < 50 && Math.abs(clock.stepTwice - 90500) < 200, clock);
+
+// ---- the partner's sprout, mirrored from their snapshots, riding a moving platform: it must stay put
+// on the platform rather than sink into it, float over it or slide along it as the platform travels
+const riding = await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { F_GROUND } = await import('/src/net/protocol.ts');
+  const { app, flow } = window.__fb;
+  let now = performance.now();
+  const link = { role: 'host', status: 'connected', connected: true, rtt: 30, via: 'direct', peerGen: 0, sharedNow: () => now, send() {}, sendSnap: () => true };
+  const s = new Session(app, flow, { level: 2, mode: 'online', link, me: 0, nonce: 1, profiles: flow.profiles() });
+  const frameNow = app.frameNow;
+  try {
+    const w = s.world;
+    const B = s.birds[1];
+    const dt = 1 / 60;
+    let sendAt = now;
+    let seq = 0;
+    const worst = { x: 0, y: 0 };
+    // the gondola (1) slides sideways, the mill lift (0) climbs: both carry a rider
+    for (const m of [1, 0]) {
+      const rx = 48;
+      const ry = -10.01;
+      s.feed.reset();
+      for (let f = 0; f < 240; f++) {
+        now += dt * 1000;
+        app.frameNow = now;
+        // their side sends 30 a second, stamped with the moment the state is for
+        while (sendAt <= now) {
+          s.feed.push({ seq: ++seq, t: sendAt, x: w.moverX[m] + rx, y: w.moverY[m] + ry, vx: 0, vy: 0, flags: F_GROUND, mover: m, rx, ry, n: 1 }, sendAt);
+          sendAt += 1000 / 30;
+        }
+        s.frame(dt);
+        for (let k = 0; k < 4; k++) s.update(dt / 4);
+        // (the first frames are the jitter buffer filling up)
+        if (f > 30) {
+          worst.x = Math.max(worst.x, Math.abs(B.x - (w.moverX[m] + rx)));
+          worst.y = Math.max(worst.y, Math.abs(B.y - (w.moverY[m] + ry)));
+        }
+      }
+    }
+    return { offX: +worst.x.toFixed(2), offY: +worst.y.toFixed(2), present: B.present, frozen: s.frozen, mover: B.groundMover };
+  } finally {
+    app.frameNow = frameNow;
+    s.dispose();
+  }
+});
+t.check(`the partner’s sprout rides a moving platform without sinking or sliding (off by ${riding.offX} / ${riding.offY} px)`, riding.present && !riding.frozen && riding.offX < 0.25 && riding.offY < 0.25, riding);
+
+// ---- the vine is drawn from its own ends, which track the sprouts. The string solver moves the
+// sprouts after that, so what's drawn must be caught up afterwards or the vine hangs off its sprout
+// by the solver's last correction — most visible at a high frame rate, where corrections are frequent.
+const vine = await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { app, flow } = window.__fb;
+  let now = performance.now();
+  const link = { role: 'host', status: 'connected', connected: true, rtt: 30, via: 'direct', peerGen: 0, sharedNow: () => now, send() {}, sendSnap: () => true };
+  const s = new Session(app, flow, { level: 0, mode: 'online', link, me: 0, nonce: 1, profiles: flow.profiles() });
+  try {
+    const [A, B] = s.birds;
+    B.present = true;
+    const home = { x: A.x, y: A.y };
+    const far = s.tether.ends[0].limit + 30;
+    // every step starts the same way: the partner out past the vine's reach, the vine straight between
+    // them, so each one measures that step's own correction
+    const run = (dt, n) => {
+      let worst = 0;
+      let cost = 0;
+      for (let f = 0; f < n; f++) {
+        A.place(home);
+        B.place({ x: home.x + far, y: home.y });
+        s.tether.reset(A, B);
+        now += dt * 1000;
+        const t0 = performance.now();
+        s.update(dt);
+        cost += performance.now() - t0;
+        worst = Math.max(worst, Math.abs(s.tether.ax - A.x));
+      }
+      return { lag: +worst.toFixed(2), msPerStep: +(cost / n).toFixed(3) };
+    };
+    run(1 / 60, 120); // past the moment at the start of a level where the vine isn't tied yet
+    return { hz144: run(1 / 144, 400), hz60: run(1 / 60, 400) };
+  } finally {
+    s.dispose();
+  }
+});
+t.check(`the vine is drawn where the string left the sprout (lag ${vine.hz144.lag} px at 144 Hz, ${vine.hz60.lag} px at 60 Hz)`, vine.hz144.lag < 0.01 && vine.hz60.lag < 0.01, vine);
+t.check(`…and a step still costs well under a frame (${vine.hz144.msPerStep} ms at 144 Hz)`, vine.hz144.msPerStep < 1 && vine.hz60.msPerStep < 1, vine);
+
+// ---- REGROUP while the level is clearing. Online the pause menu doesn't pause, so the level can
+// clear with it open — and a ceremony is no place for both sprouts to die and stay ghosts.
+await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { app, flow } = window.__fb;
+  const link = { role: 'host', status: 'connected', connected: true, rtt: 30, via: 'direct', peerGen: 0, sharedNow: () => performance.now(), send() {}, sendSnap: () => true };
+  const s = (window.__regroup = new Session(app, flow, { level: 0, mode: 'online', link, me: 0, nonce: 1, profiles: flow.profiles() }));
+  s.togglePause();
+});
+await sleep(400); // the menu's buttons ignore a click for the first moment (a held jump mustn't press one)
+const regrouped = await page.evaluate(() => {
+  const s = window.__regroup;
+  try {
+    const o = { menu: !!document.querySelector('.overlay .btn[data-act="regroup"]'), sent: [] };
+    s.link.send = (m) => o.sent.push(m);
+    // the goal was reached while the menu was open
+    s.onCtrl({ t: 'clear', n: 1, time: 5 });
+    o.state = s.state;
+    document.querySelector('.overlay .btn[data-act="regroup"]')?.click();
+    o.afterButton = s.birds.map((b) => b.ghost);
+    o.toldPartner = o.sent.some((m) => m.t === 'ev' && m.e?.k === 'regroup');
+    o.menuClosed = !document.querySelector('.overlay .btn[data-act="regroup"]');
+    // and the same from the partner's side
+    s.onCtrl({ t: 'ev', n: 1, e: { k: 'regroup' } });
+    o.afterEvent = s.birds.map((b) => b.ghost);
+    return o;
+  } finally {
+    s.dispose();
+    delete window.__regroup;
+  }
+});
+t.check('REGROUP pressed during the end-of-level ceremony doesn’t turn both sprouts into ghosts', regrouped.menu && regrouped.state === 'clear' && !regrouped.afterButton.some(Boolean) && !regrouped.toldPartner && regrouped.menuClosed, regrouped);
+t.check('…nor does the partner’s regroup arriving then', !regrouped.afterEvent.some(Boolean), regrouped);
+// ...and while the level is being played it still does what it says
+await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { app, flow } = window.__fb;
+  const link = { role: 'host', status: 'connected', connected: true, rtt: 30, via: 'direct', peerGen: 0, sharedNow: () => performance.now(), send() {}, sendSnap: () => true };
+  const s = (window.__regroup = new Session(app, flow, { level: 0, mode: 'online', link, me: 0, nonce: 1, profiles: flow.profiles() }));
+  s.togglePause();
+});
+await sleep(400);
+const stillWorks = await page.evaluate(() => {
+  const s = window.__regroup;
+  try {
+    const sent = [];
+    s.link.send = (m) => sent.push(m);
+    document.querySelector('.overlay .btn[data-act="regroup"]')?.click();
+    return { state: s.state, mine: s.birds[0].ghost, told: sent.some((m) => m.t === 'ev' && m.e?.k === 'regroup') };
+  } finally {
+    s.dispose();
+    delete window.__regroup;
+  }
+});
+t.check('REGROUP during play still sends both sprouts back to the lantern', stillWorks.state === 'play' && stillWorks.mine && stillWorks.told, stillWorks);
+
 // ---- the quality governor, against the display it's on. Frames are whole display intervals (as a
 // browser presents them) averaging the work they take; resolution `level` scales the GPU's share.
 const gov = await page.evaluate(async () => {
@@ -270,6 +599,14 @@ await page.keyboard.press('Space');
 await frames(page, 6);
 const stayed = await page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session' && !!document.querySelector('.overlay.clear'));
 t.check('ENTER / SPACE on the guest’s end-of-level card doesn’t leave the room', stayed);
+// a finishing time garbled on the way would show as "NaN:NaN" on that card
+await page.evaluate(() => { const l = window.__fake('guest'); window.__fb.flow.adopt(l); l.onCtrl({ t: 'load', level: 0, n: 9, c: 1 }); });
+await waitFor(async () => (await current()) === 'Session', 3000, 'guest session for the clear card');
+await frames(page, 4);
+await page.evaluate(() => window.__fbSession.onCtrl({ t: 'clear', n: 9, time: 'soon' }));
+await waitFor(() => page.evaluate(() => !!document.querySelector('.overlay.clear')), 3000, 'clear card again');
+const card = await page.evaluate(() => document.querySelector('.overlay.clear .ov-stats')?.textContent ?? '');
+t.check('a garbled finishing time doesn’t show as “NaN” on the end-of-level card', !/NaN/.test(card) && /\d:\d\d/.test(card), card);
 // host: the guest drops out right as a level starts; when they're back, it reaches them
 await page.evaluate(() => { const l = (window.__h = window.__fake('host')); window.__fb.flow.adopt(l); window.__fb.flow.playLevel(0); });
 await waitFor(async () => (await current()) === 'Session', 3000, 'host session');

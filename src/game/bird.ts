@@ -221,6 +221,17 @@ export class Bird implements RopeBird {
     this.swingE = NaN;
     this.bumped = false;
     if (this.ghost) return;
+    // belt and braces: nothing should be able to make a bird's state non-finite, and one that did
+    // could never fall out of the world on its own (y > floorY is false for NaN) — it would hang
+    // there, unseen, for the rest of the level. Put it somewhere real and send it back to the lantern.
+    if (!Number.isFinite(this.x + this.y + this.vx + this.vy)) {
+      const at = partner && Number.isFinite(partner.x + partner.y) ? partner : { x: 0, y: 0 };
+      this.x = this.prevX = at.x;
+      this.y = this.prevY = at.y;
+      this.vx = this.vy = 0;
+      this.die('fall');
+      return;
+    }
     const T_ = this.traits;
 
     // ride the moving platform underfoot
@@ -237,31 +248,6 @@ export class Bird implements RopeBird {
     // holding on: feet planted — or, for a climber, gripping the wall
     this.anchored = c.anchor && (this.grounded || this.cling !== 0) && !this.hanging;
     const rope = this.rope;
-
-    // --- the air dash: a burst toward where the stick points (straight ahead without one)
-    if (c.dashPressed && T_.dash && this.dashReady && !this.grounded && !this.hanging && this.cling === 0) {
-      let dx = mx;
-      let dy = Math.abs(c.moveY) > 0.3 ? -c.moveY : 0;
-      if (!dx && !dy) dx = this.facing;
-      const n = Math.hypot(dx, dy);
-      this.vx = (dx / n) * DASH_V;
-      this.vy = (dy / n) * DASH_V;
-      this.dashT = DASH_TIME;
-      this.dashReady = false;
-      this.jumping = false;
-      this.tuggedT = 0;
-      if (dx) this.facing = dx > 0 ? 1 : -1;
-      this.squash = -0.25;
-      this.fx.push({ k: 'dash' });
-    }
-    if (this.dashT > 0) {
-      this.dashT -= dt;
-      // (gravity and steering wait until it's over; then some of its speed carries on)
-      if (this.dashT <= 0) {
-        this.vx *= DASH_KEEP;
-        this.vy *= DASH_KEEP;
-      }
-    }
 
     // --- horizontal
     if (this.hanging && rope) {
@@ -378,6 +364,34 @@ export class Bird implements RopeBird {
         this.anchored = false;
       }
     }
+
+    // --- the air dash: a burst toward where the stick points (straight ahead without one). After the
+    // jump, so pressing both in one frame is a jump and then a dash — pressed first, the dash would
+    // find itself still on the ground (or still on the wall) and be dropped.
+    if (c.dashPressed && T_.dash && this.dashReady && !this.grounded && !this.hanging && this.cling === 0) {
+      let dx = mx;
+      let dy = Math.abs(c.moveY) > 0.3 ? -c.moveY : 0;
+      if (!dx && !dy) dx = this.facing;
+      const n = Math.hypot(dx, dy);
+      this.vx = (dx / n) * DASH_V;
+      this.vy = (dy / n) * DASH_V;
+      this.dashT = DASH_TIME;
+      this.dashReady = false;
+      this.jumping = false;
+      this.tuggedT = 0;
+      if (dx) this.facing = dx > 0 ? 1 : -1;
+      this.squash = -0.25;
+      this.fx.push({ k: 'dash' });
+    }
+    if (this.dashT > 0) {
+      this.dashT -= dt;
+      // (gravity and steering wait until it's over; then some of its speed carries on)
+      if (this.dashT <= 0) {
+        this.vx *= DASH_KEEP;
+        this.vy *= DASH_KEEP;
+      }
+    }
+
     // let go early for a short hop
     if (this.jumping && !c.jump && this.vy < 0) {
       this.vy *= JUMP_CUT;
@@ -429,7 +443,15 @@ export class Bird implements RopeBird {
         this.bumped = true;
       }
     }
-    const r = world.moveY(this, this.vy * dt);
+    const dy = this.vy * dt;
+    let r: -1 | 0 | 1;
+    if (this.cling !== 0 && dy === 0) {
+      // a grip on a wall holds perfectly still, and moveY only looks for a platform when something
+      // moves — so nudge the test along (and take the nudge back) for a lift rising into the feet
+      const held = this.y;
+      r = world.moveY(this, 0.01);
+      if (r !== 1) this.y = held;
+    } else r = world.moveY(this, dy);
     if (r !== 0) this.bumped = true;
     if (r === 1) {
       if (!wasGrounded) {
@@ -491,7 +513,10 @@ export class Bird implements RopeBird {
       const prevBot = this.prevY + this.h / 2;
       const top = partner.y - partner.h / 2;
       if (Math.abs(this.x - partner.x) < (this.w + partner.w) / 2 + 2 && myBot >= top - 4 && myBot <= top + 14 && prevBot <= top + 8) {
-        this.y = top - this.h / 2 - 0.5;
+        // stand on their head — but only where there's room: under an overhang the lift would put the
+        // bouncer inside the tile above, and the next sideways move would shove it through the wall
+        const ny = top - this.h / 2 - 0.5;
+        if (world.boxFree(this.x, ny, this.w, this.h)) this.y = ny;
         this.vy = -(c.jump ? BOUNCE_V : BOUNCE_V_SOFT);
         this.jumping = c.jump;
         this.bounceCd = 0.25;
@@ -650,7 +675,8 @@ export class Bird implements RopeBird {
     for (const off of [near, -near, near * 2, -near * 2, 0]) {
       const x = p.x + off;
       if (!world.boxFree(x, y, this.w, this.h)) continue;
-      if (world.boxFree(x, y + 6, this.w, this.h)) continue; // nothing to stand on there
+      // nothing to stand on there? a girder, a plank and the top of a moving platform all count
+      if (!footing(world, x, y, this.w, this.h)) continue;
       this.x = x;
       this.y = y;
       this.vx = this.vy = 0;
@@ -698,7 +724,16 @@ export class Bird implements RopeBird {
     const fromY = Math.min(this.ghostFromY, world.floorY);
     this.y = fromY + (ty - fromY) * e - Math.sin(u * Math.PI) * 40;
     if (u < 1) return;
-    const spot = toPartner ? freeSpotNear(world, partner!.x, partner!.y + partner!.h / 2 - this.h / 2, this.w, this.h) : freeSpotNear(world, home.x, home.y + BIRD_H / 2 - this.h / 2, this.w, this.h);
+    let spot: Pt | null;
+    if (toPartner) {
+      spot = spotBeside(world, partner!, this.w, this.h);
+      // Nowhere to land beside them yet (a one-tile nook, a wall over a pit, a partner in mid-air):
+      // hover there and keep looking. Coming back in mid-air over a pit only falls and dies again.
+      // Going home is the last resort, and only once the string will still reach from there: tied
+      // across the level it would haul them both at its reeling-in cap. Otherwise keep waiting —
+      // the partner climbs out, or follows us, and then we both come back at the lantern together.
+      if (!spot && (this.ghostT < GHOST_TIME + GHOST_WAIT || Math.hypot(home.x - partner!.x, home.y - partner!.y) > ROPE_LEN)) return;
+    } else spot = freeSpotNear(world, home.x, home.y + BIRD_H / 2 - this.h / 2, this.w, this.h);
     if (spot) this.placeCenter(spot);
     else this.place(home);
     this.invuln = INVULN_TIME;
@@ -746,6 +781,93 @@ export class Bird implements RopeBird {
     this.lookX += (lx - this.lookX) * Math.min(1, dt * 10);
     this.lookY += (ly - this.lookY) * Math.min(1, dt * 10);
   }
+}
+
+/** how long a ghost hovers by its partner waiting for somewhere to land, before giving up and going home */
+const GHOST_WAIT = 3;
+/** how far from its partner a ghost will look for that spot */
+const BESIDE_X = 3.5 * T;
+const BESIDE_UP = 3 * T;
+/** what a spot out of the partner's sight costs: more than the whole search area, so it's a last choice */
+const OUT_OF_SIGHT = 1e6;
+
+/**
+ * Somewhere beside a partner for a ghost to come back to: a free spot, nearest first — sideways counts
+ * for less than upwards, so it comes back beside them rather than above them, and anywhere in sight of
+ * them beats anywhere behind a tile (the string is tied afresh, and a bend would have to be repaired).
+ * Somewhere to stand if there is one; failing that, anywhere with ground below to fall to, but never
+ * over a pit, which would only mean dying again. Null when there's nowhere, and then the ghost waits.
+ */
+function spotBeside(world: World, partner: Partner, w: number, h: number): Pt | null {
+  // feet level with the partner's, so the two of them end up standing on the same ground
+  const y0 = partner.y + partner.h / 2 - h / 2;
+  const search = (standing: boolean) => {
+    let best: Pt | null = null;
+    let bestD = Infinity;
+    // (every row of the search sits 2 px clear of the ground a tile-aligned ledge would offer, so a
+    // spot on any ledge within reach is both free and standing on it — as freeSpotNear's offsets are)
+    for (let dy = -2 - BESIDE_UP; dy <= T - 2; dy += 8) {
+      for (let dx = -BESIDE_X; dx <= BESIDE_X; dx += 8) {
+        const near = dx * dx + 2 * dy * dy;
+        if (near >= bestD) continue;
+        const x = partner.x + dx;
+        const y = y0 + dy;
+        if (!world.boxFree(x, y, w + 2, h + 2)) continue;
+        if (!(standing ? footing(world, x, y, w, h) : overGround(world, x, y, w, h))) continue;
+        const d = near + (sees(world, partner.x, partner.y, x, y) ? 0 : OUT_OF_SIGHT);
+        if (d >= bestD) continue;
+        bestD = d;
+        best = { x, y };
+      }
+    }
+    return best;
+  };
+  return search(true) ?? search(false);
+}
+
+/** Is there anything at all to land on below this spot, or is it a fall out of the world? */
+function overGround(world: World, x: number, y: number, w: number, h: number) {
+  const tx0 = Math.floor((x - w / 2 + 0.5) / T);
+  const tx1 = Math.floor((x + w / 2 - 0.5) / T);
+  const feet = y + h / 2;
+  // (solidAt carries the bottom row on below the map, so a column open down there is bottomless)
+  for (let ty = Math.floor(feet / T); ty <= Math.floor(world.floorY / T); ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) if (world.solidAt(tx, ty) || world.onewayAt(tx, ty)) return true;
+  }
+  const ms = world.L.movers;
+  for (let i = 0; i < ms.length; i++) {
+    const mx = world.moverX[i];
+    if (x + w / 2 > mx && x - w / 2 < mx + ms[i].w && world.moverY[i] >= feet) return true;
+  }
+  return false;
+}
+
+/** Is the straight line between two points clear of solid tiles? */
+function sees(world: World, x0: number, y0: number, x1: number, y1: number) {
+  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 4);
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    if (world.solidAt(Math.floor((x0 + (x1 - x0) * t) / T), Math.floor((y0 + (y1 - y0) * t) / T))) return false;
+  }
+  return true;
+}
+
+/** Something under a body's feet to stand on: solid ground, a one-way plank, or a moving platform. */
+function footing(world: World, x: number, y: number, w: number, h: number) {
+  if (!world.boxFree(x, y + 6, w, h)) return true;
+  const feet = y + h / 2;
+  const ty = Math.floor((feet + 6) / T);
+  // (a plank or a platform holds a body up from above only: its top has to be at or below the feet)
+  if (ty * T >= feet - 0.5) {
+    for (let tx = Math.floor((x - w / 2 + 0.5) / T); tx <= Math.floor((x + w / 2 - 0.5) / T); tx++) if (world.onewayAt(tx, ty)) return true;
+  }
+  const ms = world.L.movers;
+  for (let i = 0; i < ms.length; i++) {
+    const mx = world.moverX[i];
+    const my = world.moverY[i];
+    if (x + w / 2 > mx && x - w / 2 < mx + ms[i].w && my >= feet - 0.5 && my <= feet + 6) return true;
+  }
+  return false;
 }
 
 /** A free spot for a bird near a point (above it first), or null. */

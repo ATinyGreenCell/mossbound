@@ -105,6 +105,12 @@ export interface Snap {
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+/**
+ * Snapshots are counted up from one, about thirty a second — years of playing without reaching this.
+ * A counter past it is a damaged build's, and taking it would make every honest one after it look
+ * ancient (see RemoteFeed.push), leaving the partner's sprout stuck.
+ */
+const MAX_SEQ = 2 ** 31;
 
 export function packSnap(s: Snap): SnapMsg {
   return [s.seq, Math.round(s.t), Math.round(s.x * 10), Math.round(s.y * 10), Math.round(s.vx), Math.round(s.vy), s.flags, s.mover, Math.round(s.rx * 10), Math.round(s.ry * 10), s.n];
@@ -117,6 +123,7 @@ export function unpackSnap(m: unknown): Snap | null {
   const x = m[2] / 10;
   const y = m[3] / 10;
   if (Math.abs(x) > 1e6 || Math.abs(y) > 1e6) return null;
+  if (!Number.isInteger(m[0]) || m[0] < 0 || m[0] > MAX_SEQ) return null;
   return {
     seq: m[0],
     t: m[1],

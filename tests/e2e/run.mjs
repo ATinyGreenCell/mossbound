@@ -35,6 +35,10 @@ const TESTS = [
   { name: 'xbox', file: 'xbox.mjs', est: 25, pass: passed('xbox') },
   { name: 'units', file: 'units.mjs', est: 20, pass: passed('units') },
   { name: 'render', file: 'render.mjs', est: 25, pass: passed('render') },
+  { name: 'pads', file: 'pads.mjs', est: 45, pass: passed('pads') },
+  { name: 'frames', file: 'frames.mjs', est: 25, pass: passed('frames') },
+  // times the sound library's build: run alone so a busy machine can't look like a hitch
+  { name: 'audio', file: 'audio.mjs', est: 30, solo: true, pass: passed('audio') },
 ].filter((t) => !only || only.includes(t.name));
 
 async function startServer() {

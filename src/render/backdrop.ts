@@ -128,10 +128,11 @@ export class Backdrop {
     // the higher the camera, the further the backdrop sinks (most visible on the tower)
     const rise = Math.max(0, levelBottom - camBottom) * scale;
     if (th.stars) {
+      // (the colour is the same for every star: setting it per star cost a colour parse each time)
+      ctx.fillStyle = '#fff8e0';
       for (let i = 0; i < th.stars; i++) {
         const a = 0.35 + 0.65 * Math.abs(Math.sin(t * 0.8 + this.stars[i * 3 + 2]));
         ctx.globalAlpha = a;
-        ctx.fillStyle = '#fff8e0';
         const s = i % 9 === 0 ? 2.4 : 1.4;
         ctx.fillRect(this.stars[i * 3] * W, this.stars[i * 3 + 1] * H, s, s);
       }

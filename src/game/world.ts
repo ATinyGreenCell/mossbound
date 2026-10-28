@@ -151,9 +151,15 @@ export class World {
 
   // ------------------------------------------------------------------ movement
 
-  /** Move a body horizontally by dx, stopping at walls. Returns true when it hit one. */
+  /**
+   * Move a body horizontally by dx, stopping at walls. Returns true when it hit one. A body that
+   * already overlapped the column it moves into is only put back where it came from, never pushed
+   * further the other way: "resolving" such an overlap against the move would shove it into the wall
+   * behind it.
+   */
   moveX(b: Body, dx: number) {
     if (dx === 0) return false;
+    const from = b.x;
     b.x += dx;
     const hw = b.w / 2;
     const ty0 = Math.floor((b.y - b.h / 2 + 0.01) / T);
@@ -162,7 +168,7 @@ export class World {
       const tx = Math.floor((b.x + hw) / T);
       for (let ty = ty0; ty <= ty1; ty++) {
         if (this.solidAt(tx, ty)) {
-          b.x = tx * T - hw - 0.001;
+          b.x = Math.max(from, tx * T - hw - 0.001);
           return true;
         }
       }
@@ -170,7 +176,7 @@ export class World {
       const tx = Math.floor((b.x - hw) / T);
       for (let ty = ty0; ty <= ty1; ty++) {
         if (this.solidAt(tx, ty)) {
-          b.x = (tx + 1) * T + hw + 0.001;
+          b.x = Math.min(from, (tx + 1) * T + hw + 0.001);
           return true;
         }
       }

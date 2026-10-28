@@ -80,17 +80,26 @@ export class Camera {
       minY = Math.min(minY, pts[i].y);
       maxY = Math.max(maxY, pts[i].y);
     }
+    // A bird that somehow goes to NaN must not take the view with it: a NaN here sticks to x/y and
+    // the screen stays blank until the level is left. Keep the last good view instead.
+    if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(minX) || !Number.isFinite(minY)) {
+      cx = Number.isFinite(this.x) ? this.x : 0;
+      cy = Number.isFinite(this.y) ? this.y : 0;
+      minX = maxX = cx;
+      minY = maxY = cy;
+    }
     // zoom out (a little) so both birds stay comfortably in view
     const needW = maxX - minX + 7 * T;
     const needH = maxY - minY + 6 * T;
     const fitZoom = Math.min(1, this.screenW / (needW * this.base), this.screenH / (needH * this.base));
     const zTarget = Math.max(0.7, fitZoom);
     this.zoom = snap || !this.placed ? zTarget : this.zoom + (zTarget - this.zoom) * damp(zTarget < this.zoom ? 4 : 1.5, dt);
+    if (!Number.isFinite(this.zoom)) this.zoom = zTarget;
     this.scale = quantize(this.base * this.zoom);
     const vw = this.viewW;
     const vh = this.viewH;
-    let tx = cx + lead.x;
-    let ty = cy + lead.y - T * 0.6;
+    let tx = cx + (Number.isFinite(lead.x) ? lead.x : 0);
+    let ty = cy + (Number.isFinite(lead.y) ? lead.y : 0) - T * 0.6;
     // stay inside the level (centered when the level is smaller than the view)
     tx = bounds.w <= vw ? bounds.w / 2 : Math.min(bounds.w - vw / 2, Math.max(vw / 2, tx));
     const top = -T * 2;
@@ -103,6 +112,10 @@ export class Camera {
     } else {
       this.x += (tx - this.x) * damp(6, dt);
       this.y += (ty - this.y) * damp(4.5, dt);
+    }
+    if (!Number.isFinite(this.x) || !Number.isFinite(this.y)) {
+      this.x = tx;
+      this.y = ty;
     }
     let sx = 0;
     let sy = 0;

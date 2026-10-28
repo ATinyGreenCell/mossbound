@@ -122,6 +122,23 @@ await padPress(page, 0, A);
 const resumed = await waitFor(() => page.evaluate(() => !window.__fbSession.paused && !document.querySelector('.overlay')), 3000, 'resume').catch(() => false);
 t.check('Ⓐ resumes', resumed);
 
+// A controller button can arrive as a key press as well (Ⓐ as a coded ENTER), and the two halves of
+// one press can land a frame apart. A console has no keyboard, so the key half must never be handed a
+// sprout: a seat on half a keyboard could only jump (ENTER), never walk.
+await page.evaluate(() => { window.__pads[0].connected = false; });
+const dropped = await waitFor(() => page.evaluate(() => document.querySelector('.hud-notice:not(.hidden)')?.textContent ?? null), 3000, 'drop notice');
+await page.evaluate(() => { window.__pads[0].connected = true; });
+await frames(page, 4);
+await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter' })));
+await frames(page, 1);
+await press(0, A, true);
+await frames(page, 3);
+await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter' })));
+await press(0, A, false);
+await frames(page, 4);
+const reclaimed = await page.evaluate(() => [...window.__fbSession.opts.seats]);
+t.check('a sprout taken back by an Ⓐ whose key half lands first goes to the controller', reclaimed[1] === 'pad0', { seats: reclaimed, dropped });
+
 await page.screenshot({ path: `${process.env.E2E_OUT ?? './.out'}/xbox.png` });
 await browser.close();
 t.finish('xbox', page.errors);

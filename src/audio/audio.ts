@@ -1,6 +1,6 @@
 import { NO_AUDIO } from '../core/testmode';
 import { renderSfx, type Sfx } from './sfx';
-import { Sequencer, type SongId } from './music';
+import { Sequencer, type Inst, type SongId } from './music';
 
 export type { Sfx } from './sfx';
 export type { SongId } from './music';
@@ -52,22 +52,70 @@ class Audio {
     }
   }
 
-  /** Render the sound library in small slices so the first frames never hitch. */
+  /**
+   * Render the sound library: in a worker when the browser has one (no cost to the frames at all),
+   * otherwise here in small slices. The worker's samples are only kept once it has sent them all, so
+   * either every sound comes from it or every sound is rendered here — the order stays fixed either
+   * way, and the seeded noise gives the same library.
+   */
   private async build() {
     if (this.building || !this.ctx) return;
     this.building = true;
     const rate = this.ctx.sampleRate;
-    const names = renderSfx.names;
-    for (const n of names) {
-      const data = renderSfx(n, rate);
-      const buf = this.ctx.createBuffer(1, data.length, rate);
-      buf.copyToChannel(data, 0);
-      this.buffers.set(n, buf);
-      await new Promise((r) => setTimeout(r, 0));
+    const seq = new Sequencer(this.ctx, this.musicBus!);
+    const made = await this.renderInWorker(rate);
+    if (made) {
+      for (const [n, data] of made.sfx) this.keepSfx(n, data, rate);
+      for (const [inst, note, data] of made.inst) seq.setSample(inst, note, data);
+    } else {
+      for (const n of renderSfx.names) {
+        this.keepSfx(n, renderSfx(n, rate), rate);
+        await new Promise((r) => setTimeout(r, 0));
+      }
     }
-    this.seq = new Sequencer(this.ctx, this.musicBus!);
-    await this.seq.prepare();
+    this.seq = seq;
+    await seq.prepare(); // nothing left to do when the worker delivered them all
     if (this.wantSong) this.seq.play(this.wantSong);
+  }
+
+  private keepSfx(name: Sfx, data: Float32Array<ArrayBuffer>, rate: number) {
+    if (!this.ctx) return;
+    const buf = this.ctx.createBuffer(1, data.length, rate);
+    buf.copyToChannel(data, 0);
+    this.buffers.set(name, buf);
+  }
+
+  /** The whole library from the worker, or null if it is unavailable, fails or takes too long. */
+  private renderInWorker(rate: number) {
+    return new Promise<{ sfx: [Sfx, Float32Array<ArrayBuffer>][]; inst: [Inst, number, Float32Array<ArrayBuffer>][] } | null>((done) => {
+      let worker: Worker;
+      try {
+        worker = new Worker(new URL('./synth.worker.ts', import.meta.url), { type: 'module' });
+      } catch {
+        done(null);
+        return;
+      }
+      const sfx: [Sfx, Float32Array<ArrayBuffer>][] = [];
+      const inst: [Inst, number, Float32Array<ArrayBuffer>][] = [];
+      let settled = false;
+      const finish = (v: { sfx: [Sfx, Float32Array<ArrayBuffer>][]; inst: [Inst, number, Float32Array<ArrayBuffer>][] } | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        worker.terminate();
+        done(v);
+      };
+      const timer = setTimeout(() => finish(null), 15000);
+      worker.onerror = () => finish(null);
+      worker.onmessage = (e: MessageEvent<{ k: string; name?: Sfx; inst?: Inst; note?: number; data?: Float32Array<ArrayBuffer> }>) => {
+        const m = e.data;
+        if (m.k === 'sfx' && m.name && m.data) sfx.push([m.name, m.data]);
+        else if (m.k === 'inst' && m.inst && typeof m.note === 'number' && m.data) inst.push([m.inst, m.note, m.data]);
+        else if (m.k === 'done') finish({ sfx, inst });
+        else if (m.k === 'failed') finish(null);
+      };
+      worker.postMessage({ rate });
+    });
   }
 
   setVolumes(v: { music: number; sfx: number }) {

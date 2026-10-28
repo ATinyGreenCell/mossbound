@@ -16,6 +16,14 @@ const AWAY_MS = 2500;
 const FULL_MS = 5000;
 /** A path we haven't heard from for this long isn't trusted for sending. */
 const PATH_STALE_MS = 2500;
+/**
+ * Each side's clock counts from its own page load, so the two can sit any sensible distance apart —
+ * but not years apart. A reply time implying that isn't a clock reading, and the shared clock it would
+ * set moves the platforms both players are standing on.
+ */
+const MAX_SKEW_MS = 1e11;
+/** Two samples this close agree: a step in the clocks that's really there is still there next ping. */
+const STEP_AGREE_MS = 2000;
 /** Snapshots dropped (not queued) once this many reliable sends are still in flight. */
 const MAX_INFLIGHT = 4;
 /** Stream id of the real-time channel both peers open on Trystero's connection (its own channel is auto-numbered from 0). */
@@ -88,6 +96,8 @@ export class NetLink {
   private offset = 0;
   private offsetTarget = 0;
   private offsetSet = false;
+  /** a step in the clocks seen once and waiting to be confirmed by the next sample (NaN: none) */
+  private stepSeen = NaN;
   private rttDirect = 0;
   private rttRelay = 0;
   /** the partner said goodbye (as opposed to going quiet): their traffic no longer brings them back */
@@ -105,6 +115,11 @@ export class NetLink {
     const link = new NetLink(role, code);
     void link.start();
     return link;
+  }
+
+  /** (tests) A link that joins nothing — no room, no relay, no timers — for the parts that need no partner. */
+  static bare(role: Role) {
+    return new NetLink(role, 'TEST');
   }
 
   get connected() {
@@ -420,12 +435,23 @@ export class NetLink {
     const rtt = now - p.a;
     if (rtt < 0 || rtt > 10000) return;
     const off = (p.b as number) + rtt / 2 - now;
+    // a reply time no clock could hold: not a sample, however healthy its round trip looks
+    if (Math.abs(off) > MAX_SKEW_MS) return;
     if (path === 'direct') this.rttDirect = this.rttDirect ? this.rttDirect * 0.7 + rtt * 0.3 : rtt;
     else this.rttRelay = this.rttRelay ? this.rttRelay * 0.7 + rtt * 0.3 : rtt;
     this.rtt = this.via === 'relay' ? this.rttRelay : this.rttDirect || this.rttRelay;
     // a step in the clocks (a device slept with its clock stopped): the old samples are now wrong.
     // (an honest sample is off by at most half its round trip)
-    if (this.clock.length && Math.abs(off - this.offsetTarget) > Math.max(250, rtt)) this.clock.length = 0;
+    if (this.clock.length && Math.abs(off - this.offsetTarget) > Math.max(250, rtt)) {
+      // one sample is not enough to move everyone's platforms, though: a step that's really there is
+      // still there on the next ping (a second later), where a single wild reading never comes back
+      if (!(Math.abs(off - this.stepSeen) < Math.max(STEP_AGREE_MS, rtt))) {
+        this.stepSeen = off;
+        return;
+      }
+      this.clock.length = 0;
+    }
+    this.stepSeen = NaN;
     // NTP-style: the sample with the shortest round trip is the most accurate
     this.clock.push([rtt, off]);
     if (this.clock.length > 24) this.clock.shift();

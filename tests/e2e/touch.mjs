@@ -15,11 +15,21 @@ const bird = () => page.evaluate(() => { const b = window.__fbSession.birds[0]; 
 await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keys', 'keysR']; f.playLevel(0); });
 await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'), 5000, 'session');
 await sleep(600);
+const len0 = await page.evaluate(() => history.length);
 // a first tap makes touch the active device: the overlay appears
 await touch('touchStart', [[422, 200, 9]]);
 await touch('touchEnd', []);
 const shown = await waitFor(() => page.evaluate(() => document.querySelector('.tc')?.style.display !== 'none'), 4000, 'overlay');
 t.check('the touch overlay appears on a phone', shown);
+// A phone's system back gesture (Android gesture navigation, an iOS left-edge swipe in a tab with
+// history) starts exactly where the left thumb rests on the stick, and a web page can't refuse it.
+// One history entry of our own takes the hit instead of the level being left — and goes back on top.
+const guard = await page.evaluate(() => ({ len: history.length, fb: history.state?.fb ?? null }));
+t.check('the first touch puts a history entry in the way of a back gesture', guard.len === len0 + 1 && guard.fb === 1, { ...guard, len0 });
+await page.evaluate(() => history.back());
+const rearmed = await waitFor(() => page.evaluate(() => history.state?.fb === 1), 3000, 'guard back on top').catch(() => false);
+const afterBack = await page.evaluate(() => ({ screen: window.__fb?.app?.current?.constructor?.name ?? null, href: location.href }));
+t.check('a back gesture keeps the level, and the guard goes back on top', !!rearmed && afterBack.screen === 'Session', { rearmed: !!rearmed, ...afterBack });
 const jx = 130, jy = 300;
 // stick right: walk
 const b0 = await bird();
@@ -79,6 +89,23 @@ t.check('the touch controls are still there in the next level', still);
 const fit = await page.evaluate(() => [...document.querySelectorAll('.tc-btn, .tc-pause')].every((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; }));
 t.check('every button is on screen', fit);
 await page.screenshot({ path: './.out/touch-phone.png' });
+// two fingers on one button (a second thumb, or the same thumb re-landing before the first lifts):
+// letting go of the first must not release the button while the other is still on it — mid-glide, or
+// mid-swing on HOLD, that drops the sprout
+const heldJump = () => page.evaluate(() => window.__fb.app.input.touch.jump);
+const jb = await center('.tc-jump');
+await touch('touchStart', [[jb.x - 15, jb.y, 11]]);
+await sleep(80);
+await touch('touchStart', [[jb.x - 15, jb.y, 11], [jb.x + 15, jb.y, 12]]);
+await sleep(80);
+const bothDown = await heldJump();
+await touch('touchEnd', [[jb.x - 15, jb.y, 11]]);
+await sleep(80);
+const afterFirst = await heldJump();
+await touch('touchEnd', []);
+await sleep(80);
+const afterBoth = await heldJump();
+t.check('JUMP stays held while a second finger is still on it, and lets go when both lift', bothDown && afterFirst && !afterBoth, { bothDown, afterFirst, afterBoth });
 // portrait: ask to rotate
 await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: false });
 const rotate = await waitFor(() => page.evaluate(() => getComputedStyle(document.querySelector('.tc-rotate')).display !== 'none'), 3000, 'rotate prompt');

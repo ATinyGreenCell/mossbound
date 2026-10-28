@@ -295,15 +295,20 @@ export class App {
       if (this.input.padPressed) this.onPadPress?.();
       this.touch?.poll();
       this.screen.frame?.(dt);
-      // sub-step slow frames so collisions, swings and jump arcs behave the same at 30 fps as at 144 fps
-      const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(dt / MAX_STEP - 1e-6)));
-      const h = dt / steps;
-      for (let i = 0; i < steps; i++) {
-        this.screen.update(h);
-        if (this.pending) break;
-        // one-shot presses must only be seen by the first sub-step of a frame
-        if (i === 0) this.input.clearEdges();
-      }
+      // A frame of no length — two animation callbacks sharing a timestamp, or a tab coming back —
+      // has nothing to advance, and dividing by it leaves the vine's solver (and then the camera,
+      // for good) at NaN. Menus still ran above, so this frame's presses are still spent.
+      if (dt > 0) {
+        // sub-step slow frames so collisions, swings and jump arcs behave the same at 30 fps as at 144 fps
+        const steps = Math.min(MAX_SUBSTEPS, Math.max(1, Math.ceil(dt / MAX_STEP - 1e-6)));
+        const h = dt / steps;
+        for (let i = 0; i < steps; i++) {
+          this.screen.update(h);
+          if (this.pending) break;
+          // one-shot presses must only be seen by the first sub-step of a frame
+          if (i === 0) this.input.clearEdges();
+        }
+      } else this.input.clearEdges();
       if (!this.pending && !NO_RENDER) this.screen.render();
     } catch (err) {
       this.handleError(err, now);

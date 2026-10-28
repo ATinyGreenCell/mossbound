@@ -154,15 +154,19 @@ export function drawBubble(ctx: CanvasRenderingContext2D, x: number, y: number, 
 
 // ------------------------------------------------------------------ the string
 
-const ropePts: Pt[] = [];
+// the vine's drawn path, kept as flat coordinates and reused: it is rebuilt every frame, and a
+// fresh point object per bend used to be the heaviest allocation in the renderer
+const ropeX: number[] = [];
+const ropeY: number[] = [];
 const ropeAcc: number[] = [];
+let ropeN = 0;
 
 /**
  * The string along its path (bird → bends → bird), sagging when slack, with a wave running along it
  * after a tug. Colored from one bird's color to the other's.
  */
 export function drawRope(ctx: CanvasRenderingContext2D, path: readonly Pt[], total: number, colA: string, colB: string, tension: number, twang: number, twangFrom: 0 | 1, t: number, glow: number, solid?: (x: number, y: number) => boolean) {
-  ropePts.length = 0;
+  ropeN = 0;
   ropeAcc.length = 0;
   const slack = clamp(ROPE_LEN - total, 0, 70) * 0.5;
   let acc = 0;
@@ -191,25 +195,26 @@ export function drawRope(ctx: CanvasRenderingContext2D, path: readonly Pt[], tot
       const a = (1 - u) * (1 - u);
       const bb = 2 * (1 - u) * u;
       const c = u * u;
-      ropePts.push({ x: a * p.x + bb * cx + c * q.x, y: a * p.y + bb * cy + c * q.y });
-      ropeAcc.push(acc + u * L);
+      ropeX[ropeN] = a * p.x + bb * cx + c * q.x;
+      ropeY[ropeN] = a * p.y + bb * cy + c * q.y;
+      ropeAcc[ropeN] = acc + u * L;
+      ropeN++;
     }
     acc += L;
   }
   // tug wave: a bump traveling from the tugger's end
-  if (twang > 0.01 && ropePts.length > 2) {
+  if (twang > 0.01 && ropeN > 2) {
     const front = (1 - twang) * acc * 1.4;
-    for (let i = 1; i < ropePts.length - 1; i++) {
+    for (let i = 1; i < ropeN - 1; i++) {
       const s = twangFrom === 0 ? ropeAcc[i] : acc - ropeAcc[i];
       const env = Math.exp(-(((s - front) / 26) ** 2)) * twang;
       if (env < 0.01) continue;
-      const a = ropePts[i - 1];
-      const b = ropePts[i + 1];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
+      const dx = ropeX[i + 1] - ropeX[i - 1];
+      const dy = ropeY[i + 1] - ropeY[i - 1];
       const l = Math.hypot(dx, dy) || 1;
       const off = Math.sin(s * 0.25 - t * 30) * 7 * env;
-      ropePts[i] = { x: ropePts[i].x - (dy / l) * off, y: ropePts[i].y + (dx / l) * off };
+      ropeX[i] -= (dy / l) * off;
+      ropeY[i] += (dx / l) * off;
     }
   }
   // a vine: a soft glow in the two players' colours, a green stem, and little leaves along it
@@ -221,8 +226,8 @@ export function drawRope(ctx: CanvasRenderingContext2D, path: readonly Pt[], tot
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(ropePts[0].x, ropePts[0].y);
-  for (let i = 1; i < ropePts.length; i++) ctx.lineTo(ropePts[i].x, ropePts[i].y);
+  ctx.moveTo(ropeX[0], ropeY[0]);
+  for (let i = 1; i < ropeN; i++) ctx.lineTo(ropeX[i], ropeY[i]);
   ctx.strokeStyle = grad;
   ctx.globalAlpha = 0.14 + glow * 0.2 + tension * 0.12;
   ctx.lineWidth = 8;
@@ -238,14 +243,12 @@ export function drawRope(ctx: CanvasRenderingContext2D, path: readonly Pt[], tot
   ctx.lineWidth = 1;
   let next = 14;
   let side = 1;
-  for (let i = 1; i < ropePts.length; i++) {
+  for (let i = 1; i < ropeN; i++) {
     if (ropeAcc[i] < next || ropeAcc[i] > acc - 10) continue;
     next = ropeAcc[i] + 22;
-    const p = ropePts[i - 1];
-    const q = ropePts[i];
-    const ang = Math.atan2(q.y - p.y, q.x - p.x) + side * (1.0 + Math.sin(t * 2.6 + i) * 0.18);
+    const ang = Math.atan2(ropeY[i] - ropeY[i - 1], ropeX[i] - ropeX[i - 1]) + side * (1.0 + Math.sin(t * 2.6 + i) * 0.18);
     ctx.save();
-    ctx.translate(q.x, q.y);
+    ctx.translate(ropeX[i], ropeY[i]);
     ctx.rotate(ang);
     ctx.fillStyle = side > 0 ? '#a8d64a' : '#95c63e';
     ctx.strokeStyle = VINE_DARK;
@@ -586,7 +589,8 @@ export function drawNest(ctx: CanvasRenderingContext2D, x: number, y: number, t:
   ctx.quadraticCurveTo(x + 26, base - 50, x + 22, base - 56);
   ctx.stroke();
   ctx.fillStyle = '#a8d64a';
-  for (const s of [-1, 1]) {
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 1 : -1;
     ctx.beginPath();
     ctx.ellipse(x + 22 + s * 4, base - 56, 4.5, 2.2, s * 0.6 + Math.sin(t * 2) * 0.1, 0, TAU);
     ctx.fill();

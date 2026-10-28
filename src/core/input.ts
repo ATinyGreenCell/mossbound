@@ -1,4 +1,5 @@
 import { clamp } from './math';
+import { IS_XBOX } from './platform';
 
 /** One frame of player intent. Produced by Input (keyboard / pad / touch) — a Bird consumes it. */
 export interface ControlFrame {
@@ -94,6 +95,14 @@ export interface Device {
    * player bound to an older generation has to press a button to claim it again.
    */
   readonly generation: number;
+  /**
+   * Still holding confirm (Ⓐ / jump), not just pressing it this frame. One physical pad can reach the
+   * page as two devices (Steam Input's virtual pad beside the real one, a doubled driver) whose copies
+   * of a press land a frame apart — so a seat is only ever taken while nobody who has one is holding.
+   */
+  holdingConfirm(): boolean;
+  /** Spend this frame's presses (a press used to take a seat back mustn't also reach the sprout). */
+  clearEdges(): void;
 }
 
 /** Name of a device for the screen ('KEYBOARD', 'PAD 2'). */
@@ -198,7 +207,10 @@ class Pad implements Device {
   /** axes that rested far from center when a non-standard pad appeared (triggers reported as axes) */
   private deadAxes: boolean[] = [];
   private prev: boolean[] = [];
-  private stickPrev = { x: 0, y: 0 };
+  /** menu directions the stick is already counted as pushed in (see stickEdge) */
+  private stickOn = { up: false, down: false, left: false, right: false };
+  /** axes that were held when the page lost focus: ignored until they read near centre once */
+  private stale: boolean[] = [];
 
   constructor(index: number) {
     this.id = `pad${index}`;
@@ -206,6 +218,15 @@ class Pad implements Device {
 
   get controls() {
     return this.shaper.out;
+  }
+
+  holdingConfirm() {
+    return this.connected && this.intent.jump;
+  }
+
+  clearEdges() {
+    this.shaper.clearEdges();
+    clearMenu(this.menu);
   }
 
   read(pad: Gamepad | null) {
@@ -223,18 +244,35 @@ class Pad implements Device {
     if (key !== this.key) {
       this.key = key;
       // Non-standard mappings can expose analog triggers as axes resting at -1. A stick never rests
-      // there, so mask those axes rather than let the bird walk off on its own.
-      this.deadAxes = pad.mapping === 'standard' ? [] : pad.axes.map((a) => Math.abs(a) > 0.5);
+      // there, so mask those axes rather than let the bird walk off on its own. Only a reading right
+      // at the rail counts: browsers also reveal a pad on an axis pushed past 0.5, so a player whose
+      // first move is the stick would otherwise lose that stick (raw() frees it again when it centres).
+      this.deadAxes = pad.mapping === 'standard' ? [] : pad.axes.map((a) => Math.abs(a) > 0.97);
       // A pad that comes back with buttons already held mustn't fire them as fresh presses. The first
       // time a slot fills, though, they're real: browsers hide every pad until one is pressed, so the
       // press that shows it is the player's first move (on an Xbox, often the very first Ⓐ).
       const first = this.generation === 1;
       this.prev.length = pad.buttons.length;
       for (let i = 0; i < pad.buttons.length; i++) this.prev[i] = !first && !!pad.buttons[i]?.pressed;
+      this.stale.length = pad.axes.length;
+      for (let i = 0; i < pad.axes.length; i++) this.stale[i] = false;
     }
     const b = (i: number) => !!pad.buttons[i]?.pressed;
     const bp = (i: number) => b(i) && !this.prev[i];
-    const raw = (i: number) => (this.deadAxes[i] ? 0 : (pad.axes[i] ?? 0));
+    const raw = (i: number) => {
+      const v = pad.axes[i] ?? 0;
+      // a stick comes back to centre; a trigger resting at a rail never does, so it stays masked
+      if (this.deadAxes[i]) {
+        if (Math.abs(v) > 0.08) return 0;
+        this.deadAxes[i] = false;
+      }
+      // held when the page lost focus (see blurred()): wait for a centred reading before trusting it
+      if (this.stale[i]) {
+        if (Math.abs(v) > 0.2) return 0;
+        this.stale[i] = false;
+      }
+      return v;
+    };
     const ax = (i: number) => deadzone(raw(i));
     let any = false;
     for (let i = 0; i < pad.buttons.length; i++) if (bp(i)) any = true;
@@ -253,22 +291,49 @@ class Pad implements Device {
     const m = this.menu;
     const sx = raw(0);
     const sy = raw(1);
-    const T = 0.6;
-    m.up = bp(12) || (sy < -T && this.stickPrev.y >= -T);
-    m.down = bp(13) || (sy > T && this.stickPrev.y <= T);
-    m.left = bp(14) || (sx < -T && this.stickPrev.x >= -T);
-    m.right = bp(15) || (sx > T && this.stickPrev.x <= T);
+    m.up = bp(12) || this.stickEdge('up', -sy);
+    m.down = bp(13) || this.stickEdge('down', sy);
+    m.left = bp(14) || this.stickEdge('left', -sx);
+    m.right = bp(15) || this.stickEdge('right', sx);
     m.confirm = bp(0);
     m.back = bp(1);
     // either small button: Edge on Xbox may keep ☰ for itself (held, it opens Edge's own menu)
     m.pause = bp(9) || bp(8);
     m.any = any;
-    this.stickPrev.x = sx;
-    this.stickPrev.y = sy;
     this.active = any || Math.abs(ax(0)) + Math.abs(ax(1)) > 0.5;
 
     this.prev.length = pad.buttons.length;
     for (let i = 0; i < pad.buttons.length; i++) this.prev[i] = !!pad.buttons[i]?.pressed;
+  }
+
+  /**
+   * One menu move per push of the stick, with room to tremble: it fires once past 0.6 and only counts
+   * again once the stick has come back under 0.35. Without that gap a gentle push that wobbles either
+   * side of the threshold walked a menu several items at once.
+   */
+  private stickEdge(dir: 'up' | 'down' | 'left' | 'right', v: number) {
+    if (v > 0.6) {
+      if (this.stickOn[dir]) return false;
+      this.stickOn[dir] = true;
+      return true;
+    }
+    if (v < 0.35) this.stickOn[dir] = false;
+    return false;
+  }
+
+  /**
+   * The page lost focus (on an Xbox: the guide, or Edge going full screen) with buttons or a stick
+   * possibly still held. Online levels keep running for the partner's sake, so don't let a reading
+   * the browser may be repeating to an unfocused page play on: hold the sticks until each has come
+   * back to centre once, and count every held button as already pressed (the next read puts prev
+   * back in step with the pad, so only buttons held right now are swallowed).
+   */
+  blurred() {
+    if (!this.connected) return;
+    for (let i = 0; i < this.prev.length; i++) this.prev[i] = true;
+    for (let i = 0; i < this.stale.length; i++) this.stale[i] = true;
+    this.stickOn.up = this.stickOn.down = this.stickOn.left = this.stickOn.right = false;
+    this.shaper.reset();
   }
 
   /** The pad went away: forget its buttons so it starts clean if it comes back. */
@@ -276,7 +341,8 @@ class Pad implements Device {
     this.connected = false;
     this.key = '';
     this.prev.length = 0;
-    this.stickPrev.x = this.stickPrev.y = 0;
+    this.stale.length = 0;
+    this.stickOn.up = this.stickOn.down = this.stickOn.left = this.stickOn.right = false;
     this.shaper.reset();
   }
 }
@@ -336,9 +402,11 @@ const ALL: KeyMap = {
   up: [...LEFT.up, ...RIGHT.up],
   down: [...LEFT.down, ...RIGHT.down],
   jump: [...LEFT.jump, ...RIGHT.jump, 'KeyK'],
-  anchor: [...LEFT.anchor, ...RIGHT.anchor, 'KeyJ'],
+  // both Shifts hold on here, as the signs and the controls card promise ("SHIFT: hold on") — right
+  // Shift is only a dash for the right-hand player of two sharing the keyboard
+  anchor: [...LEFT.anchor, ...RIGHT.anchor, 'ShiftRight', 'KeyJ'],
   tug: [...LEFT.tug, ...RIGHT.tug, 'KeyL'],
-  dash: [...LEFT.dash, ...RIGHT.dash, 'KeyI'],
+  dash: [...LEFT.dash, ...RIGHT.dash.filter((c) => c !== 'ShiftRight'), 'KeyI'],
   heart: [...LEFT.heart, ...RIGHT.heart, 'KeyH'],
   hey: [...LEFT.hey, ...RIGHT.hey, 'KeyG'],
   confirm: ['Enter', 'NumpadEnter', 'Space', 'KeyK'],
@@ -353,6 +421,8 @@ class Keys implements Device {
   readonly intent = makeIntent();
   readonly connected = true;
   readonly generation = 0;
+  /** confirm (or jump) held down, as of the last read */
+  private held = false;
   constructor(
     readonly id: DeviceId,
     private readonly map: KeyMap,
@@ -360,6 +430,15 @@ class Keys implements Device {
 
   get controls() {
     return this.shaper.out;
+  }
+
+  holdingConfirm() {
+    return this.held;
+  }
+
+  clearEdges() {
+    this.shaper.clearEdges();
+    clearMenu(this.menu);
   }
 
   read(k: (code: string) => boolean, kp: (code: string) => boolean) {
@@ -388,6 +467,7 @@ class Keys implements Device {
     mn.back = any(m.back, kp);
     mn.pause = any(m.pause, kp);
     mn.any = mn.up || mn.down || mn.left || mn.right || mn.confirm || it.jumpTap || it.tug || it.dash || it.heart || it.hey || any(m.anchor, kp);
+    this.held = it.jump || any(m.confirm, k);
   }
 }
 
@@ -436,6 +516,8 @@ export class Input {
     });
     window.addEventListener('blur', () => {
       this.down.clear();
+      // a pad may still be held, and the browser may keep repeating that reading to a page without focus
+      for (const p of this.pads) p.blurred();
     });
     const onPointer = (e: PointerEvent) => {
       if (e.pointerType === 'mouse') return;
@@ -472,9 +554,16 @@ export class Input {
    * Every device that could join a game right now: each connected pad, then both keyboard halves.
    * Pads come first, so when a controller press also arrives as a key press (some browsers send both)
    * the controller is the one that takes the seat.
+   *
+   * On an Xbox there is no keyboard at all, and Edge may deliver a controller button as a key press
+   * too (Ⓐ as ENTER) — the two halves of one press landing a frame apart would hand the sprout to
+   * half a keyboard, which can then only jump, never walk. So while a controller is connected there,
+   * only controllers can hold a seat. On a laptop a pad and half a keyboard are two real players.
    */
   devices(): Device[] {
-    return [...this.pads.filter((p) => p.connected), this.keysL, this.keysR];
+    const pads = this.pads.filter((p) => p.connected);
+    if (IS_XBOX && pads.length) return pads;
+    return [...pads, this.keysL, this.keysR];
   }
 
   /** Simulate a one-frame key press (e.g. the touch PAUSE button sends 'Escape'). */
@@ -589,9 +678,27 @@ export function isTyping(t: EventTarget | null) {
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
 }
 
+/** What a sign calls each control. */
+export type ButtonNames = Record<'jump' | 'anchor' | 'tug' | 'dash' | 'heart' | 'climb' | 'move', string>;
+
 /** Button names for hints, for whichever device the player used last. */
-export const BUTTON_NAMES: Record<InputDevice, Record<'jump' | 'anchor' | 'tug' | 'dash' | 'heart' | 'climb' | 'move', string>> = {
+export const BUTTON_NAMES: Record<InputDevice, ButtonNames> = {
   keyboard: { jump: 'SPACE', anchor: 'SHIFT', tug: 'E', dash: 'R', heart: 'Q', climb: 'W / S', move: 'A / D' },
   pad: { jump: 'Ⓐ', anchor: 'Ⓧ or a trigger', tug: 'Ⓑ', dash: 'RB', heart: 'Ⓨ', climb: 'stick up / down', move: 'stick' },
   touch: { jump: 'JUMP', anchor: 'HOLD', tug: 'TUG', dash: 'DASH', heart: '♥', climb: 'stick up / down', move: 'stick' },
 };
+
+/** The right-hand half of a shared keyboard (see RIGHT above): the arrows and the keys beside them. */
+const KEYS_RIGHT_NAMES: ButtonNames = { jump: '/', anchor: '.', tug: ',', dash: ';', heart: 'M', climb: '↑ / ↓', move: '← / →' };
+
+/**
+ * What to call the buttons of one seat in a game on one screen: the sign a sprout walks up to names
+ * its own player's buttons, not those of whoever touched a device last. A seat on the whole keyboard
+ * is one player who may also be holding a pad or playing on a phone, so that one follows lastDevice.
+ */
+export function seatButtonNames(seat: DeviceId, lastDevice: InputDevice): ButtonNames {
+  if (seat === 'keysL') return BUTTON_NAMES.keyboard;
+  if (seat === 'keysR') return KEYS_RIGHT_NAMES;
+  if (seat !== 'keys') return BUTTON_NAMES.pad;
+  return BUTTON_NAMES[lastDevice];
+}

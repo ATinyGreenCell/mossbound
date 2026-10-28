@@ -80,6 +80,17 @@ const r = await page.evaluate(() => {
     s.secs(0.25);
     out.wallJump = { away: +((x0 - s.birds[0].x) / T).toFixed(2), up: s.birds[0].vy < 0 || s.birds[0].y < F * T - 3 * T, cling: s.birds[0].cling };
   }
+  // a wall jump with dash pressed in the same frame: off the wall, then the dash
+  {
+    const s = __rig(wall, ['small', 'tall']);
+    s.place(0, 23, F); s.place(1, 22, F); s.reset(); s.secs(0.2);
+    s.c[0].moveX = 1; s.secs(0.2); s.jump(0);
+    s.until(() => s.birds[0].cling === 1, 1.5);
+    s.secs(0.2);
+    s.c[0].moveX = 0;
+    s.jump(0); s.c[0].dashPressed = true; s.step();
+    out.wallJumpDash = { dashing: s.birds[0].dashT > 0, speed: Math.round(Math.hypot(s.birds[0].vx, s.birds[0].vy)), cling: s.birds[0].cling };
+  }
 
   // ---- the dash: once per jump, and only the small one (or two alike)
   const dash = {};
@@ -97,7 +108,12 @@ const r = await page.evaluate(() => {
     s.secs(0.1);
     s.jump(0); s.secs(0.15); s.c[0].moveX = -1; s.c[0].dashPressed = true; s.step();
     const v3 = s.birds[0].vx;
-    dash[k] = { first: Math.round(v1), again: Math.round(v2), nextJump: Math.round(v3) };
+    // jump and dash in the very same frame: the jump, and then the dash — not the jump alone
+    const s2 = __rig(level(), [k, k]);
+    s2.place(0, 20, F); s2.place(1, 21, F); s2.reset(); s2.secs(0.3);
+    s2.c[0].moveX = 1;
+    s2.jump(0); s2.c[0].dashPressed = true; s2.step();
+    dash[k] = { first: Math.round(v1), again: Math.round(v2), nextJump: Math.round(v3), together: Math.round(s2.birds[0].vx), togetherJumped: !s2.birds[0].grounded };
   }
   out.dash = dash;
 
@@ -119,7 +135,7 @@ const r = await page.evaluate(() => {
   return out;
 });
 
-const { jumps, through, climb, wallJump, dash, ground } = r;
+const { jumps, through, climb, wallJump, wallJumpDash, dash, ground } = r;
 t.check(`the small sprout jumps higher than the tall one (${jumps.small.rise} vs ${jumps.tall.rise} tiles; alike ${jumps.even.rise})`, jumps.small.rise > jumps.tall.rise + 0.6 && jumps.tall.rise > 3.1 && jumps.even.rise > 3.2, jumps);
 t.check('both run at the same speed', jumps.tall.run === jumps.small.run && jumps.small.run === jumps.even.run, jumps);
 t.check(`a one-tile gap lets the small sprout (and two alike) through, not the tall one (${through.tall} / ${through.small} / ${through.even})`, through.tall < 24 && through.small > 35 && through.even > 35, through);
@@ -128,6 +144,8 @@ t.check('the tall sprout can’t climb walls; two alike can', !climb.tall.clung 
 t.check(`a wall jump goes up and away from the wall (${wallJump.away} tiles)`, wallJump.away > 0.5 && wallJump.up && wallJump.cling === 0, wallJump);
 t.check('the small sprout dashes once per jump (and again after landing)', dash.small.first > 450 && dash.small.again < 450 && dash.small.nextJump < -450, dash);
 t.check('the tall sprout doesn’t dash; two alike do', dash.tall.first < 300 && dash.even.first > 450, dash);
+t.check('jump and dash pressed together give both, not just the jump', dash.small.together > 450 && dash.even.together > 450 && dash.small.togetherJumped && dash.even.togetherJumped, dash);
+t.check('a wall jump with dash pressed together gives both', wallJumpDash.dashing && wallJumpDash.speed > 450 && wallJumpDash.cling === 0, wallJumpDash);
 t.check(`walking away, the tall sprout drags the small one along (${ground.dragged} tiles)`, ground.dragged > 1.5, ground);
 t.check(`walking away, the small sprout can’t budge the tall one (moved ${ground.tallBudged} tiles)`, Math.abs(ground.tallBudged) < 0.1 && ground.smallGot < 0.6, ground);
 

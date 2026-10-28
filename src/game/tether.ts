@@ -1,5 +1,5 @@
 import type { Pt } from './level';
-import { CATCH_BOUNCE, ROPE_LEN, T } from './tuning';
+import { CATCH_BOUNCE, ROPE_LEN, ROPE_MIN, T } from './tuning';
 import type { Body, World } from './world';
 
 /** A point the string bends around: a convex tile corner or a peg. */
@@ -27,6 +27,15 @@ export interface RopeEnd {
   taut: boolean;
   /** there's a bird at the other end (not a ghost, not gone): the string can hold anyone at all */
   active: boolean;
+}
+
+/**
+ * What the string needs of an end to track it: where its knot is, and a climber's grip on it (which is
+ * re-based when a bend appears or straightens out there, so the grip stays on the same bit of string).
+ */
+export interface RopeGrip extends Pt {
+  ropeOff?: number;
+  climbLen?: number;
 }
 
 /** Fields of a bird the string reads (and, for birds simulated here, corrects). */
@@ -63,6 +72,8 @@ const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay *
 const CORNER_OFF = 1.2;
 /** an end has to swing this far (sin of the bend angle) past straight before the string unwraps */
 const UNWRAP_HYST = 0.004;
+/** a bend counts as folded back on itself when its two legs lie within 30° of each other (cos 150°) */
+const FOLD_DOT = -0.866;
 const MAX_WRAPS = 24;
 /** the string corrects a bird at most this far per step: a big stretch resolves over a few steps, never a teleport */
 const MAX_CORR = 24;
@@ -108,7 +119,7 @@ export class Tether {
   constructor(private readonly world: World) {}
 
   /** Straighten the string between two fresh positions (spawn, respawn, level start). */
-  reset(a: Pt & { ropeOff?: number }, b: Pt & { ropeOff?: number }) {
+  reset(a: RopeGrip, b: RopeGrip) {
     this.pts.length = 0;
     this.ax = a.x;
     this.ay = knotY(a);
@@ -123,7 +134,7 @@ export class Tether {
    * wrap around whatever a ghost flies through, and it's tied afresh, straight, the moment both birds
    * are back — on both screens alike, whichever screen simulates the bird that died.
    */
-  follow(a: Pt & { present: boolean; ghost: boolean; ropeOff?: number }, b: Pt & { present: boolean; ghost: boolean; ropeOff?: number }) {
+  follow(a: RopeGrip & { present: boolean; ghost: boolean }, b: RopeGrip & { present: boolean; ghost: boolean }) {
     if (a.present && b.present && !a.ghost && !b.ghost) {
       if (this.retie) this.reset(a, b);
       else this.update(a, b);
@@ -132,13 +143,45 @@ export class Tether {
   }
 
   /** Move the ends to new positions, wrapping around anything the string swept past. */
-  update(a: Pt & { ropeOff?: number }, b: Pt & { ropeOff?: number }) {
+  update(a: RopeGrip, b: RopeGrip) {
     const ay = knotY(a);
     const by = knotY(b);
+    const bend0 = this.bendAt(0);
+    const bend1 = this.bendAt(1);
     if (a.x !== this.ax || ay !== this.ay) this.sweep(0, a.x, ay);
     if (b.x !== this.bx || by !== this.by) this.sweep(1, b.x, by);
     this.unwrap();
+    // a string that has just straightened out can keep drifting into the corner on the other side of
+    // a one-tile hole, a step or two after the bend let go: route it back over a corner
+    this.repair();
     this.measure();
+    this.regrip(a, ay, bend0, this.bendAt(0), b, by);
+    this.regrip(b, by, bend1, this.bendAt(1), a, ay);
+  }
+
+  /** The bend this end pivots around, or null when the string runs straight to the other bird. */
+  private bendAt(end: 0 | 1): Pt | null {
+    const n = this.pts.length;
+    if (!n) return null;
+    const p = end === 0 ? this.pts[0] : this.pts[n - 1];
+    return { x: p.x, y: p.y };
+  }
+
+  /**
+   * Keep a climber's grip on the same point of the string when a bend appears or goes at its own end.
+   * Its segment is measured to that pivot, so the pivot moving makes the segment jump; without the
+   * same jump in `climbLen` the solver would reel the whole difference in (or pay it out) at its
+   * per-step cap, which is felt as a yank of up to a hundred pixels.
+   */
+  private regrip(me: RopeGrip, ky: number, was: Pt | null, now: Pt | null, other: Pt, otherY: number) {
+    if (me.climbLen === undefined || !Number.isFinite(me.climbLen)) return;
+    if (!was && !now) return; // straight before and after: the other bird simply moved
+    const from = was ?? { x: other.x, y: otherY };
+    const to = now ?? { x: other.x, y: otherY };
+    if (Math.abs(from.x - to.x) + Math.abs(from.y - to.y) < 0.5) return; // the same bend as before
+    const shift = Math.hypot(me.x - to.x, ky - to.y) - Math.hypot(me.x - from.x, ky - from.y);
+    // (within the same bounds a climber's own hands keep it to, see Bird.step)
+    me.climbLen = Math.min(ROPE_LEN, Math.max(ROPE_MIN, me.climbLen + shift));
   }
 
   private sweep(end: 0 | 1, nx: number, ny: number) {
@@ -189,21 +232,56 @@ export class Tether {
     return n ? this.pts[n - 1] : { x: this.ax, y: this.ay };
   }
 
-  /** Bends at either end straighten out once the string swings back past them. */
+  /** Bends at either end straighten out once the string swings back past them — or fold away. */
   private unwrap() {
     for (let guard = 0; guard < MAX_WRAPS && this.pts.length; guard++) {
       const c = this.pts[0];
       const q = this.pts[1] ?? { x: this.bx, y: this.by };
-      if (!this.straightened(this.ax, this.ay, c, q)) break;
-      this.pts.shift();
+      if (!this.straightened(this.ax, this.ay, c, q) && !this.folded(this.ax, this.ay, c, q)) break;
+      if (!this.rebend(0, this.ax, this.ay, c, q.x, q.y)) this.pts.shift();
     }
     for (let guard = 0; guard < MAX_WRAPS && this.pts.length; guard++) {
       const n = this.pts.length;
       const c = this.pts[n - 1];
       const p = this.pts[n - 2] ?? { x: this.ax, y: this.ay };
-      if (!this.straightened(p.x, p.y, c, { x: this.bx, y: this.by })) break;
-      this.pts.pop();
+      const q = { x: this.bx, y: this.by };
+      if (!this.straightened(p.x, p.y, c, q) && !this.folded(p.x, p.y, c, q)) break;
+      if (!this.rebend(n - 1, p.x, p.y, c, q.x, q.y)) this.pts.pop();
     }
+  }
+
+  /**
+   * A bend that has straightened out, but whose straightened path would cut a corner of its own — at
+   * a one-tile hole or the end of a wall the corner on the other side lies right inside the triangle
+   * the string sweeps as it lets go. Bend around that one instead of lying through it. Returns false
+   * when the bend really can go.
+   */
+  private rebend(i: number, px: number, py: number, c: Wrap, qx: number, qy: number) {
+    if (this.los(px, py, qx, qy)) return false;
+    const hit = this.firstCorner(px, py, c.x, c.y, qx, qy);
+    if (!hit) return false;
+    this.pts[i] = { x: hit.x, y: hit.y, s: Math.sign(cross(hit.x - px, hit.y - py, qx - hit.x, qy - hit.y)) || 1, peg: hit.peg };
+    return true;
+  }
+
+  /**
+   * A bend the string has folded right back along itself, with its two neighbours in plain sight of
+   * each other: nothing holds it there, so it lets go. Climbing the string over a ledge corner and
+   * mantling onto it leaves exactly this hairpin on the lip, and the winding-sign test below never
+   * sees it (the string folded rather than swinging past), so the pair would stay hooked on the lip
+   * and drag each other back to it.
+   */
+  private folded(px: number, py: number, c: Wrap, q: Pt) {
+    if (c.peg) return false; // a ring is a hook: the string stays over it however it hangs
+    const ux = c.x - px;
+    const uy = c.y - py;
+    const vx = q.x - c.x;
+    const vy = q.y - c.y;
+    const lu = Math.hypot(ux, uy);
+    const lv = Math.hypot(vx, vy);
+    if (lu < 0.5 || lv < 0.5) return false;
+    if ((ux * vx + uy * vy) / (lu * lv) > FOLD_DOT) return false;
+    return this.los(px, py, q.x, q.y);
   }
 
   private straightened(px: number, py: number, c: Wrap, q: Pt) {
@@ -411,8 +489,11 @@ export class Tether {
           // based)… and since that alone leaks a little energy every step (half the drop's worth),
           // its speed is then set from the swing's own energy, so a pendulum keeps its height. Only
           // around a pivot that holds still, and only if nothing was bumped on the way.
-          me.vx = (me.x - me.prevX) / dt;
-          me.vy = (me.y - me.prevY) / dt;
+          // (a frame of no length moved it nowhere in no time: keep the speed it already had)
+          if (dt > 0) {
+            me.vx = (me.x - me.prevX) / dt;
+            me.vy = (me.y - me.prevY) / dt;
+          }
           const still = !e.pivotIsBird || other.anchored || (other.grounded && Math.abs(other.vx) + Math.abs(other.vy) < 5);
           const sp = Math.hypot(me.vx, me.vy);
           if (still && !me.bumped && Number.isFinite(me.swingE) && sp > 1) {

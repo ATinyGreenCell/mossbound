@@ -60,6 +60,30 @@ const r = await page.evaluate(async () => {
   const pasted = `here: ${code.slice(0, 30)}\n ${code.slice(30, 60)}​${code.slice(60)}  `;
   out.importOk = S.importCode(pasted) && S.save.unlocked >= 4 && S.save.levels.paris?.feathers === 3 && S.save.runs.woods?.run?.cp === 1;
   out.importJunk = !S.importCode('MB1-!!!!') && !S.importCode('hello') && !S.importCode('MB1-' + btoa('[1,2]'));
+  // a copy whose shared count is wildly ahead was never counted: believing it would pin our own count
+  // for good, and from then on every save would be stamped the same — a stale copy of a run could
+  // then overwrite real progress (a corrupted save code, or a partner on a damaged build)
+  const wild = (more = {}) => ({ v: 3, unlocked: 0, levels: {}, finished: false, runs: {}, clock: 1e15, ...more });
+  const step = (time) => ({ cp: 3, seeds: [], feathers: 0, time, with: '', sig: '' });
+  S.save.clock = 10;
+  S.mergeSave(wild());
+  out.wildCountRefused = S.save.clock === 10;
+  S.setRun('garden', 9, step(5));
+  const at1 = S.save.runs.garden.at;
+  S.setRun('garden', 9, step(40));
+  out.countStillAdvances = S.save.runs.garden.at === at1 + 1;
+  // the partner's stale copy of that same run, stamped with the made-up count
+  S.mergeSave(wild({ runs: { garden: { gen: 9, at: 1e15, run: step(5) } } }));
+  out.wildRunRefused = S.save.runs.garden.run.time === 40;
+  // a count that's merely ahead (the partner has played more) is still believed
+  S.mergeSave({ v: 3, unlocked: 0, levels: {}, finished: false, runs: { garden: { gen: 9, at: 5000, run: step(70) } }, clock: 5000 });
+  out.realCountBelieved = S.save.clock === 5000 && S.save.runs.garden.run.time === 70;
+  // a copy an older build already pinned at its ceiling starts counting again rather than staying stuck
+  S.save.clock = 1e12;
+  S.setRun('woods', 9, step(10));
+  const stuck = S.save.runs.woods.at;
+  S.setRun('woods', 9, step(20));
+  out.pinnedCountRecovers = S.save.runs.woods.at === stuck + 1 && S.save.runs.woods.run.time === 20;
   // persisted
   S.persist();
   out.persisted = JSON.parse(localStorage.getItem('mossbound.save.v3')).unlocked >= 4;

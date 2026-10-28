@@ -7,6 +7,35 @@ export const LEAF = '#a8d64a';
 export const LEAF_DARK = '#5e8f22';
 const ROOT = '#8a5a34';
 
+// The sprouts' fixed details, kept here rather than written inline: these are drawn for both sprouts
+// every frame, and a table written inside the draw call is a fresh array (and iterator) each time.
+/** The tall sprout's crown: each leaf's angle, then its length. */
+const CROWN: readonly (readonly number[])[] = [
+  [-Math.PI / 2 - 0.75, 11],
+  [-Math.PI / 2 + 0.75, 11],
+  [-Math.PI / 2 + 0.1, 13],
+];
+/** Creases down the bark: x, then how much the curve leans. */
+const BARK: readonly (readonly number[])[] = [
+  [-7.2, 0.6],
+  [-4.2, -0.5],
+  [-1.5, 0.3],
+  [7.5, -0.2],
+];
+/** Speckles in the moss at the foot of the trunk, from the feet. */
+const MOSS: readonly (readonly number[])[] = [
+  [-7, -6],
+  [-4, -4.4],
+  [-2, -6.2],
+  [3.5, -4.6],
+];
+/** Speckles on the small sprout's seed, from its centre. */
+const SPECKS: readonly (readonly number[])[] = [
+  [-5, -3],
+  [-6, 1.5],
+  [-3.2, 4.6],
+];
+
 /** How far above its centre a sprout's head reaches (leaves and all): bubbles and name tags sit above it. */
 export function sproutTop(b: Bird) {
   return b.kind === 'tall' ? b.h / 2 + 14 : b.h / 2 + 9;
@@ -35,7 +64,8 @@ function leaf(ctx: CanvasRenderingContext2D, len: number, wid: number, fill: str
 function face(ctx: CanvasRenderingContext2D, b: Bird, x: number, y: number, r: number, gap: number, ink: string, menu: boolean, open: boolean) {
   const lx = clamp(b.lookX * b.facing, -1, 1);
   const ly = clamp(b.lookY, -1, 1);
-  for (const ex of [x - gap / 2, x + gap / 2]) {
+  for (let e = 0; e < 2; e++) {
+    const ex = x + (e ? gap / 2 : -gap / 2);
     if (b.blinkT < 0 || menu) {
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = ink;
@@ -65,7 +95,8 @@ function face(ctx: CanvasRenderingContext2D, b: Bird, x: number, y: number, r: n
   }
   // blush
   ctx.fillStyle = 'rgba(255,110,150,0.45)';
-  for (const ex of [x - gap / 2 - r * 0.6, x + gap / 2 + r * 0.6]) {
+  for (let e = 0; e < 2; e++) {
+    const ex = x + (e ? gap / 2 + r * 0.6 : -gap / 2 - r * 0.6);
     ctx.beginPath();
     ctx.ellipse(ex, y + r * 1.45, r * 0.7, r * 0.45, 0, 0, TAU);
     ctx.fill();
@@ -247,15 +278,12 @@ function drawTall(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: num
   ctx.moveTo(0, 2);
   ctx.lineTo(0, -6);
   ctx.stroke();
-  for (const [a, len] of [
-    [-Math.PI / 2 - 0.75, 11],
-    [-Math.PI / 2 + 0.75, 11],
-    [-Math.PI / 2 + 0.1, 13],
-  ] as const) {
+  for (let i = 0; i < CROWN.length; i++) {
+    const a = CROWN[i][0];
     ctx.save();
     ctx.translate(0, -5);
     ctx.rotate(a + Math.sin(t * 3 + a) * 0.06);
-    leaf(ctx, len, 4.4, LEAF, ink);
+    leaf(ctx, CROWN[i][1], 4.4, LEAF, ink);
     ctx.restore();
   }
   ctx.restore();
@@ -289,12 +317,9 @@ function drawTall(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: num
   ctx.strokeStyle = col.dark;
   ctx.globalAlpha *= 0.75;
   ctx.lineWidth = 1.3;
-  for (const [x, a] of [
-    [-7.2, 0.6],
-    [-4.2, -0.5],
-    [-1.5, 0.3],
-    [7.5, -0.2],
-  ] as const) {
+  for (let i = 0; i < BARK.length; i++) {
+    const x = BARK[i][0];
+    const a = BARK[i][1];
     ctx.beginPath();
     ctx.moveTo(x, top + 17 + a * 5);
     ctx.bezierCurveTo(x + 1.8, top + 21, x - 1.6, top + 26, x + 0.6, top + 31 + a * 2);
@@ -312,14 +337,9 @@ function drawTall(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: num
   ctx.ellipse(3, feet - 4, 4, 2.4, 0.2, 0, TAU);
   ctx.fill();
   ctx.fillStyle = 'rgba(214,240,120,0.9)';
-  for (const [x, y] of [
-    [-7, -6],
-    [-4, -4.4],
-    [-2, -6.2],
-    [3.5, -4.6],
-  ] as const) {
+  for (let i = 0; i < MOSS.length; i++) {
     ctx.beginPath();
-    ctx.arc(x, feet + y, 0.8, 0, TAU);
+    ctx.arc(MOSS[i][0], feet + MOSS[i][1], 0.8, 0, TAU);
     ctx.fill();
   }
   ctx.fillStyle = 'rgba(40,20,60,0.12)';
@@ -355,7 +375,8 @@ function drawSeedling(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t:
   ctx.stroke();
   ctx.translate(0, -4 * k);
   ctx.lineWidth = 1.1;
-  for (const side of [-1, 1]) {
+  for (let sI = 0; sI < 2; sI++) {
+    const side = sI ? 1 : -1;
     ctx.save();
     ctx.scale(side, 1);
     ctx.rotate(-flap - 0.15);
@@ -382,13 +403,9 @@ function drawSeedling(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t:
   // a seed's speckles, and a soft shade underneath
   ctx.fillStyle = col.dark;
   ctx.globalAlpha *= 0.4;
-  for (const [x, y] of [
-    [-5, -3],
-    [-6, 1.5],
-    [-3.2, 4.6],
-  ] as const) {
+  for (let i = 0; i < SPECKS.length; i++) {
     ctx.beginPath();
-    ctx.arc(x * k, cy + y * k, 0.9 * k, 0, TAU);
+    ctx.arc(SPECKS[i][0] * k, cy + SPECKS[i][1] * k, 0.9 * k, 0, TAU);
     ctx.fill();
   }
   ctx.globalAlpha /= 0.4;
@@ -415,7 +432,8 @@ function drawSpore(ctx: CanvasRenderingContext2D, col: BirdColor, t: number) {
   ctx.fill();
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = LEAF;
-  for (const side of [-1, 1]) {
+  for (let sI = 0; sI < 2; sI++) {
+    const side = sI ? 1 : -1;
     ctx.beginPath();
     ctx.ellipse(side * 3.5, -8.5, 3.6, 1.6, side * 0.5, 0, TAU);
     ctx.fill();

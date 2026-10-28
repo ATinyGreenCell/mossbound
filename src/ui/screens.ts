@@ -84,16 +84,20 @@ export function unlockedHats() {
 }
 
 /**
- * A text box that has the keyboard keeps the menu keys (returns true). A controller can't type, so
- * Ⓑ or up/down on one leaves the box — and does what it does in the menu as well.
+ * A text box that has the keyboard keeps the menu keys (returns true). A controller can't type, so a
+ * press on one leaves the box: Ⓑ and Ⓐ then do what they do in the menu as well (keyboard keys never
+ * reach input.menu while a box has focus, so a confirm here can only be a pad's Ⓐ), while up/down
+ * only step out — leaving the box is the whole of that press, so the highlight stays where it is.
  */
-function typingIn(app: App, m: { back: boolean; up: boolean; down: boolean }) {
+function typingIn(app: App, m: { back: boolean; up: boolean; down: boolean; confirm: boolean }) {
   const el = document.activeElement;
   if (!isTyping(el)) return false;
-  if (app.input.padConnected && (m.back || m.up || m.down)) {
+  if (!app.input.padConnected) return true;
+  if (m.back || m.confirm) {
     (el as HTMLElement).blur();
     return false;
   }
+  if (m.up || m.down) (el as HTMLElement).blur();
   return true;
 }
 
@@ -297,6 +301,8 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
   const render = () => {
     const sw = BIRD_COLORS.map((c, i) => `<i class="swatch${i === settings.color ? ' on' : ''}" data-act="color:${i}" style="background:${c.body}"></i>`).join('');
     const hatOpts = ['none', ...hats.map((h) => h.id)];
+    // changing a setting draws the panel again: a section someone opened stays open
+    const wasOpen = [...host.querySelectorAll('details')].map((d) => d.open);
     host.innerHTML = `
       <div class="panel settings">
         <div class="panel-title">settings</div>
@@ -323,6 +329,12 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
         </details>
         <div class="btn small" data-act="back">BACK</div>
       </div>`;
+    host.querySelectorAll('details').forEach((d, i) => {
+      d.open = wasOpen[i] ?? false;
+      // a clicked <summary> keeps the keyboard focus, and the next ENTER would both fold the section
+      // and press whatever row is highlighted: let go of it again
+      d.querySelector('summary')?.addEventListener('click', (e) => (e.currentTarget as HTMLElement).blur());
+    });
     const name = host.querySelector<HTMLInputElement>('.name-input')!;
     name.addEventListener('input', () => {
       settings.name = name.value.slice(0, 12);
@@ -457,6 +469,8 @@ export class LocalScreen implements Screen {
   private gen: [number, number] = [0, 0];
   private dt = 0;
   private born = performance.now();
+  /** the countdown to the level select, once both are seated — cancelled if the screen goes first */
+  private startTimer = 0;
 
   constructor(
     private readonly app: App,
@@ -511,6 +525,15 @@ export class LocalScreen implements Screen {
     this.dt = dt;
     const input = this.app.input;
     if (performance.now() - this.born < 300) return;
+    // a seat whose controller has gone (flat batteries, unplugged) lets go of it — otherwise the seat
+    // is stuck, and on a console there's no keyboard or mouse to get out of the lobby with
+    for (let i = 0; i < 2; i++) {
+      const id = this.seats[i];
+      if (id && input.device(id)?.connected === false) {
+        this.seats[i] = null;
+        this.build();
+      }
+    }
     if (input.menu.back && !this.seats[0] && !this.seats[1]) {
       audio.play('uiBack');
       this.flow.title();
@@ -518,9 +541,13 @@ export class LocalScreen implements Screen {
     }
     const devs = input.devices();
     const pressed = (d: Device) => d.menu.confirm || d.controls.jumpPressed;
-    // a press on a seated controller is that player's — and some drivers show one controller twice, its
-    // twin pressing in the same frame: nobody new sits down then, and at most one player a frame
-    let sit = !devs.some((d) => this.seats.includes(d.id) && pressed(d));
+    // still holding the button down from their own press (a press lasts many frames; the twin copies
+    // below do not land in the same one)
+    const holding = (d: Device) => d.holdingConfirm();
+    // a press on a seated controller is that player's — and some drivers show one controller twice, the
+    // copies reporting that press a frame or two apart: while a seated controller is still holding its
+    // Ⓐ nobody new sits down, so one person can't fill both seats (and at most one player a frame)
+    let sit = !devs.some((d) => this.seats.includes(d.id) && (pressed(d) || holding(d)));
     for (const d of devs) {
       const taken = this.seats.indexOf(d.id);
       if (d.menu.back && taken >= 0) {
@@ -541,7 +568,7 @@ export class LocalScreen implements Screen {
     if (this.seats[0] && this.seats[1]) {
       const seats = this.seats as [DeviceId, DeviceId];
       const gen: [number, number] = [this.gen[0], this.gen[1]];
-      setTimeout(() => this.flow.startLocal(seats, gen), 450 / ceremony(1));
+      this.startTimer = window.setTimeout(() => this.flow.startLocal(seats, gen), 450 / ceremony(1));
       this.seats = [...this.seats];
       this.born = Infinity;
     }
@@ -554,6 +581,8 @@ export class LocalScreen implements Screen {
   }
 
   dispose() {
+    // whoever leaves this screen — BACK, Ⓑ, an error — means it: the game mustn't start behind them
+    window.clearTimeout(this.startTimer);
     this.el.remove();
   }
 }
@@ -594,6 +623,20 @@ export class OnlineScreen implements Screen {
     this.el.className = 'screen online-screen';
     app.ui.appendChild(this.el);
     this.list = new ButtonList(this.el, (a) => this.act(a), () => this.back());
+    // the swatches are one stop in the list (←/→ walk the colours); a tap goes to the one it landed on
+    this.el.addEventListener(
+      'click',
+      (e) => {
+        const sw = (e.target as HTMLElement).closest<HTMLElement>('[data-color]');
+        if (!sw) return;
+        e.stopPropagation();
+        if (this.list.guarded()) return;
+        this.select('color');
+        audio.play('uiSelect');
+        this.setColor(Number(sw.dataset.color));
+      },
+      true,
+    );
     void preloadNet().catch(() => undefined);
     if (opts.joinCode && isValidCode(opts.joinCode)) this.join(opts.joinCode);
     else this.go('menu');
@@ -611,7 +654,7 @@ export class OnlineScreen implements Screen {
             <div class="panel-title">play online</div>
             <p class="note">Each of you on your own phone, laptop or Xbox — anywhere in the world.</p>
             ${nameField}
-            <div class="swatches small">${BIRD_COLORS.map((c, i) => `<i class="swatch${i === settings.color ? ' on' : ''}" data-act="color:${i}" style="background:${c.body}"></i>`).join('')}</div>
+            <div class="swatches small" data-act="color">${BIRD_COLORS.map((c, i) => `<i class="swatch${i === settings.color ? ' on' : ''}" data-color="${i}" style="background:${c.body}"></i>`).join('')}</div>
             <div class="btn" data-act="host">MAKE A ROOM</div>
             <div class="btn" data-act="join">JOIN A ROOM</div>
             ${!settings.lastRoom ? '' : settings.lastRole === 'guest' ? `<div class="btn small" data-act="rejoin">REJOIN ROOM ${esc(settings.lastRoom)}</div>` : `<div class="btn small" data-act="rehost">REOPEN ROOM ${esc(settings.lastRoom)}</div>`}
@@ -680,7 +723,29 @@ export class OnlineScreen implements Screen {
         break;
     }
     this.list.refresh(false);
+    // the Ⓐ a controller player presses on arriving belongs to the main action — the room they were
+    // in last time, else MAKE A ROOM — and not to the first colour swatch
+    if (s === 'menu') this.select('rejoin', 'rehost', 'host');
     if (s === 'connecting') this.list.disarm();
+  }
+
+  /** Put the highlight on the first of these actions that's on screen. */
+  private select(...acts: string[]) {
+    const items = this.list.items();
+    for (const a of acts) {
+      const i = items.findIndex((el) => el.dataset.act === a);
+      if (i >= 0) {
+        this.list.sel = i;
+        this.list.highlight();
+        return;
+      }
+    }
+  }
+
+  private setColor(i: number) {
+    settings.color = i;
+    saveSettings();
+    this.el.querySelectorAll('.swatch').forEach((s, k) => s.classList.toggle('on', k === settings.color));
   }
 
   private bindName() {
@@ -696,10 +761,9 @@ export class OnlineScreen implements Screen {
   }
 
   private act(a: string) {
-    if (a.startsWith('color:')) {
-      settings.color = Number(a.slice(6));
-      saveSettings();
-      this.el.querySelectorAll('.swatch').forEach((s, i) => s.classList.toggle('on', i === settings.color));
+    if (a === 'color') {
+      // Ⓐ / a tap on the row itself takes the next colour (←/→ walk them either way)
+      this.setColor((settings.color + 1) % BIRD_COLORS.length);
       return;
     }
     switch (a) {
@@ -816,6 +880,12 @@ export class OnlineScreen implements Screen {
     const m = this.app.input.menu;
     if (this.flow.pollControls(m)) return;
     if (typingIn(this.app, m)) return;
+    // ←/→ with the colour row highlighted walk the colours (the row is one stop, like in settings)
+    if ((m.left || m.right) && this.list.items()[this.list.sel]?.dataset.act === 'color') {
+      this.setColor((settings.color + (m.right ? 1 : -1) + BIRD_COLORS.length) % BIRD_COLORS.length);
+      audio.play('uiMove');
+      return;
+    }
     this.list.update(m);
   }
 
@@ -839,6 +909,8 @@ export class LevelSelect implements Screen {
   private list: ButtonList;
   private dt = 0;
   private sel = 0;
+  /** which list item the picked level follows (the pointer can move the highlight between frames) */
+  private shown = -1;
   /** the scenery follows the picked level once the highlight settles (painting a theme takes a moment) */
   private settle = 0;
   private built = false;
@@ -912,8 +984,12 @@ export class LevelSelect implements Screen {
       </div>`;
     this.list.refresh();
     if (!this.lead) {
-      // the guest's only button is LEAVE ROOM: nothing highlighted until they reach for it
-      if (!this.built) this.list.disarm();
+      // the guest's only button is LEAVE ROOM: nothing highlighted until they reach for it — and for a
+      // moment nothing at all, since the partner put this screen here, under a Ⓑ mid-tug (or an ESC)
+      if (!this.built) {
+        this.list.disarm();
+        this.list.arm();
+      }
     } else {
       // the first time CONTINUE, if there's a run to continue (Ⓐ mustn't start that level over)
       const items = this.list.items();
@@ -926,6 +1002,7 @@ export class LevelSelect implements Screen {
       }
       this.list.highlight();
     }
+    this.shown = this.list.sel;
     this.built = true;
   }
 
@@ -982,9 +1059,11 @@ export class LevelSelect implements Screen {
     }
     const m = this.app.input.menu;
     if (this.flow.pollControls(m)) return;
-    const before = this.list.sel;
     this.list.update(m);
-    if (this.list.sel !== before && this.lead) {
+    // (what's picked follows the highlight however it moved — arrows, d-pad or the pointer, which
+    // moves it between frames)
+    if (this.list.sel !== this.shown && this.lead) {
+      this.shown = this.list.sel;
       const a = this.list.items()[this.list.sel]?.dataset.act ?? '';
       const level = a.startsWith('lvl:') ? Number(a.slice(4)) : a === 'continue' ? (latestRun()?.index ?? -1) : -1;
       if (level >= 0 && level < LEVELS.length) {
@@ -1035,6 +1114,9 @@ export class EndingScreen implements Screen {
       if (this.flow.mode === 'online' && this.flow.link?.connected) this.flow.levels();
       else this.flow.title();
     });
+    // the ending arrives on its own, straight out of the last level's card: hold off the Ⓐ still
+    // being tapped, so the two little birds are seen at all
+    this.list.arm();
     audio.music('tower');
     audio.play('clear');
   }

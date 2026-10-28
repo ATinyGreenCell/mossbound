@@ -1,6 +1,6 @@
 export type SongId = 'title' | 'garden' | 'woods' | 'mill' | 'paris' | 'tower';
 
-type Inst = 'bell' | 'pluck' | 'pad' | 'bass' | 'reed' | 'flute' | 'marimba' | 'kick' | 'shaker' | 'click';
+export type Inst = 'bell' | 'pluck' | 'pad' | 'bass' | 'reed' | 'flute' | 'marimba' | 'kick' | 'shaker' | 'click';
 
 type Track =
   | { kind: 'melody'; inst: Inst; vol: number; oct: number; bars: string[] }
@@ -146,7 +146,20 @@ const noise = () => {
 
 const SUSTAINED: Partial<Record<Inst, true>> = { pad: true, reed: true, flute: true };
 
-function renderInst(inst: Inst, note: number, rate: number): Float32Array<ArrayBuffer> {
+/**
+ * Every instrument sample the songs need, in a fixed order. The worker that renders them off the
+ * main thread and the fallback that renders them on it both walk this list, so the samples come out
+ * the same (the noise above is seeded) whichever path ran.
+ */
+export function instNotes(): [Inst, number][] {
+  const insts = new Set<Inst>();
+  for (const s of Object.values(SONGS)) for (const t of s.tracks) insts.add(t.inst);
+  const out: [Inst, number][] = [];
+  for (const inst of insts) for (const note of inst === 'kick' || inst === 'shaker' || inst === 'click' ? [60] : BASES) out.push([inst, note]);
+  return out;
+}
+
+export function renderInst(inst: Inst, note: number, rate: number): Float32Array<ArrayBuffer> {
   const f = midiHz(note);
   const dur = { bell: 1.6, pluck: 1.3, pad: 2.6, bass: 0.9, reed: 1.6, flute: 1.5, marimba: 0.8, kick: 0.28, shaker: 0.07, click: 0.05 }[inst];
   const n = Math.ceil(dur * rate);
@@ -316,20 +329,21 @@ export class Sequencer {
     return buf;
   }
 
-  /** Render every instrument sample (in slices, to keep frames smooth). */
+  /** Keep a sample rendered somewhere else (the synth worker). */
+  setSample(inst: Inst, note: number, data: Float32Array<ArrayBuffer>) {
+    const buf = this.ctx.createBuffer(1, data.length, this.ctx.sampleRate);
+    buf.copyToChannel(data, 0);
+    this.samples.set(`${inst}:${note}`, buf);
+  }
+
+  /** Render whatever samples are still missing (in slices, to keep frames smooth). */
   async prepare() {
-    const insts = new Set<Inst>();
-    for (const s of Object.values(SONGS)) for (const t of s.tracks) insts.add(t.inst);
     const rate = this.ctx.sampleRate;
-    for (const inst of insts) {
-      const notes = inst === 'kick' || inst === 'shaker' || inst === 'click' ? [60] : BASES;
-      for (const note of notes) {
-        const data = renderInst(inst, note, rate);
-        const buf = this.ctx.createBuffer(1, data.length, rate);
-        buf.copyToChannel(data, 0);
-        this.samples.set(`${inst}:${note}`, buf);
-        await new Promise((r) => setTimeout(r, 0));
-      }
+    for (const [inst, note] of instNotes()) {
+      if (this.samples.has(`${inst}:${note}`)) continue;
+      const data = renderInst(inst, note, rate);
+      this.setSample(inst, note, data);
+      await new Promise((r) => setTimeout(r, 0));
     }
   }
 

@@ -25,10 +25,13 @@ for (const type of ['pointerdown', 'keydown', 'touchend'] as const) {
   window.addEventListener(type, unlockAudio, { capture: true, passive: true });
 }
 
-// Edge on Xbox, in its default "browsing controls" mode, takes B to mean "back a page". Keep one
-// history entry of our own on top so a stray B never leaves the game. It's pushed on the first real
-// input because browsers skip entries a page added without one.
-if (IS_XBOX) {
+// Edge on Xbox, in its default "browsing controls" mode, takes B to mean "back a page". A phone has
+// a system back gesture from the screen edge (Android's gesture navigation; an iOS left-edge swipe in
+// a tab with history) that starts right where the left thumb rests on the stick, and a page can't
+// refuse either. Keep one history entry of our own on top so a stray back is a no-op. It's pushed on
+// the first real input because browsers skip entries a page added without one — on a phone that means
+// the first touch, so a desktop played with a mouse keeps its Back button.
+{
   const guard = () => history.pushState({ fb: 1 }, '');
   let armed = false;
   const arm = () => {
@@ -36,7 +39,8 @@ if (IS_XBOX) {
     armed = true;
     guard();
   };
-  for (const type of ['pointerdown', 'keydown'] as const) window.addEventListener(type, arm, { capture: true, passive: true });
+  window.addEventListener('pointerdown', (e) => { if (IS_XBOX || e.pointerType !== 'mouse') arm(); }, { capture: true, passive: true });
+  if (IS_XBOX) window.addEventListener('keydown', arm, { capture: true, passive: true });
   window.addEventListener('popstate', () => {
     if (armed) guard();
   });

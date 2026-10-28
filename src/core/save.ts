@@ -70,7 +70,17 @@ const BACKUP_KEY = 'mossbound.save.v3.backup';
 const STASH_KEY = 'mossbound.save.v3.unreadable';
 const PROBE_KEY = 'mossbound.probe';
 const MAX_SEEDS = 2000;
-const MAX_CLOCK = 1e12;
+/** the shared count: one tick per recorded change, and an exact integer all the way to the ceiling */
+const MAX_CLOCK = Number.MAX_SAFE_INTEGER;
+/** fresh starts of one level: beyond any amount of playing, and nowhere near the ceiling */
+const MAX_GEN = 1e12;
+/**
+ * How far ahead of our own shared count another device's copy may be and still be believed. A lifetime
+ * of playing is a few hundred thousand ticks; a copy a billion ahead was never counted — it's damaged
+ * or made up, and taking it on would pin our count at its ceiling, losing the order of everything
+ * after it (see `newer`).
+ */
+const CLOCK_LEAD = 1e9;
 
 /** a number, from a number or a numeric string; out of range is clamped, anything else is `d` */
 const num = (v: unknown, lo: number, hi: number, d = 0) => {
@@ -118,7 +128,7 @@ function cleanRun(raw: unknown): Run | null {
 function cleanSlot(raw: unknown): RunSlot | null {
   const o = record(raw);
   if (!o) return null;
-  return { gen: int(o.gen, 0, MAX_CLOCK), at: int(o.at, 0, MAX_CLOCK), run: o.run === null ? null : cleanRun(o.run) };
+  return { gen: int(o.gen, 0, MAX_GEN), at: int(o.at, 0, MAX_CLOCK), run: o.run === null ? null : cleanRun(o.run) };
 }
 
 /**
@@ -161,8 +171,12 @@ function newer(a: RunSlot, b: RunSlot) {
   return JSON.stringify(a.run) > JSON.stringify(b.run);
 }
 
-/** Merge `o` into `s`; true if `s` changed. */
-function mergeInto(s: Save, o: Save): boolean {
+/**
+ * Merge `o` into `s`; true if `s` changed. `foreign`: it came from the partner or a pasted save code,
+ * so its shared count has to look like one that was really counted (this device's own copies — storage,
+ * the backup, another tab — are trusted).
+ */
+function mergeInto(s: Save, o: Save, foreign = false): boolean {
   const before = JSON.stringify(s);
   s.unlocked = Math.max(s.unlocked, o.unlocked);
   s.finished ||= o.finished;
@@ -174,11 +188,16 @@ function mergeInto(s: Save, o: Save): boolean {
     m.clears = Math.max(m.clears, r.clears);
     s.levels[id] = m;
   }
+  // Everything above can only add, so it's taken in whatever the copy says. What follows is ordered by
+  // the shared count, and a count that was never counted is set aside rather than taken on: it would
+  // otherwise decide every run from here on (and, pinned at the ceiling, decide them by nothing at all).
+  const lead = foreign ? s.clock + CLOCK_LEAD : Infinity;
   for (const [id, slot] of Object.entries(o.runs)) {
+    if (slot.at > lead) continue;
     const mine = s.runs[id];
     if (!mine || newer(slot, mine)) s.runs[id] = { gen: slot.gen, at: slot.at, run: slot.run && makeRun(slot.run) };
   }
-  s.clock = Math.max(s.clock, o.clock);
+  if (o.clock <= lead) s.clock = Math.max(s.clock, o.clock);
   return JSON.stringify(s) !== before;
 }
 
@@ -416,7 +435,7 @@ export function recordClear(id: string, index: number, seeds: number, feathers: 
 export function mergeSave(raw: unknown): boolean {
   const o = cleanSave(raw);
   if (!o) return false;
-  const did = mergeInto(save, o);
+  const did = mergeInto(save, o, true);
   if (did) persist();
   return did;
 }

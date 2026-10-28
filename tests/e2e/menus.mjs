@@ -7,6 +7,43 @@ const browser = await launch();
 const t = reporter();
 const key = async (page, k) => { await page.keyboard.press(k); await frames(page, 2); };
 const sel = (page) => page.evaluate(() => document.querySelector('.sel')?.textContent?.trim() ?? '');
+/**
+ * Installs window.__tapWhen(ready, button): presses that fake pad button on the very frame `ready()`
+ * first says yes and lets go three frames later — the press a player is already making when a menu
+ * arrives under them (a tap in the nest, a tug mid-level). Counted in frames, so a busy machine can't
+ * turn it into a press that lands late.
+ */
+const installTap = (page) => page.evaluate(() => {
+  window.__tapWhen = (ready, b = 0) => new Promise((done) => {
+    const press = (on) => { window.__pads[0].buttons[b] = { pressed: on, touched: on, value: on ? 1 : 0 }; };
+    let held = 0;
+    const f = () => {
+      if (!held && !ready()) return requestAnimationFrame(f);
+      if (++held === 1) press(true);
+      else if (held > 3) { press(false); return requestAnimationFrame(() => requestAnimationFrame(done)); }
+      requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+  });
+});
+/**
+ * Put the flow in a room as the guest, with a stand-in for the link (window.__link): one browser can
+ * then be the online guest with no network at all. __link.closed says whether they left the room.
+ */
+const guestRoom = (page) => page.evaluate(() => {
+  const l = {
+    role: 'guest', code: 'K7QX', status: 'connected', detail: '', rtt: 40, via: 'direct', peerId: 'p', peerGen: 1, myId: 'me', closed: false,
+    onStatus: null, onCtrl: null, onSnap: null,
+    get connected() { return this.status === 'connected'; },
+    sharedNow() { return performance.now(); },
+    send() {},
+    sendSnap() {},
+    close() { this.closed = true; this.status = 'lost'; },
+  };
+  window.__link = l;
+  window.__fb.flow.link = l;
+  window.__fb.flow.mode = 'online';
+});
 
 // ---- keyboard: title → settings → name, color, music → back; it all persists
 {
@@ -182,12 +219,296 @@ const sel = (page) => page.evaluate(() => document.querySelector('.sel')?.textCo
   await page.close();
 }
 
+// ---- menus that appear on their own (the level-clear card, the ending) ignore the Ⓐ a player is
+// already tapping in the nest: the stats and the ending are put there to be seen
+{
+  const page = await open(browser, { pads: 1 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  const last = await page.evaluate(() => import('/src/game/levels.ts').then((m) => m.LEVELS.length - 1));
+  await page.evaluate((i) => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.playLevel(i); }, last);
+  await waitFor(async () => (await screenName(page)) === 'Session', 6000, 'last level');
+  await sleep(400);
+  await installTap(page);
+  // both sprouts in the nest: the level clears and the card comes up on its own
+  await page.evaluate(() => { const s = window.__fbSession; const n = s.L.nest; s.devTeleport(n.x - 12, n.y - 4, 0); s.devTeleport(n.x + 12, n.y - 4, 1); return window.__tapWhen(() => !!document.querySelector('.overlay.clear [data-act="ending"]')); });
+  const cardUp = await page.evaluate(() => !!document.querySelector('.overlay.clear .ov-stats'));
+  await sleep(500);
+  await padPress(page, 0, 0);
+  const toEnding = await waitFor(async () => (await screenName(page)) === 'EndingScreen', 3000, 'the ending').catch(() => false);
+  t.check('the level-clear card isn’t pressed by the Ⓐ already being tapped in the nest', cardUp && !!toEnding, { cardUp, toEnding: !!toEnding });
+  // and the ending itself: the same tap mustn't carry straight past it to the title
+  await page.evaluate(() => window.__fb.flow.title());
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 4000, 'title');
+  await page.evaluate(() => { window.__fb.flow.ending(); return window.__tapWhen(() => !!document.querySelector('.ending-screen [data-act="title"]')); });
+  const stillEnding = (await screenName(page)) === 'EndingScreen';
+  await sleep(500);
+  await padPress(page, 0, 0);
+  const toTitle = await waitFor(async () => (await screenName(page)) === 'TitleScreen', 3000, 'title again').catch(() => false);
+  t.check('the ending stays up for the Ⓐ still being tapped, and leaves on the next one', stillEnding && !!toTitle, { stillEnding, toTitle: !!toTitle });
+  t.check('no errors (clear card and ending)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- PLAY ONLINE opens on its main button, and the eight colours are one stop, not eight
+{
+  const page = await open(browser, { pads: 1, storage: { 'mossbound.settings.v1': { color: 3 } } });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await page.evaluate(() => window.__fb.flow.online());
+  await waitFor(async () => (await screenName(page)) === 'OnlineScreen', 4000, 'online screen');
+  await sleep(400);
+  const act = () => page.evaluate(() => document.querySelector('.online-screen .sel')?.dataset.act ?? null);
+  const color = () => page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.settings.v1') ?? '{}').color);
+  const first = await act();
+  t.check('PLAY ONLINE highlights MAKE A ROOM, not a colour swatch', first === 'host', { first });
+  await padPress(page, 0, 12); // ↑: the colour row above it
+  const onRow = await act();
+  const was = await color();
+  await padPress(page, 0, 15); // →: the next colour
+  const now = await color();
+  await padPress(page, 0, 12); // ↑ again: past the whole row in one step
+  const pastRow = await act();
+  t.check('the colours are one stop on the way, changed with ←/→', onRow === 'color' && now === (was + 1) % 8 && pastRow === 'back', { onRow, was, now, pastRow });
+  await page.click('.online-screen .swatch[data-color="6"]');
+  await frames(page, 2);
+  const tapped = await page.evaluate(() => ({ color: JSON.parse(localStorage.getItem('mossbound.settings.v1') ?? '{}').color, on: document.querySelector('.online-screen .swatch.on')?.dataset.color }));
+  t.check('a tap still picks the swatch it landed on', tapped.color === 6 && tapped.on === '6', tapped);
+  t.check('no errors (online menu)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+  // with a room to go back to, that's the main action instead
+  const p2 = await open(browser, { storage: { 'mossbound.settings.v1': { lastRoom: 'K7QX', lastRole: 'guest' } } });
+  await waitFor(async () => (await screenName(p2)) === 'TitleScreen', 8000, 'title again');
+  await p2.evaluate(() => window.__fb.flow.online());
+  await waitFor(async () => (await screenName(p2)) === 'OnlineScreen', 4000, 'online screen again');
+  await sleep(300);
+  const withRoom = await p2.evaluate(() => document.querySelector('.online-screen .sel')?.dataset.act ?? null);
+  t.check('a room you were in last time is the one the highlight offers', withRoom === 'rejoin', { withRoom });
+  t.check('no errors (online menu, rejoin)', !p2.errors.length, p2.errors.join('\n'));
+  await p2.close();
+}
+
+// ---- a seated controller whose batteries die lets go of its seat: on a console there is no
+// keyboard or mouse to rescue the lobby with
+{
+  const page = await open(browser, { pads: 2 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await page.evaluate(() => window.__fb.flow.local());
+  await waitFor(async () => (await screenName(page)) === 'LocalScreen', 4000, 'the lobby');
+  await sleep(400);
+  await padPress(page, 0, 0);
+  const seated = await page.evaluate(() => [...window.__fb.app.current.seats]);
+  await page.evaluate(() => { window.__pads[0].connected = false; });
+  await frames(page, 4);
+  const freed = await page.evaluate(() => [...window.__fb.app.current.seats]);
+  // the other controller can now back out (and take a seat of its own)
+  await padPress(page, 1, 1); // Ⓑ
+  const back = await waitFor(async () => (await screenName(page)) === 'TitleScreen', 3000, 'title').catch(() => false);
+  t.check('a seat whose controller died frees itself, so the other one can still back out', seated[0] === 'pad0' && !freed[0] && !freed[1] && !!back, { seated, freed, back: !!back });
+  t.check('no errors (dead controller in the lobby)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- settings: clicking a section heading leaves the keyboard where it was, so the next ENTER does
+// one thing — and changing a setting doesn't fold the section away
+{
+  const page = await open(browser, { storage: { 'mossbound.settings.v1': { shake: true } } });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(450);
+  await page.evaluate(() => window.__fb.app.current.act('settings'));
+  await waitFor(() => page.evaluate(() => !!document.querySelector('.settings .name-input')), 3000, 'settings');
+  await sleep(450);
+  for (let i = 0; i < 20 && (await page.evaluate(() => document.querySelector('.settings .sel')?.dataset.act)) !== 'shake'; i++) await key(page, 'ArrowDown');
+  const row = await page.evaluate(() => document.querySelector('.settings .sel')?.dataset.act);
+  const state = () => page.evaluate(() => ({ open: !!document.querySelector('.settings details.advanced')?.open, focus: document.activeElement?.tagName, shake: JSON.parse(localStorage.getItem('mossbound.settings.v1') ?? '{}').shake }));
+  await page.click('.settings details.advanced summary');
+  await sleep(300);
+  const before = await state();
+  await key(page, 'Enter');
+  await sleep(200);
+  const after = await state();
+  t.check('ENTER after opening a settings section does one thing, and the section stays open', row === 'shake' && before.open && after.open && after.shake === !before.shake, { row, before, after });
+  t.check('no errors (settings sections)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- one controller the system shows twice (Steam Input, a doubled driver): its two copies report
+// the same press a frame apart, and that is still one player sitting down
+{
+  const page = await open(browser, { pads: 3 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await page.evaluate(() => window.__fb.flow.local());
+  await waitFor(async () => (await screenName(page)) === 'LocalScreen', 4000, 'the lobby');
+  await sleep(400);
+  const hold = (pad, on) => page.evaluate((p, on) => { window.__pads[p].buttons[0] = { pressed: on, touched: on, value: on ? 1 : 0 }; }, pad, on);
+  // pads 0 and 1 are one physical controller; player 1 presses Ⓐ and pad 1 sees it a frame later
+  await hold(0, true);
+  await frames(page, 1);
+  await hold(1, true);
+  await frames(page, 3);
+  const seats = await page.evaluate(() => [...window.__fb.app.current.seats]);
+  await hold(0, false);
+  await hold(1, false);
+  await frames(page, 3);
+  const stayed = await screenName(page);
+  // and the partner's own controller can still take the other seat
+  await padPress(page, 0, 0, 2); // (pad 0 again: a second press by player 1 changes nothing)
+  await padPress(page, 2, 0, 2);
+  const started = await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'the level select').catch(() => false);
+  const both = await page.evaluate(() => [...window.__fb.flow.seats]);
+  t.check('a controller shown twice takes one seat, and the partner still gets the other', seats.filter(Boolean).length === 1 && stayed === 'LocalScreen' && !!started && both.join() === 'pad0,pad2', { seats, stayed, both });
+  t.check('no errors (twinned controller)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- BACK in the one-screen lobby, while the game is already on its way, really does go back
+{
+  const page = await open(browser, { pads: 2 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await page.evaluate(() => window.__fb.flow.local());
+  await waitFor(async () => (await screenName(page)) === 'LocalScreen', 4000, 'the lobby');
+  await sleep(400);
+  await padPress(page, 0, 0); // player 1 sits down
+  // player 2 sits too, and one of them changes their mind before the level select arrives
+  await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: true, touched: true, value: 1 }; });
+  await frames(page, 2);
+  await page.evaluate(() => document.querySelector('.local-screen [data-act="back"]').click());
+  const atOnce = await page.evaluate(() => window.__fb.app.next?.constructor.name);
+  await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: false, touched: false, value: 0 }; });
+  await sleep(700);
+  const later = await screenName(page);
+  t.check('BACK with both seats taken stays on the title', atOnce === 'TitleScreen' && later === 'TitleScreen', { atOnce, later });
+  t.check('no errors (lobby back)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- the mouse moves the one highlight: a pointer resting on a button doesn't make a second
+// "highlighted" one that ENTER then walks past
+{
+  const page = await open(browser, { storage: { 'mossbound.save.v3': { unlocked: 4, levels: {} } } });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(450);
+  const middleOf = (s) => page.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, s);
+  const gold = (s = '.title-screen .menu .btn') => page.evaluate((s) => {
+    const all = [...document.querySelectorAll(s)].map((b) => ({ act: b.dataset.act, paint: getComputedStyle(b).backgroundColor + getComputedStyle(b).outlineColor, sel: b.classList.contains('sel') }));
+    const lit = all.find((b) => b.sel);
+    return { sel: lit?.act ?? null, like: all.filter((b) => b.paint === lit?.paint).map((b) => b.act) };
+  }, s);
+  // the mouse comes to rest on PLAY ON ONE SCREEN while the keyboard highlight is on PLAY ONLINE
+  const p = await middleOf('.title-screen [data-act="local"]');
+  await page.mouse.move(p.x - 40, p.y);
+  await page.mouse.move(p.x, p.y, { steps: 4 });
+  await sleep(300); // the background transition
+  const title = await gold();
+  await key(page, 'Enter');
+  const went = await waitFor(async () => (await screenName(page)) === 'LocalScreen', 3000, 'one-screen lobby').catch(() => false);
+  t.check('a mouse resting on a button takes the highlight; ENTER presses that one', title.sel === 'local' && title.like.length === 1 && !!went, { title, went: !!went });
+  // the level-select cards the same way, and the picked level follows the highlight
+  await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.levels(); });
+  await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
+  await sleep(450);
+  const c = await middleOf('.card[data-act="lvl:3"]');
+  await page.mouse.move(c.x - 40, c.y);
+  await page.mouse.move(c.x, c.y, { steps: 4 });
+  await sleep(300);
+  const cards = await gold('.levels-screen .card');
+  const picked = await page.evaluate(() => document.querySelector('.card.picked')?.dataset.act ?? null);
+  t.check('and on the level-select cards (the pick follows the highlight)', cards.sel === 'lvl:3' && cards.like.length === 1 && picked === 'lvl:3', { cards, picked });
+  t.check('no errors (mouse highlight)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- JOIN A ROOM with a controller: ↑/↓ leave the code box without moving the highlight off JOIN,
+// and Ⓐ there joins (a pad can't type, so its Ⓐ can only mean the button)
+{
+  const page = await open(browser, { pads: 1, storage: { 'mossbound.settings.v1': { lastRoom: 'K7QX', lastRole: 'guest' } } });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await page.evaluate(() => window.__fb.flow.online());
+  await waitFor(async () => (await screenName(page)) === 'OnlineScreen', 4000, 'online screen');
+  const box = () => waitFor(() => page.evaluate(() => document.activeElement?.classList.contains('code-input')), 3000, 'code box');
+  const where = () => page.evaluate(() => ({ sel: document.querySelector('.online-screen .sel')?.dataset.act ?? null, inBox: !!document.activeElement?.classList.contains('code-input'), state: window.__fb.app.current.state }));
+  await page.evaluate(() => window.__fb.app.current.act('join'));
+  await box();
+  // (the box selects what's in it a tick after it takes focus, which re-focuses it: let that land
+  // before each press, or the press and the selection race)
+  await frames(page, 2);
+  await padPress(page, 0, 13); // ↓
+  const down = await where();
+  await page.click('.code-input');
+  await box();
+  await frames(page, 2);
+  await padPress(page, 0, 12); // ↑
+  const up = await where();
+  t.check('↑/↓ leave the code box with JOIN still highlighted', down.sel === 'go' && !down.inBox && up.sel === 'go' && !up.inBox, { down, up });
+  // Ⓐ with the box focused: JOIN (half a code, so the box says no and no room is opened)
+  await page.evaluate(() => { const i = document.querySelector('.code-input'); i.value = 'AB'; i.focus(); });
+  await box();
+  await frames(page, 2);
+  await padPress(page, 0, 0);
+  await frames(page, 2);
+  const tried = await page.evaluate(() => ({ bad: !!document.querySelector('.code-input.bad'), state: window.__fb.app.current.state }));
+  t.check('Ⓐ with the code box focused presses JOIN', tried.bad && tried.state === 'join', tried);
+  t.check('no errors (join with a controller)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- the level select rebuilds whenever news arrives from the partner: a tap just after one of
+// those mustn't be swallowed by the guard meant for the tap that opened the screen
+{
+  const page = await open(browser);
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.levels(); });
+  await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
+  await sleep(500);
+  // the partner's half of the save arrives (a profile, a sprout swap or a connection blip does the
+  // same), and the player taps a level a frame or two later
+  await page.evaluate(() => window.__fb.app.current.onSave());
+  await frames(page, 2);
+  await page.click('.card[data-act="lvl:0"]');
+  const started = await waitFor(async () => (await screenName(page)) === 'Session', 3000, 'the level').catch(() => false);
+  t.check('a tap on a level card right after the partner’s save arrives starts the level', !!started, { screen: await screenName(page) });
+  t.check('no errors (rebuilt level select)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- the host moves everyone back to the level select: the guest's next tug (Ⓑ) mustn't leave the room
+{
+  const page = await open(browser, { pads: 1 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await installTap(page);
+  await guestRoom(page);
+  // the guest is mid-level tugging with Ⓑ; the host picks BACK TO LEVELS and the list appears under them
+  await page.evaluate(() => { window.__fb.flow.levels(); return window.__tapWhen(() => window.__fb.app.current?.constructor.name === 'LevelSelect', 1); });
+  const after = await page.evaluate(() => ({ screen: window.__fb.app.current?.constructor.name, closed: window.__link.closed, link: !!window.__fb.flow.link }));
+  t.check('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room', after.screen === 'LevelSelect' && !after.closed && after.link, after);
+  // ...and once they've had a moment to see where they are, LEAVE ROOM works
+  await sleep(500);
+  await padPress(page, 0, 1);
+  const left = await waitFor(async () => (await screenName(page)) === 'TitleScreen', 3000, 'title').catch(() => false);
+  t.check('Ⓑ on the level select still leaves the room a moment later', !!left && (await page.evaluate(() => window.__link.closed)), { left: !!left });
+  t.check('no errors (guest level select)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
 // ---- Xbox: the "use game controls" hint
 {
   const page = await open(browser, { ua: XBOX_UA });
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
   const hint = await page.evaluate(() => document.querySelector('.xbox-hint')?.textContent ?? '');
   t.check('Xbox shows how to hand the controller to the game', /Use game controls/.test(hint), hint);
+  await page.close();
+}
+// ---- the controls card ignores the tail of the double-click that opened it
+{
+  const page = await open(browser);
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(450);
+  const how = await page.evaluate(() => { const r = document.querySelector('[data-act="controls"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await page.mouse.click(how.x, how.y);
+  await sleep(100);
+  await page.mouse.click(how.x, how.y, { clickCount: 2 });
+  await sleep(200);
+  const up = await page.evaluate(() => !!document.querySelector('.controls-panel'));
+  t.check('a double-click on HOW TO PLAY leaves the card open', up, { up });
+  t.check('no errors (controls card)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
 await browser.close();

@@ -33,7 +33,8 @@ const STICK_DEADZONE = 0.14;
 interface Button {
   def: ButtonDef;
   el: HTMLDivElement;
-  pointer: number | null;
+  /** every finger currently on this button: it only lets go when the last one lifts */
+  pointers: Set<number>;
 }
 
 /**
@@ -85,7 +86,7 @@ export class TouchControls implements TouchHooks {
       b.style.setProperty('--y', String(def.y));
       b.style.setProperty('--d', String(def.d));
       this.el.appendChild(b);
-      const btn: Button = { def, el: b, pointer: null };
+      const btn: Button = { def, el: b, pointers: new Set() };
       this.buttons.push(btn);
       this.listen(b, 'pointerdown', (e: PointerEvent) => this.press(btn, e));
       const up = (e: PointerEvent) => this.release(btn, e.pointerId);
@@ -211,13 +212,17 @@ export class TouchControls implements TouchHooks {
 
   private press(btn: Button, e: PointerEvent) {
     e.preventDefault();
-    if (btn.pointer !== null) return;
-    btn.pointer = e.pointerId;
+    if (btn.pointers.has(e.pointerId)) return;
+    // a second finger landing on a held button is just more of the same press: track it so that the
+    // first one lifting doesn't let go of the button underneath the other
+    const first = btn.pointers.size === 0;
+    btn.pointers.add(e.pointerId);
     try {
       btn.el.setPointerCapture(e.pointerId);
     } catch {
       // synthetic/inactive pointer — release still arrives via pointerup
     }
+    if (!first) return;
     btn.el.classList.add('on');
     const t = this.input.touch;
     const tap = TAP[btn.def.id];
@@ -233,8 +238,8 @@ export class TouchControls implements TouchHooks {
   }
 
   private release(btn: Button, pointerId: number) {
-    if (btn.pointer !== pointerId) return;
-    btn.pointer = null;
+    if (!btn.pointers.delete(pointerId)) return;
+    if (btn.pointers.size > 0) return;
     btn.el.classList.remove('on');
     const hold = HOLD[btn.def.id];
     if (hold) this.input.touch[hold] = false;
@@ -302,7 +307,7 @@ export class TouchControls implements TouchHooks {
 
   private releaseAll() {
     if (this.stickPointer !== null) this.stickRelease();
-    for (const b of this.buttons) if (b.pointer !== null) this.release(b, b.pointer);
+    for (const b of this.buttons) for (const id of [...b.pointers]) this.release(b, id);
     const t = this.input.touch;
     t.moveX = t.moveY = 0;
     t.jump = t.anchor = t.jumpTap = t.tug = t.dash = t.heart = false;

@@ -173,6 +173,11 @@ const r = await page.evaluate(async () => {
       s.until(() => s.birds[0].vy < -700, 2);
       s.c[0].moveX = -1;
       t.bounceStep = s.until(() => s.birds[0].grounded && feet(s, 0) === 84, 4) > 0;
+      // …and the one left behind climbs the string up to them and mantles onto the girder (a plank:
+      // it used to leave the climber dangling just under it, waiting for a jump nothing teaches)
+      s.c[0].moveX = 0; s.secs(0.3);
+      s.c[1].moveY = 1;
+      t.bigStepClimb = s.until(() => s.birds[1].grounded && Math.abs(feet(s, 1) - 84) < 0.1, 6) > 0;
       // the fan shaft: both ride it, then step onto the girder at the top
       s = __rig(4, K); s.place(0, 34, 81); s.place(1, 34, 81); s.reset(); s.secs(0.2);
       s.until(() => s.birds[0].y < 69.5 * T && s.birds[1].y < 69.5 * T, 5);

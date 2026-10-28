@@ -6,7 +6,7 @@ import { frames, launch, open, padAxis, padPress, reporter, screenName, sleep, w
 const browser = await launch();
 const page = await open(browser, { pads: 2 });
 const t = reporter();
-const A = 0, B = 1, START = 9, DOWN = 13;
+const A = 0, B = 1, Y = 3, START = 9, DOWN = 13;
 
 await waitFor(async () => (await screenName(page)) === 'TitleScreen', 10000, 'title');
 await sleep(400);
@@ -15,6 +15,10 @@ await padPress(page, 0, DOWN);
 await padPress(page, 0, A);
 await waitFor(async () => (await screenName(page)) === 'LocalScreen', 5000, 'local lobby');
 t.check('pad navigates the title to the local lobby', true);
+// a laptop with a pad plugged in still seats a pad and half a keyboard (on an Xbox, which has no
+// keyboard, only controllers can hold a seat — see xbox.mjs)
+const devs = await page.evaluate(() => window.__fb.app.input.devices().map((d) => d.id));
+t.check('a pad and both keyboard halves can all take a seat on a laptop', devs.includes('pad0') && devs.includes('keysL') && devs.includes('keysR'), devs);
 await sleep(400);
 // one press seen on both pads in the same frame (some drivers show one controller twice) seats one player
 const both = (on) => page.evaluate((on, b) => { for (const p of window.__pads) p.buttons[b] = { pressed: on, touched: on, value: on ? 1 : 0 }; }, on, A);
@@ -99,5 +103,58 @@ t.check('both in the nest clears the level; NEXT LEVEL', cleared && next);
 const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v3') ?? '{}'));
 t.check('the clear is saved', saved.unlocked >= 1 && saved.levels?.garden?.clears === 1, { unlocked: saved.unlocked });
 await page.screenshot({ path: `${process.env.E2E_OUT ?? './.out'}/local-level2.png` });
+
+// a sign names the buttons of the player standing at it, not of whoever touched a device last
+const hint = () => page.evaluate(() => document.querySelector('.hud-hint:not(.hidden)')?.textContent ?? null);
+const atSign = (k) => page.evaluate((k) => { const s = window.__fbSession; const g = s.L.signs[0]; s.birds[k].place({ x: g.x, y: g.y }); s.birds[1 - k].place({ x: g.x + (k ? -5 : 5) * 32, y: g.y }); s.tether.reset(s.birds[0], s.birds[1]); }, k);
+await page.evaluate(() => { const f = window.__fb.flow; f.seats = ['keysL', 'keysR']; f.seatGen = [0, 0]; f.playLevel(0); });
+await waitFor(() => page.evaluate(() => window.__fbSession?.opts.seats[1] === 'keysR' && window.__fbSession.L.index === 0), 5000, 'two on one keyboard');
+await sleep(500);
+await atSign(1);
+await page.keyboard.press('ArrowUp'); // the right-hand player touches their own keys
+await frames(page, 6);
+const hintR = await hint();
+t.check('a sign names the right-hand keyboard player their own keys', !!hintR && /← \/ →/.test(hintR) && !/SPACE|A \/ D/.test(hintR), hintR);
+// pad + keyboard: the pad player's sign keeps naming pad buttons when the other player types
+await page.evaluate(() => { const f = window.__fb.flow; f.seats = ['pad0', 'keysR']; f.seatGen = [window.__fb.app.input.device('pad0').generation, 0]; f.playLevel(0); });
+await waitFor(() => page.evaluate(() => window.__fbSession?.opts.seats[0] === 'pad0'), 5000, 'pad and keyboard');
+await sleep(500);
+await atSign(0);
+await padPress(page, 0, Y);
+await frames(page, 6);
+const hintPad = await hint();
+await page.keyboard.press('ArrowRight'); // the other player walks
+await frames(page, 6);
+const hintStill = await hint();
+t.check("a pad player's sign keeps naming pad buttons when the other player uses the keyboard", !!hintPad && /Ⓐ/.test(hintPad) && hintStill === hintPad, { hintPad, hintStill });
+
+// Both Shifts hold on for one player on the whole keyboard (what the signs and the controls card
+// promise), while right Shift stays the right-hand player's dash when two share the keyboard.
+await page.evaluate(() => {
+  const inp = window.__fb.app.input;
+  const orig = inp.update.bind(inp);
+  window.__seen = {};
+  inp.update = () => {
+    orig();
+    const all = inp.controls;
+    const r = inp.device('keysR').controls;
+    window.__seen.anchor ||= all.anchor;
+    window.__seen.dash ||= all.dashPressed;
+    window.__seen.rightDash ||= r.dashPressed;
+  };
+});
+const shift = async (code) => {
+  await page.evaluate(() => { window.__seen = {}; });
+  await page.keyboard.down(code);
+  await frames(page, 6);
+  await page.keyboard.up(code);
+  await frames(page, 3);
+  return page.evaluate(() => ({ anchor: !!window.__seen.anchor, dash: !!window.__seen.dash, rightDash: !!window.__seen.rightDash }));
+};
+const shiftL = await shift('ShiftLeft');
+const shiftR = await shift('ShiftRight');
+t.check('on the whole keyboard either Shift holds on, as the hints say', shiftL.anchor && !shiftL.dash && shiftR.anchor && !shiftR.dash, { shiftL, shiftR });
+t.check("two on one keyboard: right Shift is still the right-hand player's dash", shiftR.rightDash, shiftR);
+
 await browser.close();
 t.finish('local', page.errors);

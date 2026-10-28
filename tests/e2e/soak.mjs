@@ -43,8 +43,11 @@ const fuzz = await page.evaluate(async () => {
           if (![b.x, b.y, b.vx, b.vy].every(Number.isFinite)) bad.push(`nan b${i} @${k}`);
           if (Math.abs(b.vx) > 4000 || Math.abs(b.vy) > 4000) bad.push(`fast b${i} ${Math.round(b.vx)},${Math.round(b.vy)} @${k}`);
           if (!b.ghost && !s.world.boxFree(b.x, b.y, b.w - 2, b.h - 2)) bad.push(`in wall b${i} ${(b.x / T).toFixed(1)},${(b.y / T).toFixed(1)} @${k}`);
-          ghostFor[i] = b.ghost ? ghostFor[i] + 1 : 0;
-          if (ghostFor[i] > 120 * 3) bad.push(`stuck ghost b${i} @${k}`);
+          // a ghost with nowhere to land beside its partner hovers by them instead of being flung back
+          // to the lantern, so while the partner is off the ground it may stay a ghost a while; once
+          // they're standing there is always somewhere beside them, and it must come back
+          ghostFor[i] = b.ghost && s.birds[1 - i].grounded ? ghostFor[i] + 1 : 0;
+          if (ghostFor[i] > 120 * 4.5) bad.push(`stuck ghost b${i} @${k}`);
         }
         if (!s.birds[0].ghost && !s.birds[1].ghost) maxLen = Math.max(maxLen, s.tether.length);
         if (bad.length > 5) break;

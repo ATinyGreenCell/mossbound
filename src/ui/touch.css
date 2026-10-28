@@ -205,7 +205,11 @@ body.touch-play .controls-hint {
   }
 }
 
-@media (orientation: portrait) {
+/* Only on something phone-shaped: a coarse primary pointer and a small screen. "Has been touched" is
+   not enough — a laptop with a touch screen, or a desktop with a touch monitor, is a mouse-and-
+   keyboard machine that happens to have been tapped, and a window of its taller than wide must keep
+   the game rather than be replaced by this. */
+@media (orientation: portrait) and (pointer: coarse) and (max-width: 1024px) {
   body.touch .tc-rotate {
     display: flex;
   }

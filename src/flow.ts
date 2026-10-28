@@ -346,7 +346,11 @@ export class Flow {
     const el = document.createElement('div');
     el.className = 'overlay controls-panel';
     el.innerHTML = `<div class="ov-card wide"><div class="ov-title">how to play</div>${CONTROLS_HTML}<div class="ov-hint">tap, ESC, ENTER or Ⓑ to close</div></div>`;
-    el.addEventListener('click', () => this.closeControls());
+    // the second click of a double-click on HOW TO PLAY is the tail of the first: the menus guard
+    // their first moments the same way, so the card doesn't just flash open and shut
+    el.addEventListener('click', () => {
+      if (performance.now() - this.openedAt > 350) this.closeControls();
+    });
     this.app.ui.appendChild(el);
     this.controlsEl = el;
     this.openedAt = performance.now();

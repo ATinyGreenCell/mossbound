@@ -1,6 +1,6 @@
 import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
-import { BUTTON_NAMES, makeControls, type ControlFrame, type Device, type DeviceId } from '../core/input';
+import { BUTTON_NAMES, makeControls, seatButtonNames, type ControlFrame, type Device, type DeviceId } from '../core/input';
 import { clamp } from '../core/math';
 import { IS_XBOX, XBOX_REFOCUS } from '../core/platform';
 import { bankFeathers, freshGen, levelSig, onFlush, recordClear, save, setRun } from '../core/save';
@@ -227,14 +227,20 @@ export class Session implements Screen {
       case 'ev':
         if (m.n === this.nonce) this.handleEvent(m.e);
         break;
-      case 'world':
+      case 'world': {
         if (m.n !== this.nonce) break;
-        for (const i of m.seeds) if (i >= 0 && i < this.seedTaken.length) this.takeSeed(i, false);
+        // a partner sends the seeds they have, so there are never more of them than the level holds:
+        // anything past that is a damaged build's doing, and walking it all would cost a frame
+        const seeds = Array.isArray(m.seeds) ? m.seeds : [];
+        const n = Math.min(seeds.length, this.seedTaken.length);
+        for (let k = 0; k < n; k++) if (Number.isInteger(seeds[k]) && seeds[k] >= 0 && seeds[k] < this.seedTaken.length) this.takeSeed(seeds[k], false);
         for (let i = 0; i < 3; i++) if (m.feathers & (1 << i)) this.takeFeather(i, false);
-        if (m.cp > this.checkpoint) this.light(m.cp, false);
+        if (Number.isInteger(m.cp) && m.cp > this.checkpoint && m.cp < this.L.checkpoints.length) this.light(m.cp, false);
         break;
+      }
       case 'clear':
-        if (m.n === this.nonce && this.state === 'play') this.clear(m.time);
+        // (a time garbled on the way mustn't reach the card as "NaN:NaN" — ours timed the same level)
+        if (m.n === this.nonce && this.state === 'play') this.clear(Number.isFinite(m.time) ? clamp(m.time, 0, 360000) : this.time);
         break;
     }
   }
@@ -264,21 +270,25 @@ export class Session implements Screen {
       case 'emote':
         this.emote(other, e.e, false);
         break;
+      // (an index from the partner is checked here, as the 'world' message's are: out of range, or not
+      // a whole number, there's nothing of ours to pick up)
       case 'seed':
-        this.takeSeed(e.i, false);
+        if (Number.isInteger(e.i) && e.i >= 0 && e.i < this.seedTaken.length) this.takeSeed(e.i, false);
         break;
       case 'feather':
-        this.takeFeather(e.i, false);
+        if (Number.isInteger(e.i) && e.i >= 0 && e.i < 3) this.takeFeather(e.i, false);
         break;
       case 'cp':
-        this.light(e.i, false);
+        if (Number.isInteger(e.i) && e.i >= 0 && e.i < this.L.checkpoints.length) this.light(e.i, false);
         break;
       case 'bounce':
         mine.squash = 0.4;
         audio.play('bounce', 0.5);
         break;
       case 'regroup':
-        for (const b of this.birds) if (b.local) b.die('fall');
+        // (not during the end-of-level ceremony: nothing respawns once the level is won, so both
+        // sprouts would sit on the clear card as ghosts)
+        if (this.state === 'play') for (const b of this.birds) if (b.local) b.die('fall');
         break;
     }
   }
@@ -421,6 +431,16 @@ export class Session implements Screen {
     this.sharedT += dt;
     this.world.stepMovers(this.sharedT);
     const [A, B] = this.birds;
+    // the partner's sprout is mirrored from their snapshots between frames, not simulated here: when
+    // it's riding a moving platform it has to come along with it, or it spends every step a frame of
+    // the platform's travel behind — sunk into it, floating over it, or sliding along it
+    for (let i = 0; i < 2; i++) {
+      const b = this.birds[i];
+      const m = b.groundMover;
+      if (this.auth[i] || !b.present || b.ghost || m < 0 || m >= this.world.moverDX.length) continue;
+      b.x += this.world.moverDX[m];
+      b.y += this.world.moverDY[m];
+    }
     for (let i = 0; i < 2; i++) {
       const b = this.birds[i];
       if (!this.auth[i]) continue;
@@ -435,6 +455,9 @@ export class Session implements Screen {
     }
     this.tether.follow(A, B);
     if (this.time >= this.ropeOffUntil) this.tether.solve(this.birds, [this.auth[0], this.auth[1]], dt);
+    // the solve just moved the sprouts: bring the vine's own ends with them, so it's drawn tied to
+    // them rather than to where they were before it pulled
+    this.tether.follow(A, B);
     for (let i = 0; i < 2; i++) {
       const b = this.birds[i];
       b.rope = this.tether.ends[i];
@@ -541,10 +564,11 @@ export class Session implements Screen {
   }
 
   private takeSeed(i: number, mine: boolean) {
-    if (this.seedTaken[i]) return;
+    const s = this.L.seeds[i];
+    // (a seed this level doesn't have is nothing to pick up — as takeFeather does with a firefly)
+    if (!s || this.seedTaken[i]) return;
     this.seedTaken[i] = 1;
     this.runDirty = true;
-    const s = this.L.seeds[i];
     this.fx.burst(PK.Spark, s.x, s.y, 6, 120, 0.4, 4, '#ffe28a', 0, 4);
     let n = 0;
     for (const v of this.seedTaken) n += v;
@@ -554,6 +578,9 @@ export class Session implements Screen {
   }
 
   private takeFeather(i: number, mine: boolean) {
+    // every caller checks the index, but a shift by anything else silently wraps (1 << 999999 is 1 << 31),
+    // which would bank a firefly that doesn't exist — so the guard lives here too
+    if (!Number.isInteger(i) || i < 0 || i >= this.L.feathers.length) return;
     if (this.feathers & (1 << i)) return;
     this.feathers |= 1 << i;
     // found is found: it counts (for hats too) even if this level never gets finished
@@ -570,7 +597,9 @@ export class Session implements Screen {
   }
 
   private light(i: number, mine: boolean) {
-    if (i <= this.checkpoint || i >= this.L.checkpoints.length) return;
+    // (as in takeFeather: the comparisons below are false for anything that isn't a number, so an
+    // index of another type would get itself stored as the lantern we're standing at)
+    if (!Number.isInteger(i) || i <= this.checkpoint || i >= this.L.checkpoints.length) return;
     this.checkpoint = i;
     this.runDirty = this.runUrgent = true;
     this.runT = 0;
@@ -594,6 +623,10 @@ export class Session implements Screen {
 
   private tug(b: Bird) {
     if (b.ghost || b.tugCd > 0) return;
+    // a tug needs something to pull against: feet on the ground, a grip on a wall, or a hand on the
+    // string. Two sprouts tugging each other in mid-air would make height out of nothing, and climb
+    // clean out of the level.
+    if (!b.grounded && b.cling === 0 && !b.hanging) return;
     const other = this.birds[1 - b.idx];
     if (!other.present || other.ghost) return;
     if (this.tether.length < TUG_MIN) {
@@ -644,6 +677,9 @@ export class Session implements Screen {
     b.grounded = false;
     b.hanging = false;
     b.anchored = false;
+    // a grip on a wall goes with the rest: a climber who wants to stay put holds on instead, which
+    // already turns the tug around. Left in place it would overwrite the throw on the very next step.
+    b.cling = 0;
     b.climbLen = Infinity;
     b.tuggedT = 0.45;
     b.jumping = false;
@@ -789,6 +825,9 @@ export class Session implements Screen {
           null,
           'clear',
         );
+        // nobody asked for this card: the sprouts stop answering when a level clears, so the players
+        // are still tapping Ⓐ — and the seeds, fireflies and time on it are here to be read
+        this.overlay?.list.arm();
         // (the guest's only button leaves the room: a jump still held from the landing mustn't press it)
         if (!lead) this.overlay?.list.disarm();
       },
@@ -820,8 +859,12 @@ export class Session implements Screen {
         if (a === 'resume') this.closeOverlay();
         else if (a === 'regroup') {
           this.closeOverlay();
-          for (const b of this.birds) if (b.local) b.die('fall');
-          this.send({ k: 'regroup' });
+          // online the level keeps going while this menu is open, so it may have been won in the
+          // meantime: regrouping now would leave both sprouts ghosts on the clear card
+          if (this.state === 'play') {
+            for (const b of this.birds) if (b.local) b.die('fall');
+            this.send({ k: 'regroup' });
+          }
         } else if (a === 'restart') this.flow.playLevel(this.L.index);
         else if (a === 'controls') this.flow.showControls();
         else if (a === 'quit') {
@@ -887,14 +930,18 @@ export class Session implements Screen {
     const devs = this.app.input.devices();
     const pressed = (d: Device) => d.menu.confirm || d.controls.jumpPressed;
     const holds = (d: Device, k: number) => !this.seatLost[k] && d.id === seats[k] && d.generation === gen[k];
-    // a press on the other player's controller is theirs — and some drivers show one controller twice,
-    // its twin pressing in the same frame
-    if (devs.some((d) => holds(d, 1 - i) && pressed(d))) return;
+    // A press on the other player's controller is theirs. Some drivers show one controller twice, and
+    // the two copies report a press a frame apart — so wait out the whole hold, not just this frame's
+    // edge: the twin's late copy lands while the real one is still down. A real second player who
+    // happens to press at that moment gets their sprout back on their next press.
+    if (devs.some((d) => holds(d, 1 - i) && (pressed(d) || d.holdingConfirm()))) return;
     const d = devs.find(pressed);
     if (!d) return;
     seats[i] = d.id;
     gen[i] = d.generation;
     this.seatLost[i] = false;
+    // that press was spent taking the sprout back — it mustn't also hop it off a ledge this frame
+    d.clearEdges();
     audio.play('join');
   }
 
@@ -970,6 +1017,8 @@ export class Session implements Screen {
   private updateHint() {
     let best = -1;
     let bestD = 64;
+    /** which sprout is at that sign: on one screen the sign names that player's own buttons */
+    let who: number = this.me;
     for (let i = 0; i < this.L.signs.length; i++) {
       const s = this.L.signs[i];
       for (let k = 0; k < 2; k++) {
@@ -979,6 +1028,7 @@ export class Session implements Screen {
         if (d < bestD) {
           bestD = d;
           best = i;
+          who = k;
         }
       }
     }
@@ -988,7 +1038,9 @@ export class Session implements Screen {
       return;
     }
     const s = this.L.signs[best];
-    const names = BUTTON_NAMES[this.app.input.lastDevice];
+    const last = this.app.input.lastDevice;
+    // online there is only one player here, and every device on this screen is theirs
+    const names = this.online || !this.seats ? BUTTON_NAMES[last] : seatButtonNames(this.seats[who], last);
     const text = esc(s.text).replace(/\{(\w+)\}/g, (_m, k: string) => `<b>${names[k as keyof typeof names] ?? k}</b>`);
     const p = this.cam.toCss(s.x, s.y - 34, this.app.renderer.pixelRatio);
     this.hud.hint(text, p.x, p.y);

@@ -103,10 +103,17 @@ body {
   background: rgba(255, 248, 234, 0.82);
 }
 
-.btn.sel,
-.btn:hover {
+.btn.sel {
   background: var(--gold);
   transform: scale(1.05);
+}
+
+/* The pointer moves the highlight itself (see ButtonList), so hover alone only warms a button —
+   two buttons must never look chosen at once. */
+@media (hover: hover) {
+  .btn:hover:not(.sel) {
+    background: #fffdf6;
+  }
 }
 
 .btn:active {
@@ -243,7 +250,9 @@ body {
   transform: scale(1.15);
 }
 
-.swatch.sel {
+/* a highlighted swatch — and, where the whole row is one stop in a menu, the colour ←/→ would change */
+.swatch.sel,
+.swatches.sel .swatch.on {
   outline: 3px solid var(--gold);
   outline-offset: 2px;
 }
@@ -580,10 +589,15 @@ body {
   color: var(--cream);
 }
 
-.card.sel,
-.card:hover {
+.card.sel {
   transform: translateY(-0.25em) scale(1.04);
   outline: 4px solid var(--gold);
+}
+
+@media (hover: hover) {
+  .card:hover:not(.sel) {
+    transform: translateY(-0.1em);
+  }
 }
 
 .card.picked {
