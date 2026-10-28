@@ -430,7 +430,7 @@ export function drawSpring(ctx: CanvasRenderingContext2D, x: number, y: number, 
   ctx.stroke();
 }
 
-export function drawPlate(ctx: CanvasRenderingContext2D, tx: number, ty: number, down: boolean, group: number, ink: string) {
+export function drawPlate(ctx: CanvasRenderingContext2D, tx: number, ty: number, down: boolean, group: number, ink: string, heavy = false) {
   const x = tx * T;
   const y = ty * T + T;
   const c = PLATE_COLORS[group] ?? '#fff';
@@ -454,6 +454,20 @@ export function drawPlate(ctx: CanvasRenderingContext2D, tx: number, ty: number,
   ctx.roundRect(x + 5, y - 4 - h, T - 10, h + 1, 2);
   ctx.fill();
   ctx.stroke();
+  // a heavy plate takes the tall sprout's weight: a stone slab on a thicker frame, so you can tell
+  // at a glance which of you has to stand on it
+  if (heavy) {
+    ctx.fillStyle = '#6f6a7d';
+    ctx.beginPath();
+    ctx.roundRect(x + 3, y - 6 - h, T - 6, 3, 1.5);
+    ctx.fill();
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + T / 2 - 4, y - 8 - h);
+    ctx.lineTo(x + T / 2 + 4, y - 8 - h);
+    ctx.stroke();
+  }
 }
 
 export function drawDoor(ctx: CanvasRenderingContext2D, tx: number, ty: number, open: number, group: number, th: Theme) {

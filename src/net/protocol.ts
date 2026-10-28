@@ -1,7 +1,7 @@
 import type { Save } from '../core/save';
 
 /** Bump whenever messages change shape; peers with different versions refuse to play. */
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 export const APP_ID = 'mossbound/coop/v1';
 
 export type Role = 'host' | 'guest';
@@ -60,6 +60,9 @@ export type GameEvent =
   | { k: 'cp'; i: number }
   /** the sender bounced off the receiver's head */
   | { k: 'bounce' }
+  /** the sender shot its vine over ring `i` (a peg index), or let go of the one it held */
+  | { k: 'hook'; i: number }
+  | { k: 'unhook' }
   /** pause-menu "regroup": both birds back to the checkpoint */
   | { k: 'regroup' };
 

@@ -300,6 +300,12 @@ const ctrl = await page.evaluate(async () => {
     o.evFeatherOutOfRange = fire({ t: 'ev', n: 1, e: { k: 'feather', i: 999999 } });
     o.evCpString = fire({ t: 'ev', n: 1, e: { k: 'cp', i: 'x' } });
     o.evCpFraction = fire({ t: 'ev', n: 1, e: { k: 'cp', i: 1.5 } });
+    // a vine shot over a ring that isn't there (1.2.0): the vine must be left alone, not bent to nowhere
+    o.evHookOutOfRange = fire({ t: 'ev', n: 1, e: { k: 'hook', i: 999999 } });
+    o.evHookFraction = fire({ t: 'ev', n: 1, e: { k: 'hook', i: 1.5 } });
+    o.evHookString = fire({ t: 'ev', n: 1, e: { k: 'hook', i: 'x' } });
+    o.evUnhookUnhooked = fire({ t: 'ev', n: 1, e: { k: 'unhook' } });
+    o.vine = { wraps: s.tether.pts.length, limit: Math.round(s.tether.limit) };
     o.left = { cp: s.checkpoint, feathers: s.feathers, seeds: [...s.seedTaken].reduce((a, b) => a + b, 0) };
     // and the real thing still arrives
     o.realSeed = fire({ t: 'ev', n: 1, e: { k: 'seed', i: 0 } });
@@ -313,6 +319,7 @@ const ctrl = await page.evaluate(async () => {
 const threw = Object.entries(ctrl).filter(([, v]) => typeof v === 'string' && v.startsWith('THREW'));
 t.check('a nonsense seed / firefly / lantern index from the partner is ignored, not thrown on', threw.length === 0, threw.length ? threw : ctrl);
 t.check('…and leaves the lantern, the fireflies and the seeds as they were', ctrl.left.cp === -1 && ctrl.left.feathers === 0 && ctrl.left.seeds === 0, ctrl.left);
+t.check('a vine shot at a ring that isn’t there leaves the vine as it was', ctrl.vine.wraps === 0 && ctrl.vine.limit === 256, ctrl.vine);
 t.check(`…while a flood of seed indices can’t eat a frame (${ctrl.floodMs} ms)`, ctrl.floodMs < 20, ctrl.floodMs);
 t.check('the partner’s real pickups still arrive', ctrl.took.seeds === 2 && ctrl.took.cp === 0 && ctrl.took.feathers === 1, ctrl.took);
 

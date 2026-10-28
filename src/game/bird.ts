@@ -121,6 +121,12 @@ export class Bird implements RopeBird {
   private ghostFromY = 0;
   invuln = 0;
   tugCd = 0;
+  /** the vine shot is spent for this long (see Session.shoot) */
+  shotCd = 0;
+  /** it let go of the vine this step (the session lets go of any ring it was holding with it) */
+  droppedVine = false;
+  /** holding its vine over a ring it shot (see Session.shoot; the vine's own end of it is the wrap) */
+  hooked = false;
   bounceCd = 0;
   /** just got yanked by the string: lighter gravity so the arc carries */
   tuggedT = 0;
@@ -180,6 +186,11 @@ export class Bird implements RopeBird {
     return this.traits.mass;
   }
 
+  /** heavy enough to hold a millstone slab down (see traits.ts) */
+  get heavy() {
+    return this.traits.heavy;
+  }
+
   /** where the string is tied, below the centre: 10 px above the feet, for every body (see tether.ts) */
   get ropeOff() {
     return this.h / 2 - BIRD_H / 2;
@@ -203,6 +214,7 @@ export class Bird implements RopeBird {
     this.ghost = false;
     this.jumping = false;
     this.jumpHold = 0;
+    this.hooked = false;
     this.flutter = FLUTTER_TIME;
     this.tuggedT = 0;
     this.cling = 0;
@@ -218,6 +230,7 @@ export class Bird implements RopeBird {
     this.jumpBuf -= dt;
     this.invuln -= dt;
     this.tugCd -= dt;
+    this.shotCd -= dt;
     this.bounceCd -= dt;
     this.dropT -= dt;
     this.tuggedT -= dt;
@@ -301,7 +314,8 @@ export class Bird implements RopeBird {
 
     // --- climbing the string
     this.climbing = 0;
-    if (this.hanging && rope) {
+    // (holding a ring you shot counts: the climb reels you up to it, feet on the ground or not)
+    if ((this.hanging || this.hooked) && rope) {
       if (Math.abs(c.moveY) > 0.3) {
         const cur = Math.min(this.climbLen, rope.seg);
         this.climbLen = clamp(cur - c.moveY * CLIMB_SPEED * dt, ROPE_MIN, ROPE_LEN);
@@ -341,6 +355,7 @@ export class Bird implements RopeBird {
         this.fx.push({ k: 'walljump' });
       } else if (this.hanging) {
         // let go: fly off with the swing's own speed (plus a flourish) and a kick upward
+        this.droppedVine = true;
         this.vx *= RELEASE_BOOST;
         this.vy = Math.min(this.vy * RELEASE_BOOST - HANG_HOP_V, -RELEASE_MIN_UP);
         this.hanging = false;
@@ -692,6 +707,7 @@ export class Bird implements RopeBird {
       this.vx = this.vy = 0;
       this.hanging = false;
       this.climbLen = Infinity;
+      this.droppedVine = true;
       this.grounded = true;
       this.squash = 0.2;
       this.fx.push({ k: 'mantle' });

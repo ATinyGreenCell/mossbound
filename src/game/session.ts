@@ -44,7 +44,7 @@ import { parseLevel, type LevelData, type Pt } from './level';
 import { LEVELS } from './levels';
 import { menuOpen, RemoteFeed } from './remote';
 import { Tether } from './tether';
-import { T, TUG_COOLDOWN, TUG_MIN } from './tuning';
+import { ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TUG_COOLDOWN, TUG_MIN } from './tuning';
 import type { Kind } from './traits';
 import { World } from './world';
 
@@ -285,6 +285,21 @@ export class Session implements Screen {
         mine.squash = 0.4;
         audio.play('bounce', 0.5);
         break;
+      // the partner shot their vine over a ring (or let go of one): the vine bends there on this
+      // screen too, so both of us see the same vine and the same swing
+      case 'hook':
+        if (Number.isInteger(e.i) && e.i >= 0 && e.i < this.L.pegs.length && !other.ghost) {
+          if (this.tether.shoot(other.idx, this.L.pegs[e.i], other, mine, other.traits.shot * T, true)) {
+            other.hooked = true;
+            this.fx.burst(PK.Leaf, this.L.pegs[e.i].x, this.L.pegs[e.i].y, 5, 80, 0.5, 6, '#9fd36a', -40, 2.5);
+            audio.play('grab', 0.5, 0, 1.05);
+          }
+        }
+        break;
+      case 'unhook':
+        this.tether.release(other.idx);
+        other.hooked = false;
+        break;
       case 'regroup':
         // (not during the end-of-level ceremony: nothing respawns once the level is won, so both
         // sprouts would sit on the clear card as ghosts)
@@ -365,6 +380,7 @@ export class Session implements Screen {
       const c = this.controlsFor(i);
       const b = this.birds[i];
       if (c.tugPressed) this.tug(b);
+      if (c.shootPressed) this.shoot(b);
       if (c.heartPressed) this.emote(b, 'heart', true);
       if (c.heyPressed) this.emote(b, 'hey', true);
     }
@@ -462,6 +478,10 @@ export class Session implements Screen {
       const b = this.birds[i];
       b.rope = this.tether.ends[i];
       if (this.auth[i]) b.afterRope(this.world);
+      // letting go of the vine lets go of the ring it was shot over, too — a jump off it, a mantle
+      // onto a ledge, or dying. The bend then unwinds on its own, like any the vine made for itself.
+      if (this.auth[i] && (b.droppedVine || b.ghost) && this.tether.hooked(i as 0 | 1)) this.unhook(b);
+      b.droppedVine = false;
     }
     this.world.stepDynamic(dt, this.birds);
     for (let i = 0; i < 2; i++) if (this.auth[i]) this.pickups(this.birds[i]);
@@ -620,6 +640,85 @@ export class Session implements Screen {
   }
 
   // ------------------------------------------------------------------ co-op moves
+
+  /**
+   * Shoot a sprout's vine over a ring or a branch: it becomes the pivot it swings, climbs and hauls
+   * from, and it stays hooked until the sprout lets go. The ring is chosen by where the player is
+   * pointing rather than by a line through it — a thumb aims roughly, and the swing is forgiving in
+   * the same way when the vine wraps on its own.
+   */
+  private shoot(b: Bird) {
+    if (b.ghost || b.shotCd > 0) return;
+    // pressing it again lets go of the ring you hold: the vine coils back in and you keep your speed
+    if (this.tether.hooked(b.idx)) {
+      this.unhook(b);
+      b.shotCd = SHOT_COOLDOWN * 0.5;
+      return;
+    }
+    const c = this.controlsFor(b.idx);
+    let ax = Math.abs(c.moveX) > 0.3 ? c.moveX : 0;
+    let ay = Math.abs(c.moveY) > 0.3 ? -c.moveY : 0;
+    if (!ax && !ay) {
+      ax = b.facing;
+      ay = -SHOT_DEFAULT_UP;
+    }
+    const an = Math.hypot(ax, ay);
+    ax /= an;
+    ay /= an;
+    const kx = b.x;
+    const ky = b.y + b.ropeOff;
+    const reach = b.traits.shot * T;
+    let best: Pt | null = null;
+    let bestScore = -Infinity;
+    for (const p of this.L.pegs) {
+      const dx = p.x - kx;
+      const dy = p.y - ky;
+      const d = Math.hypot(dx, dy);
+      if (d < 12 || d > reach) continue;
+      const dot = (dx / d) * ax + (dy / d) * ay;
+      if (dot < SHOT_CONE) continue;
+      // the ring most nearly where they're pointing; between two alike, the nearer one
+      const score = dot - d / (reach * 6);
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    b.shotCd = SHOT_COOLDOWN;
+    const other = this.birds[1 - b.idx];
+    const hooked = !!best && other.present && !other.ghost && this.tether.shoot(b.idx, best, b, other, b.traits.shot * T);
+    if (!hooked || !best) {
+      // nothing in reach, no line to it, or no vine to spare: a puff and a moment lost
+      this.fx.burst(PK.Dust, kx + ax * 14, ky + ay * 14, 4, 70, 0.3, 4, '#dfeec4', 0, 3);
+      audio.play('bonk', 0.25, 0, 1.4);
+      return;
+    }
+    // Hold the vine at the length that reached the ring. Standing, that leaves you standing with a
+    // taut vine over it — walk off the ledge and you swing; hold the climb and you're pulled up to
+    // it. Hooking isn't the same as letting go of the ground.
+    b.anchored = false;
+    b.cling = 0;
+    b.climbLen = clamp(Math.hypot(kx - best.x, ky - best.y) - SHOT_TAKEUP, ROPE_MIN, ROPE_LEN);
+    b.hooked = true;
+    b.fx.push({ k: 'grab' });
+    this.fx.burst(PK.Leaf, best.x, best.y, 5, 80, 0.5, 6, '#9fd36a', -40, 2.5);
+    audio.play('grab', 0.75, 0, 1.05);
+    audio.play('zip', 0.35, 0, 1.25);
+    if (b.local) this.send({ k: 'hook', i: this.L.pegs.indexOf(best) });
+  }
+
+  /** Let go of the ring a sprout shot: the vine comes off it and coils back in. */
+  private unhook(b: Bird) {
+    if (!this.tether.hooked(b.idx)) return;
+    this.tether.release(b.idx);
+    b.hooked = false;
+    if (b.grounded || !b.hanging) {
+      b.hanging = false;
+      b.climbLen = Infinity;
+    }
+    audio.play('grab', 0.35, 0, 0.8);
+    if (b.local) this.send({ k: 'unhook' });
+  }
 
   private tug(b: Bird) {
     if (b.ghost || b.tugCd > 0) return;
@@ -1092,7 +1191,7 @@ export class Session implements Screen {
     }
     for (let i = 0; i < this.L.plates.length; i++) {
       const p = this.L.plates[i];
-      if (vis(p.tx * T, p.ty * T, T)) drawPlate(ctx, p.tx, p.ty, !!w.plateDown[i], p.group, th.ink);
+      if (vis(p.tx * T, p.ty * T, T)) drawPlate(ctx, p.tx, p.ty, !!w.plateDown[i], p.group, th.ink, p.heavy);
     }
     for (let i = 0; i < this.L.springs.length; i++) {
       const sp = this.L.springs[i];

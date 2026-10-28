@@ -27,6 +27,7 @@ export interface MoverDef {
  *   o  peg (the string wraps around it)                S  spring
  *   U  updraft vent (blows up the column above it)
  *   p q r  pressure plates — holding any plate of a letter opens its doors P Q R
+ *   W Y Z  heavy plates for those same doors: only the tall sprout's weight holds one down
  *   *  seed            F  firefly (3 per level)          C  checkpoint (lantern)
  *   N  the nest (both birds in it = level clear)       1 2  where the birds start
  *   i  a sign — its text is the next entry of `signs`, signs taken left to right
@@ -67,6 +68,8 @@ export interface Plate {
   tx: number;
   ty: number;
   group: number;
+  /** only the tall sprout's weight holds this one down (W Y Z on the map) */
+  heavy?: boolean;
 }
 
 export interface DoorTile {
@@ -133,6 +136,8 @@ export interface LevelData {
 
 const DOOR_LETTERS = 'PQR';
 const PLATE_LETTERS = 'pqr';
+/** heavy plates: the same door groups, but only the tall sprout is heavy enough to hold one down */
+const HEAVY_LETTERS = 'WYZ';
 
 export const isSolidTile = (t: number) => t === Tile.Ground || t === Tile.Stone || t === Tile.Vent;
 
@@ -228,6 +233,12 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
           if (p >= 0) {
             plates.push({ tx, ty, group: p });
             doorGroups = Math.max(doorGroups, p + 1);
+            break;
+          }
+          const hv = HEAVY_LETTERS.indexOf(c);
+          if (hv >= 0) {
+            plates.push({ tx, ty, group: hv, heavy: true });
+            doorGroups = Math.max(doorGroups, hv + 1);
           }
         }
       }

@@ -119,6 +119,16 @@ body.touch #app {
   border-color: rgba(190, 240, 120, 0.85);
 }
 
+.tc-shoot {
+  font-size: calc(14px * var(--s));
+  border-color: rgba(150, 230, 170, 0.85);
+}
+
+.tc-shoot.on {
+  background: radial-gradient(circle at 50% 40%, #f0fff4 0%, #8fe0a8 55%, #3c8f5c 100%);
+  color: #0f3320;
+}
+
 .tc-dash.on {
   background: radial-gradient(circle at 50% 40%, #fbffe8 0%, #c6ef7a 55%, #6aa832 100%);
   color: #23400c;

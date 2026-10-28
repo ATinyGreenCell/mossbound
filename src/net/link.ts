@@ -8,6 +8,14 @@ export type LinkStatus = 'connecting' | 'waiting' | 'connected' | 'reconnecting'
 
 /** How long a guest waits for the host to show up before giving up. */
 const FIND_TIMEOUT_MS = 35_000;
+/**
+ * How long a guest keeps a hello of another version to itself before reporting it. Long enough for a
+ * partner of its own version to turn up and pair (a stale tab of the players' own is the likeliest
+ * stranger at a version bump), short enough that a pair who really are on different versions find
+ * out. A host never reports it: their room stays open for whoever types the code.
+ */
+const MISMATCH_GRACE_MS = 6000;
+const VERSION_MESSAGE = 'Your partner is running a different version of the game — reload both pages.';
 /** How long a partner who went quiet (Wi-Fi blip, phone locked) has to come back. */
 export const RECONNECT_GRACE_MS = GRACE_S ? GRACE_S * 1000 : 45_000;
 /** Silence on every path for this long and the partner counts as away. */
@@ -79,6 +87,8 @@ export class NetLink {
   private relay: Relay | null = null;
   private inflight = 0;
   private findTimer = 0;
+  /** when a hello of another version was last heard (see the version notice in tick) */
+  private mismatchAt = 0;
   private pingTimer = 0;
   private graceTimer = 0;
   private closed = false;
@@ -174,7 +184,7 @@ export class NetLink {
     if (this.status === 'connecting') this.setStatus('waiting');
     if (this.role === 'guest') {
       this.findTimer = window.setTimeout(() => {
-        if (!this.peerId) this.fail(`Nobody is hosting room ${this.code}. Check the code — it's on your partner's screen.`);
+        if (!this.peerId) this.fail(this.mismatchAt ? VERSION_MESSAGE : `Nobody is hosting room ${this.code}. Check the code — it's on your partner's screen.`);
       }, FIND_TIMEOUT_MS);
     }
     this.pingTimer = window.setInterval(() => this.tick(), 1000);
@@ -310,7 +320,11 @@ export class NetLink {
       }
     }
     if (m.v !== PROTOCOL) {
-      this.fail('Your partner is running a different version of the game — reload both pages.');
+      // Not a reason to end a pairing that's working or still on its way: at a version bump the
+      // likeliest stranger on the code is one of the players' own stale tabs, and ending the room on
+      // its hello would be the new version refusing to let anyone play. Remember it instead — if no
+      // partner of our own version turns up, tick() says what the trouble was.
+      this.mismatchAt = performance.now();
       return false;
     }
     if (m.role === this.role) {
@@ -393,7 +407,11 @@ export class NetLink {
     if (this.closed || this.muted) return;
     const now = performance.now();
     if (!this.peerId) {
-      this.sendHelloRelay();
+      // A guest typed a code and is owed an answer, so after the grace it hears what the trouble
+      // was. A host may be waiting minutes for a partner to type that code: a stranger's version is
+      // never a reason to close their room.
+      if (this.role === 'guest' && this.mismatchAt && now - this.mismatchAt > MISMATCH_GRACE_MS) this.fail(VERSION_MESSAGE);
+      else this.sendHelloRelay();
       return;
     }
     const ping = { t: 'ping' as const, a: now };

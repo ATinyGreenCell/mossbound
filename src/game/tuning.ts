@@ -76,6 +76,32 @@ export const TUG_COOLDOWN = 0.75;
 /** the string must be at least this long for a tug to do anything */
 export const TUG_MIN = 2.2 * T;
 
+// ---- the vine shot (a grapple): hook a ring or a branch and swing, climb or haul your partner up
+/**
+ * How wide of where you're pointing a shot still finds its ring (the cosine of the half-angle). A
+ * grapple on a stick or a thumb is aimed roughly, so the shot picks the best ring in that direction
+ * rather than asking for a line — the same forgiveness a swing gets from wrapping on its own.
+ */
+export const SHOT_CONE = 0.35;
+/** pointing at nothing in particular shoots up and ahead, at this slope */
+export const SHOT_DEFAULT_UP = 1.1;
+/** you can't shoot again for this long — a miss costs a moment, as a tug does */
+export const SHOT_COOLDOWN = 0.3;
+/** a fresh hook holds the vine this much shorter than it is, so it goes taut and swings at once */
+export const SHOT_TAKEUP = 10;
+/**
+ * Seconds for the vine to draw itself back in after a ring is let go. A shot grows the vine by the
+ * sprout's reach, so a hook doesn't spend the slack keeping the pair together; letting go gives that
+ * length back over this long, which reads as the vine coiling up rather than snapping the pair back.
+ */
+export const SHOT_REEL = 0.8;
+/**
+ * How long the vine waits for slack to appear before drawing the shot length in regardless. It would
+ * rather not pull on anyone, but a pair who keep it taut can't keep a longer vine than the levels are
+ * built around either.
+ */
+export const SHOT_OWED = 1.5;
+
 // ---- co-op moves
 /** landing on your partner's head bounces you up (holding jump: the full height) */
 export const BOUNCE_V = 860;

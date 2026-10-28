@@ -171,10 +171,17 @@ export async function installRig(page) {
           }
           tether.follow(birds[0], birds[1]);
           tether.solve(birds, [true, true], dt);
-          for (let i = 0; i < 2; i++) { birds[i].rope = tether.ends[i]; birds[i].afterRope(world); birds[i].fx.length = 0; }
+          for (let i = 0; i < 2; i++) {
+            birds[i].rope = tether.ends[i];
+            birds[i].afterRope(world);
+            birds[i].fx.length = 0;
+            // (as the session does: letting go of the vine lets go of any ring it was shot over)
+            if (birds[i].droppedVine || birds[i].ghost) rig.unhook(i);
+            birds[i].droppedVine = false;
+          }
           world.stepDynamic(dt, birds);
         },
-        edges() { for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.dashPressed = cc.heartPressed = cc.heyPressed = false; },
+        edges() { for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.dashPressed = cc.shootPressed = cc.heartPressed = cc.heyPressed = false; },
         step(n = 1) { for (let k = 0; k < n; k++) { this.one(1 / 120); this.edges(); } },
         /**
          * One animation frame of `dt` seconds: sub-stepped and spending the one-shot presses on the
@@ -194,6 +201,57 @@ export async function installRig(page) {
         /** run until pred() or timeout (s); returns seconds taken or -1 */
         until(pred, s) { for (let k = 0; k < s * 120; k++) { this.step(); if (pred()) return +(k / 120).toFixed(2); } return -1; },
         jump(i) { c[i].jump = true; c[i].jumpPressed = true; },
+        /**
+         * The session's vine shot (see Session.shoot): the ring most nearly where the stick points,
+         * within this sprout's reach. Its numbers are copied from tuning.ts, as the yank's are.
+         */
+        shootAt(i, mx = 0, my = 0) {
+          const b = birds[i];
+          if (b.ghost || b.shotCd > 0) return null;
+          if (tether.hooked(i)) {
+            this.unhook(i);
+            b.shotCd = 0.15;
+            return null;
+          }
+          let ax = Math.abs(mx) > 0.3 ? mx : 0;
+          let ay = Math.abs(my) > 0.3 ? -my : 0;
+          if (!ax && !ay) { ax = b.facing; ay = -1.1; }
+          const an = Math.hypot(ax, ay);
+          ax /= an;
+          ay /= an;
+          const kx = b.x;
+          const ky = b.y + b.ropeOff;
+          const reach = b.traits.shot * 32;
+          let best = null;
+          let bestScore = -Infinity;
+          for (const p of L.pegs) {
+            const dx = p.x - kx, dy = p.y - ky, d = Math.hypot(dx, dy);
+            if (d < 12 || d > reach) continue;
+            const dot = (dx / d) * ax + (dy / d) * ay;
+            if (dot < 0.35) continue;
+            const score = dot - d / (reach * 6);
+            if (score > bestScore) { bestScore = score; best = p; }
+          }
+          b.shotCd = 0.3;
+          const other = birds[1 - i];
+          if (!best || !other.present || other.ghost || !tether.shoot(i, best, b, other, reach)) return null;
+          b.anchored = false;
+          b.cling = 0;
+          b.climbLen = Math.min(256, Math.max(18, Math.hypot(kx - best.x, ky - best.y) - 10));
+          b.hooked = true;
+          return best;
+        },
+        /** let go of the ring this sprout shot */
+        unhook(i) {
+          const b = birds[i];
+          if (!tether.hooked(i)) return;
+          tether.release(i);
+          b.hooked = false;
+          if (b.grounded || !b.hanging) {
+            b.hanging = false;
+            b.climbLen = Infinity;
+          }
+        },
         /** the session's tug yank, toward the bird's pivot */
         yank(i) {
           const b = birds[i]; const e = tether.ends[i];

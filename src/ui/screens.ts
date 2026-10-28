@@ -30,6 +30,7 @@ export const CONTROLS_HTML = `
       <dt>SHIFT · X · J</dt><dd>hold on (plant your roots)</dd>
       <dt>E · C · L</dt><dd>tug the vine</dd>
       <dt>R · V · ;</dt><dd>dash (small sprout)</dd>
+      <dt>T · B · [</dt><dd>shoot your vine at a ring</dd>
       <dt>Q · H</dt><dd>♥ to your partner</dd>
       <dt>ESC</dt><dd>menu</dd>
     </dl>
@@ -42,11 +43,12 @@ export const CONTROLS_HTML = `
       <dt>Ⓧ · triggers</dt><dd>hold on</dd>
       <dt>Ⓑ</dt><dd>tug the vine</dd>
       <dt>RB</dt><dd>dash (small sprout)</dd>
+      <dt>RT</dt><dd>shoot your vine at a ring</dd>
       <dt>Ⓨ</dt><dd>♥</dd>
       <dt>☰ · ⧉</dt><dd>menu</dd>
     </dl>
     <h3>two on one keyboard</h3>
-    <p>left: WASD · SPACE jump · SHIFT hold · E tug · R dash · Q ♥<br>right: arrows · / jump · . hold · , tug · ; dash · M ♥</p>
+    <p>left: WASD · SPACE jump · SHIFT hold · E tug · R dash · T vine · Q ♥<br>right: arrows · / jump · . hold · , tug · ; dash · [ vine · M ♥</p>
   </div>
   <div class="ctl-col">
     <h3>phone</h3>
@@ -56,6 +58,7 @@ export const CONTROLS_HTML = `
       <dt>HOLD</dt><dd>hold on</dd>
       <dt>TUG</dt><dd>tug the vine</dd>
       <dt>DASH</dt><dd>dash (small sprout)</dd>
+      <dt>VINE</dt><dd>shoot your vine at a ring</dd>
       <dt>♥</dt><dd>send a heart</dd>
     </dl>
   </div>
@@ -66,6 +69,7 @@ export const CONTROLS_HTML = `
   <span>Jump on your partner's head to bounce up high.</span>
   <span>Hang under your partner and climb up with ↑.</span>
   <span>The vine wraps around corners and rings: swing under them.</span>
+  <span>Or shoot your vine straight at a ring and hang from it. The small sprout's shot reaches nearly twice as far; climb up with ↑, or tug your partner over to you.</span>
   <span>TUG yanks your partner to you. If they're holding on, it yanks <i>you</i> to them.</span>
   <span>Fall in? You float back to your partner as a little seed.</span>
 </div>`;

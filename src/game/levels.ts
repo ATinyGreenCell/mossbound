@@ -83,6 +83,10 @@ function garden(): LevelDef {
   m.set(66, F - 9, '*').set(67, F - 9, '*').set(68, F - 9, '*');
   m.ground(71, 80, F - 3);
   m.set(74, F - 4, 'C');
+  // a branch four rows up — higher than a jump, so the way to it is a vine shot
+  m.set(71, F - 4, 'i');
+  m.set(72, F - 7, 'o');
+  m.seeds(70, 74, F - 5, 2);
   // the springboard: one sails across off the other's head, then tugs the other over
   m.set(77, F - 4, 'i');
   m.pit(81, 85, F - 3);
@@ -114,6 +118,7 @@ function garden(): LevelDef {
       'Too high to jump? Stand still and let your partner hop on your head!',
       'Left down here? Stand below and push {climb} to climb the vine.',
       'Too far to jump. Leap over the ring — the vine wraps around it. Push {move} to pump the swing, {jump} to let go.',
+      'A branch, too high to jump to. Point at it and {shoot} to throw your vine over it — then swing, {climb} to pull yourself up, or {shoot} again to let go.',
       'Too far again! Run and bounce off your partner’s head to sail across — then {tug} to yank them over (too heavy? hold on while they climb).',
       'Flowers bounce. And send your partner a {heart} now and then.',
     ],
@@ -172,6 +177,9 @@ function woods(): LevelDef {
   m.ground(125, 171, F + 4);
   m.set(128, F + 3, 'C');
   m.seeds(129, 133, F + 3);
+  // roots arch over that stretch a tile above the ground: the seeds under them are the small
+  // sprout's to fetch, since the tall one doesn't fit through a one-tile gap
+  m.fill(129, F + 2, 133, F + 2, 'X');
   // up into the canopy
   m.fill(134, F + 1, 136, F + 3, 'X');
   m.ground(137, 171, F - 2);
@@ -214,9 +222,16 @@ function mill(): LevelDef {
   m.fill(34, 0, 34, F - 5, 'X');
   m.fill(34, F - 4, 34, F - 1, 'Q');
   m.set(37, F - 1, 'q');
-  m.seeds(38, 46, F - 2, 2);
+  // the millstone gate: a slab only the tall sprout is heavy enough to hold down, and a latch on the
+  // far side for the small one to hold open on the way back — one of them can't do it alone either way
+  m.set(39, F - 1, 'i');
+  m.set(41, F - 1, 'Z');
+  m.fill(44, 0, 44, F - 5, 'X');
+  m.fill(44, F - 4, 44, F - 1, 'R');
+  m.set(47, F - 1, 'r');
+  m.seeds(38, 40, F - 2);
   // the lift up the mill wall (shaft 49..51)
-  m.set(44, F - 1, 'i');
+  m.set(46, F - 1, 'i');
   for (let y = F - 2; y >= F - 8; y -= 2) m.set(50, y, '*');
   m.ground(52, 70, F - 9);
   m.set(55, F - 10, 'C');
@@ -260,6 +275,7 @@ function mill(): LevelDef {
     ],
     signs: [
       'Plates open the gates of their color. Stand on one so your partner can pass — then swap.',
+      'This millstone slab is heavy — only the tall sprout can hold it down. Small one, slip through and stand on the latch.',
       'The lift goes up the mill wall. Hop on together — the vine won’t stretch for one of you.',
       'The ferry crosses the mill race. Ride it together!',
       'Fans in the floor: the warm air floats you up to the loft.',

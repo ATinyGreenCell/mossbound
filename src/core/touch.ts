@@ -2,7 +2,7 @@ import '../ui/touch.css';
 import type { TouchHooks } from '../app';
 import type { Input, TouchState } from './input';
 
-type ButtonId = 'jump' | 'tug' | 'anchor' | 'heart' | 'dash';
+type ButtonId = 'jump' | 'tug' | 'anchor' | 'heart' | 'dash' | 'shoot';
 
 interface ButtonDef {
   id: ButtonId;
@@ -21,9 +21,10 @@ const BUTTONS: ButtonDef[] = [
   { id: 'heart', label: '♥', x: 70, y: 204, d: 54 },
   // (only for a sprout that can dash: see setDash)
   { id: 'dash', label: 'DASH', x: 298, y: 92, d: 66 },
+  { id: 'shoot', label: 'VINE', x: 276, y: 180, d: 66 },
 ];
 
-const TAP: Partial<Record<ButtonId, keyof Pick<TouchState, 'tug' | 'heart' | 'dash'>>> = { tug: 'tug', heart: 'heart', dash: 'dash' };
+const TAP: Partial<Record<ButtonId, keyof Pick<TouchState, 'tug' | 'heart' | 'dash' | 'shoot'>>> = { tug: 'tug', heart: 'heart', dash: 'dash', shoot: 'shoot' };
 const HOLD: Partial<Record<ButtonId, keyof Pick<TouchState, 'jump' | 'anchor'>>> = { jump: 'jump', anchor: 'anchor' };
 
 /** base joystick radius (px at --s = 1) */

@@ -1,5 +1,5 @@
 import type { Pt } from './level';
-import { CATCH_BOUNCE, ROPE_LEN, ROPE_MIN, T } from './tuning';
+import { CATCH_BOUNCE, ROPE_LEN, ROPE_MIN, SHOT_OWED, SHOT_REEL, T } from './tuning';
 import type { Body, World } from './world';
 
 /** A point the string bends around: a convex tile corner or a peg. */
@@ -9,6 +9,12 @@ export interface Wrap {
   /** winding sign when it wrapped: the string unwraps once its bend straightens past this */
   s: number;
   peg: boolean;
+  /**
+   * A bird shot its vine over this ring and is holding on there (see shoot). The string stays over it
+   * however the bird swings, until that bird lets go: a bend that came and went of its own accord is
+   * the string finding its way, but a hook is a decision.
+   */
+  shot?: 0 | 1;
 }
 
 /** What a bird at one end of the string needs to know about it. */
@@ -111,6 +117,18 @@ export class Tether {
    * the other a little late, and a tight value would make hauling a partner feel sticky.
    */
   slackTol = 8;
+  /**
+   * How much vine there is to go round, in pixels. ROPE_LEN, plus what a sprout has shot out over a
+   * ring: a plant that shoots a vine grows that vine, so hooking a ring three tiles away doesn't
+   * spend the slack that was keeping the pair together. It's paid back over SHOT_REEL seconds once
+   * the ring is let go, so the vine draws itself in instead of snapping the pair back.
+   */
+  limit = ROPE_LEN;
+  /** vine shot out and not yet drawn back in (limit = ROPE_LEN + this) */
+  private grown = 0;
+  private growWant = 0;
+  /** seconds the vine will still wait for slack before drawing itself in regardless */
+  private owed = 0;
   readonly ends: [RopeEnd, RopeEnd] = [
     { pivot: { x: 0, y: 0 }, pivotIsBird: true, pivotIsCorner: false, seg: 0, limit: ROPE_LEN, taut: false, active: false },
     { pivot: { x: 0, y: 0 }, pivotIsBird: true, pivotIsCorner: false, seg: 0, limit: ROPE_LEN, taut: false, active: false },
@@ -123,6 +141,9 @@ export class Tether {
   /** Straighten the string between two fresh positions (spawn, respawn, level start). */
   reset(a: RopeGrip, b: RopeGrip) {
     this.pts.length = 0;
+    this.grown = this.growWant = 0;
+    this.owed = 0;
+    this.limit = ROPE_LEN;
     this.ax = a.x;
     this.ay = knotY(a);
     this.bx = b.x;
@@ -238,6 +259,7 @@ export class Tether {
   private unwrap() {
     for (let guard = 0; guard < MAX_WRAPS && this.pts.length; guard++) {
       const c = this.pts[0];
+      if (c.shot !== undefined) break;
       const q = this.pts[1] ?? { x: this.bx, y: this.by };
       if (!this.straightened(this.ax, this.ay, c, q) && !this.folded(this.ax, this.ay, c, q)) break;
       if (!this.rebend(0, this.ax, this.ay, c, q.x, q.y)) this.pts.shift();
@@ -245,11 +267,99 @@ export class Tether {
     for (let guard = 0; guard < MAX_WRAPS && this.pts.length; guard++) {
       const n = this.pts.length;
       const c = this.pts[n - 1];
+      if (c.shot !== undefined) break;
       const p = this.pts[n - 2] ?? { x: this.ax, y: this.ay };
       const q = { x: this.bx, y: this.by };
       if (!this.straightened(p.x, p.y, c, q) && !this.folded(p.x, p.y, c, q)) break;
       if (!this.rebend(n - 1, p.x, p.y, c, q.x, q.y)) this.pts.pop();
     }
+  }
+
+  /**
+   * Is this end holding its vine over a ring it shot? (Wherever that bend sits in the path: another
+   * one can appear between the sprout and its ring while it swings.)
+   */
+  hooked(end: 0 | 1) {
+    return this.pts.find((w) => w.shot === end) ?? null;
+  }
+
+  /**
+   * Shoot this end's vine over a ring: it becomes the end's pivot and stays there until it lets go,
+   * and the vine grows by the sprout's reach to pay for the detour (see limit). Returns false when
+   * even that isn't enough vine to go round, or when there's something solid in the way.
+   */
+  shoot(end: 0 | 1, peg: Pt, me: RopeGrip, other: RopeGrip, reach: number, force = false) {
+    this.release(end);
+    const myX = me.x;
+    const myY = knotY(me);
+    if (!force && !this.los(myX, myY, peg.x, peg.y)) return false;
+    const w: Wrap = { x: peg.x, y: peg.y, s: 1, peg: true, shot: end };
+    const pts = this.pts.slice();
+    if (end === 0) pts.unshift(w);
+    else pts.push(w);
+    const [ax, ay] = end === 0 ? [myX, myY] : [other.x, knotY(other)];
+    const [bx, by] = end === 0 ? [other.x, knotY(other)] : [myX, myY];
+    // (a hook the partner's screen has already made stands: their sprout is theirs to simulate, and
+    // two screens showing the vine over different rings would be worse than one showing a long one)
+    if (!force && this.pathLength(pts, ax, ay, bx, by) > ROPE_LEN + reach) return false;
+    if (end === 0) this.pts.unshift(w);
+    else this.pts.push(w);
+    // the shot vine is there at once (it's what reached the ring); it's only given back slowly
+    this.growWant = Math.max(this.growWant, reach);
+    this.grown = this.growWant;
+    this.limit = ROPE_LEN + this.grown;
+    this.measure();
+    return true;
+  }
+
+  /**
+   * Let go of a ring this end shot. The vine slips off it where it can lie straight past it — a
+   * leftover detour would keep the vine long and drag whoever let go back toward the ring, which is
+   * the opposite of what letting go of a swing should do.
+   */
+  release(end: 0 | 1) {
+    const i = this.pts.findIndex((w) => w.shot === end);
+    if (i < 0) return;
+    delete this.pts[i].shot;
+    const p = i > 0 ? this.pts[i - 1] : { x: this.ax, y: this.ay };
+    const q = i < this.pts.length - 1 ? this.pts[i + 1] : { x: this.bx, y: this.by };
+    if (this.los(p.x, p.y, q.x, q.y)) this.pts.splice(i, 1);
+    if (!this.pts.some((w) => w.shot !== undefined)) {
+      this.growWant = 0;
+      this.owed = SHOT_OWED;
+    }
+    this.measure();
+  }
+
+  /**
+   * Draw the shot vine back in once nobody is holding a ring with it. It only takes back slack, so
+   * the coil never pulls on anyone — until it has been owed for SHOT_OWED seconds, after which it
+   * comes in anyway rather than leaving the pair a longer vine than the levels are built for.
+   */
+  private reel(dt: number) {
+    if (this.grown === this.growWant) return;
+    if (this.grown < this.growWant) {
+      this.grown = Math.min(this.growWant, this.grown + (ROPE_LEN / SHOT_REEL) * dt);
+    } else {
+      this.owed = Math.max(0, this.owed - dt);
+      let step = (ROPE_LEN / SHOT_REEL) * dt;
+      if (this.owed > 0) step = Math.min(step, Math.max(0, this.limit - this.length - 1));
+      this.grown = Math.max(this.growWant, this.grown - step);
+    }
+    this.limit = ROPE_LEN + this.grown;
+  }
+
+  /** How long the string would be along `pts`: end 0's knot, through every bend, to end 1's. */
+  private pathLength(pts: Wrap[], ax: number, ay: number, bx: number, by: number) {
+    let total = 0;
+    let px = ax;
+    let py = ay;
+    for (const w of pts) {
+      total += Math.hypot(w.x - px, w.y - py);
+      px = w.x;
+      py = w.y;
+    }
+    return total + Math.hypot(bx - px, by - py);
   }
 
   /**
@@ -433,9 +543,10 @@ export class Tether {
   solve(birds: readonly [RopeBird, RopeBird], auth: readonly [boolean, boolean], dt = 1 / 120) {
     const [A, B] = birds;
     const active = A.present && B.present && !A.ghost && !B.ghost;
+    this.reel(dt);
     const n = this.pts.length;
     const total = this.length;
-    const excess = total - ROPE_LEN;
+    const excess = total - this.limit;
     let maxPull = 0;
     // (last step's tautness tells a swing under way from a fresh catch)
     const wasTaut0 = this.ends[0].taut;
@@ -450,7 +561,7 @@ export class Tether {
       e.pivotIsBird = n === 0;
       e.pivotIsCorner = n > 0 && !(end === 0 ? this.pts[0].peg : this.pts[n - 1].peg);
       e.seg = Math.hypot(me.x - piv.x, knotY(me) - piv.y);
-      e.limit = Math.min(ROPE_LEN - (total - e.seg), me.climbLen);
+      e.limit = Math.min(this.limit - (total - e.seg), me.climbLen);
       e.taut = active && e.seg >= e.limit - 0.75;
       e.active = active;
     }
@@ -519,7 +630,7 @@ export class Tether {
         }
       }
     }
-    const target = Math.min(1, Math.max(0, (total - ROPE_LEN * 0.9) / (ROPE_LEN * 0.1)) + Math.min(1, maxPull * 0.2));
+    const target = Math.min(1, Math.max(0, (total - this.limit * 0.9) / (this.limit * 0.1)) + Math.min(1, maxPull * 0.2));
     this.tension += (target - this.tension) * 0.25;
   }
 

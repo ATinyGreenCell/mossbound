@@ -76,6 +76,9 @@ if (paired) {
     await sleep(2500);
     const dash = await Promise.all([host, guest].map((p) => p.evaluate(() => { const el = document.querySelector('.tc-dash'); return el ? getComputedStyle(el).display !== 'none' : null; })));
     t.check('only the small sprout’s screen offers DASH', dash[0] === false && dash[1] === true, { tall: dash[0], small: dash[1] });
+    // both of them shoot vines (1.2.0)
+    const vine = await Promise.all([host, guest].map((p) => p.evaluate(() => { const el = document.querySelector('.tc-shoot'); return el ? getComputedStyle(el).display !== 'none' : null; })));
+    t.check('both screens offer VINE', vine[0] === true && vine[1] === true, { tall: vine[0], small: vine[1] });
     const drawn = await host.evaluate(() => {
       const c = document.querySelector('canvas');
       const g = c.getContext('2d');

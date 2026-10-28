@@ -102,6 +102,28 @@ const r = await page.evaluate(async () => {
       s.c[0].jump = false; walkTo(s, 0, 88); s.c[0].moveX = 0; s.secs(0.3);
       s.yank(1); s.secs(2.5);
       g.tugOver = col(s, 1) > 86 && s.birds[1].grounded && !s.birds[1].ghost;
+      // the branch over the meadow (1.2.0): a jump can touch it but there's nothing to stand on
+      s = __rig(0, K); s.place(0, 72, 11); s.place(1, 75, 11); s.reset(); s.secs(0.4);
+      // a jump can touch the branch but there is nothing up there to stand on: you come straight
+      // back down. The shot is what holds you there.
+      g.branchNeedsTheShot = (() => {
+        const b = s.birds[0];
+        const ring = s.L.pegs.find((p) => Math.abs(p.x / T - 72.5) < 1);
+        const up = (b.y + b.ropeOff - ring.y) / T;
+        s.jump(0);
+        for (let k = 0; k < 180; k++) { s.c[0].jump = true; s.step(); }
+        g.branchDetail = { up: +up.toFixed(2), reach: b.traits.shot, backOnTheGround: b.grounded, feet: feet(s, 0) };
+        return up > 2.9 && up <= b.traits.shot && b.grounded && feet(s, 0) === 11;
+      })();
+      s = __rig(0, K); s.place(0, 72, 11); s.place(1, 75, 11); s.reset(); s.secs(0.4);
+      g.branchShotAndClimb = (() => {
+        const b = s.birds[0];
+        const ok = !!s.shootAt(0, 0, 1);
+        s.c[0].moveY = 1;
+        const up = s.until(() => s.tether.ends[0].seg < 34 && !b.grounded, 6);
+        g.shotDetail = { ok, up, seg: +s.tether.ends[0].seg.toFixed(1), grounded: b.grounded, hanging: b.hanging, climbLen: +b.climbLen.toFixed(1) };
+        return ok && up > 0 && !b.ghost;
+      })();
       // the blossom up to the high plank and its feather
       s = __rig(0, K); s.place(0, 111, 14); s.place(1, 113, 14); s.reset(); s.secs(0.2);
       s.c[1].moveX = 1; s.until(() => Math.abs(s.birds[1].x - 114.5 * T) < 8, 3); s.c[1].moveX = 0;
@@ -120,11 +142,50 @@ const r = await page.evaluate(async () => {
       w.streamSwing = swingAcross(s, 1, 26, 32) && feet(s, 1) === 16;
       s = __rig(1, K); s.place(0, 100, 12); s.place(1, 96, 12); s.reset(); s.c[0].anchor = true; s.secs(0.2);
       w.stumpSwing = swingAcross(s, 1, 101, 107) && feet(s, 1) === 14 && s.birds[1].x < 110 * T;
+      // the hollow under the roots (1.2.0): one tile high, so only the small sprout gets in
+      {
+        const s2 = __rig(1, K);
+        const fits = [0, 1].map((i) => {
+          s2.place(i, 128, 18); s2.place(1 - i, 127, 18); s2.reset(); s2.secs(0.3);
+          const b = s2.birds[i];
+          s2.c[i].moveX = 1;
+          const got = s2.until(() => b.x > 131 * T, 4);
+          s2.c[i].moveX = 0;
+          return { kind: b.kind, inside: got > 0 };
+        });
+        w.nookFitsTheSmallOneOnly = fits.every((f) => (f.kind === 'tall' ? !f.inside : f.inside));
+        w.nookDetail = fits;
+      }
       res.woods = w;
     }
     // ---- mill: airlock, lift, ferry, fans
     {
       const m = {};
+      // the millstone gate (1.2.0): the heavy sprout holds the slab, the other slips through and
+      // stands on the latch so the heavy one can follow. Neither of them can do it alone.
+      {
+        const s2 = __rig(2, K);
+        const heavy = s2.birds[0].traits.heavy ? 0 : 1;
+        const light = 1 - heavy;
+        s2.place(heavy, 41, 16); s2.place(light, 42, 16); s2.reset(); s2.secs(0.5);
+        const slab = s2.L.plates.findIndex((p) => p.heavy);
+        const onSlab = !!s2.world.plateDown[slab];
+        const through = walkTo(s2, light, 46, 6);
+        s2.c[light].moveX = 0;
+        walkTo(s2, light, 47, 3); s2.c[light].moveX = 0; s2.secs(0.3);
+        const latchIdx = s2.L.plates.findIndex((p) => !p.heavy && p.group === 2);
+        const latch = !!s2.world.plateDown[latchIdx];
+        const followed = walkTo(s2, heavy, 46, 8);
+        s2.c[heavy].moveX = 0;
+        m.heavyGate = onSlab && through > 0 && latch && followed > 0 && !s2.birds[0].ghost && !s2.birds[1].ghost;
+        m.heavyGateDetail = { onSlab, through, latch, followed, slabHeldBy: s2.birds[heavy].kind };
+        // and the light one alone can't open it
+        const s3 = __rig(2, K);
+        if (!s3.birds[light].traits.heavy) {
+          s3.place(light, 41, 16); s3.place(heavy, 20, 16); s3.reset(); s3.secs(0.6);
+          m.heavySlabIgnoresTheSmallOne = !s3.world.plateDown[slab];
+        }
+      }
       let s = __rig(2, K); s.place(0, 21, 16); s.place(1, 23, 16); s.reset(); s.secs(0.5);
       walkTo(s, 1, 28); s.c[1].moveX = 0;
       m.airlockIn = col(s, 1) > 27.5;
@@ -238,5 +299,5 @@ await browser.close();
 const t = reporter();
 for (const [id, issues] of Object.entries(r.lint)) t.check(`lint ${id}`, issues.length === 0, issues.join('; '));
 t.check('both springboard signs teach holding on while your partner climbs', Object.values(r.fallbackSigns).every((n) => n === 1), r.fallbackSigns);
-for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v);
+for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v, r[K][lvl][`${k}Detail`] ?? r[K][lvl].branchDetail);
 t.finish('levels', page.errors);

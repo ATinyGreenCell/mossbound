@@ -68,6 +68,14 @@ await touch('touchStart', [[tug.x, tug.y, 5]]);
 await touch('touchEnd', []);
 const twang = await waitFor(() => page.evaluate(() => window.__fbSession.tether.twang > 0.2 || window.__fbSession.birds[1].tuggedT > 0), 2000, 'tug');
 t.check('TUG yanks the string', twang);
+// VINE: the shot goes off (there's no ring in the garden's first stretch, so it's the cooldown that
+// shows the button was heard — the shot itself is played in physics.mjs and levels.mjs)
+const vine = await center('.tc-shoot');
+await page.evaluate(() => { window.__fbSession.birds[0].shotCd = 0; });
+await touch('touchStart', [[vine.x, vine.y, 9]]);
+await touch('touchEnd', []);
+const shot = await waitFor(() => page.evaluate(() => window.__fbSession.birds[0].shotCd > 0), 2000, 'vine shot');
+t.check('VINE shoots the vine', shot);
 // pause ❚❚, then RESUME by tapping it
 const pause = await center('.tc-pause');
 await touch('touchStart', [[pause.x, pause.y, 6]]);

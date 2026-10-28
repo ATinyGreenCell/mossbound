@@ -19,6 +19,9 @@ const fuzz = await page.evaluate(async () => {
       const bad = [];
       let ghostFor = [0, 0];
       let maxLen = 0;
+      // the vine grows for a shot and coils back in (see Tether.limit), so what must never happen is
+      // not a length but a stretch: the vine longer than there is vine
+      let maxOver = 0;
       // start somewhere interesting: at a random checkpoint (or the spawn)
       const cps = [...s.L.checkpoints, s.L.spawns[0]];
       const start = cps[Math.floor(rnd() * cps.length)];
@@ -36,6 +39,9 @@ const fuzz = await page.evaluate(async () => {
             c.dashPressed = rnd() < 0.12;
           }
           if (rnd() < 0.08) s.yank(Math.floor(rnd() * 2));
+          // vine shots, aimed anywhere (including at nothing), and let go of again
+          if (rnd() < 0.18) s.shootAt(Math.floor(rnd() * 2), rnd() * 2 - 1, rnd() * 2 - 1);
+          if (rnd() < 0.08) s.unhook(Math.floor(rnd() * 2));
         }
         s.step();
         for (let i = 0; i < 2; i++) {
@@ -49,10 +55,13 @@ const fuzz = await page.evaluate(async () => {
           ghostFor[i] = b.ghost && s.birds[1 - i].grounded ? ghostFor[i] + 1 : 0;
           if (ghostFor[i] > 120 * 4.5) bad.push(`stuck ghost b${i} @${k}`);
         }
-        if (!s.birds[0].ghost && !s.birds[1].ghost) maxLen = Math.max(maxLen, s.tether.length);
+        if (!s.birds[0].ghost && !s.birds[1].ghost) {
+          maxLen = Math.max(maxLen, s.tether.length);
+          maxOver = Math.max(maxOver, s.tether.length - s.tether.limit);
+        }
         if (bad.length > 5) break;
       }
-      out.push({ level: LEVELS[li].id, run, bad: bad.slice(0, 5), maxLen: +maxLen.toFixed(1) });
+      out.push({ level: LEVELS[li].id, run, bad: bad.slice(0, 5), maxLen: +maxLen.toFixed(1), maxOver: +maxOver.toFixed(1) });
     }
   }
   return out;
@@ -80,6 +89,6 @@ for (let li = 0; li < 5; li++) {
 await browser.close();
 
 const t = reporter();
-for (const f of fuzz) t.check(`fuzz ${f.level} #${f.run}`, f.bad.length === 0 && f.maxLen < 256 + 8 + 12, { bad: f.bad, maxLen: f.maxLen });
+for (const f of fuzz) t.check(`fuzz ${f.level} #${f.run}`, f.bad.length === 0 && f.maxOver < 20, { bad: f.bad, maxLen: f.maxLen, maxOver: f.maxOver });
 for (const r of real) t.check(`real ${r.level}`, r.ok && !r.paused, r);
 t.finish('soak', page.errors);

@@ -9,6 +9,8 @@ export interface BodyLike {
   h: number;
   grounded: boolean;
   ghost: boolean;
+  /** heavy enough for a millstone slab (see traits.ts): the tall sprout, or either of two alike */
+  heavy?: boolean;
 }
 
 export interface Body extends BodyLike {
@@ -294,7 +296,7 @@ export class World {
     for (let i = 0; i < L.plates.length; i++) {
       const p = L.plates[i];
       let down = 0;
-      for (const b of bodies) if (this.standingOn(b, p.tx, p.ty + 1)) down = 1;
+      for (const b of bodies) if (this.standingOn(b, p.tx, p.ty + 1) && (!p.heavy || b.heavy)) down = 1;
       if (down !== this.plateDown[i]) {
         this.plateDown[i] = down;
         this.events.push({ k: 'plate', x: p.tx * T + T / 2, y: p.ty * T + T, down: !!down });

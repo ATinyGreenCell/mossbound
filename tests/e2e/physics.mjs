@@ -749,6 +749,85 @@ const co = await page.evaluate(() => {
     for (let k = 0; k < 120; k++) { sim.frame(1 / 60); top = Math.min(top, b.y); if (k > 2 && b.grounded) break; }
     out.zipJump.none = { rise: +((floor - top) / T).toFixed(2), x: +((b.x - 27 * T) / T).toFixed(2) };
   }
+  // ---- the vine shot (1.2.0): hook the garden chasm's ring from the lip, swing across, climb it,
+  // let go. The shot is the session's: it picks the ring from where the stick points, and the vine
+  // bends over it until the sprout lets go.
+  out.shot = {};
+  for (const kinds of [['tall', 'small'], ['small', 'tall'], ['even', 'even']]) {
+    const name = kinds.join('/');
+    const r = {};
+    const at = (sim) => { sim.place(0, 64, 9); sim.place(1, 63, 9); sim.reset(); sim.secs(0.4); };
+    {
+      const sim = __sim(0, kinds);
+      at(sim);
+      const ring = sim.L.pegs.find((p) => Math.abs(p.x / T - 67.5) < 1);
+      const b = sim.birds[0];
+      const dist = Math.hypot(ring.x - b.x, ring.y - (b.y + b.ropeOff)) / T;
+      sim.shoot(0, 1, 0.8);
+      r.hook = { dist: +dist.toFixed(2), reach: b.traits.shot, hooked: b.hooked && !!sim.tether.hooked(0), wraps: sim.tether.pts.length, taut: sim.tether.ends[0].taut, grew: sim.tether.limit > 300 };
+      if (r.hook.hooked) {
+        // step off the lip and pump: the ring carries the sprout out over the chasm and back
+        let far = b.x;
+        for (let k = 0; k < 300; k++) {
+          sim.c[0].moveX = b.hanging ? Math.sign(b.vx) || 1 : 1;
+          sim.frame(1 / 60);
+          far = Math.max(far, b.x);
+        }
+        r.swing = { out: +((far - 64 * T) / T).toFixed(1), alive: !b.ghost, hanging: b.hanging, stillHooked: !!sim.tether.hooked(0) };
+      }
+    }
+    {
+      const sim = __sim(0, kinds);
+      at(sim);
+      sim.shoot(0, 1, 0.8);
+      sim.c[0].moveY = 1;
+      const up = sim.until(() => sim.tether.ends[0].seg < 34, 6);
+      r.climb = { secs: up, seg: +sim.tether.ends[0].seg.toFixed(1), hanging: sim.birds[0].hanging, offGround: !sim.birds[0].grounded };
+    }
+    {
+      const sim = __sim(0, kinds);
+      at(sim);
+      sim.shoot(0, 1, 0.8);
+      const was = !!sim.tether.hooked(0);
+      sim.secs(0.3);
+      sim.shoot(0, 0, 0);
+      sim.secs(0.1);
+      r.letGoPress = { was, hooked: !!sim.tether.hooked(0) || sim.birds[0].hooked, vine: +sim.tether.limit.toFixed(0) };
+      // and the vine coils back to its own length (it waits for slack first — see SHOT_OWED)
+      sim.secs(2.6);
+      r.letGoPress.reeled = +sim.tether.limit.toFixed(0);
+    }
+    {
+      // running into the chasm and hooking the ring on the way down: the vine catches the fall and
+      // swings the sprout, instead of it dropping past the ring into the dark
+      const sim = __sim(0, kinds);
+      at(sim);
+      sim.c[0].moveX = 1;
+      sim.until(() => !sim.birds[0].grounded && sim.birds[0].x > 65 * T, 3);
+      sim.c[0].moveX = 0;
+      sim.secs(0.12);
+      sim.shoot(0, 1, 0.5);
+      const caught = !!sim.tether.hooked(0);
+      let lowest = sim.birds[0].y;
+      for (let k = 0; k < 180; k++) { sim.frame(1 / 60); lowest = Math.max(lowest, sim.birds[0].y); }
+      r.save = { caught, hanging: sim.birds[0].hanging, alive: !sim.birds[0].ghost, lowestRow: +(lowest / T).toFixed(1) };
+    }
+    {
+      // nothing within reach of the meadow: a miss, and the moment it costs
+      const sim = __sim(0, kinds);
+      sim.place(0, 55, 9); sim.place(1, 53, 9); sim.reset(); sim.secs(0.4);
+      sim.shoot(0, 1, 0.8);
+      r.miss = { hooked: !!sim.tether.hooked(0), hanging: sim.birds[0].hanging, cd: +sim.birds[0].shotCd.toFixed(2) };
+    }
+    {
+      // the vine has to fit: with the partner too far the other way, there's none to spare
+      const sim = __sim(0, kinds);
+      sim.place(0, 63.5, 9); sim.place(1, 50, 9); sim.reset(); sim.secs(0.4);
+      sim.shoot(0, 1, 0.8);
+      r.noVineToSpare = { hooked: !!sim.tether.hooked(0), apart: +(Math.abs(sim.birds[0].x - sim.birds[1].x) / T).toFixed(1) };
+    }
+    out.shot[name] = r;
+  }
   return out;
 });
 t.check('two sprouts can’t tug each other into the sky', co.skyClimb < 9, co.skyClimb);
@@ -757,6 +836,14 @@ t.check('a zip from the string still carries you to the partner holding on', co.
 t.check('a zip from a wall grip carries you to the partner holding on', co.tugClinging.foot === 'wall' && co.tugClinging.fired && co.tugClinging.me > 2, co.tugClinging);
 t.check('a tug moves a partner gripping a wall instead of doing nothing', co.tugClinger.partnerFoot === 'wall' && co.tugClinger.fired && co.tugClinger.partner > 2, co.tugClinger);
 t.check('a jump during a tug’s throw doesn’t replace its arc', Object.entries(co.zipJump).every(([, v]) => Math.abs(v.rise - co.zipJump.none.rise) < 0.4), co.zipJump);
+for (const [name, r] of Object.entries(co.shot)) console.log(`  shot ${name.padEnd(11)} ${JSON.stringify(r)}`);
+t.check('a vine shot hooks the ring it is aimed at, and grows the vine that reached it', Object.values(co.shot).every((r) => r.hook.hooked && r.hook.wraps === 1 && r.hook.grew), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.hook])));
+t.check('a shot ring swings the sprout out over the chasm and holds it', Object.values(co.shot).every((r) => r.swing.out > 4 && r.swing.alive && r.swing.stillHooked), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.swing])));
+t.check('a shot taken on the way down catches the fall', Object.values(co.shot).every((r) => r.save.caught && r.save.alive && r.save.lowestRow < 14), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.save])));
+t.check('a shot vine pulls you up to its ring when you climb it', Object.values(co.shot).every((r) => r.climb.secs > 0 && r.climb.secs < 4 && r.climb.offGround), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.climb])));
+t.check('shooting again lets go of the ring, and the vine coils back in', Object.values(co.shot).every((r) => r.letGoPress.was && !r.letGoPress.hooked && r.letGoPress.vine > 300 && r.letGoPress.reeled === 256), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.letGoPress])));
+t.check('a shot with no ring in reach misses, and costs a moment', Object.values(co.shot).every((r) => !r.miss.hooked && !r.miss.hanging && r.miss.cd > 0), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.miss])));
+t.check('a shot that wouldn’t leave the partner any vine is refused', Object.values(co.shot).every((r) => !r.noVineToSpare.hooked), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.noVineToSpare])));
 
 await browser.close();
 t.finish('physics', page.errors);
@@ -781,12 +868,13 @@ async function installSim(page) {
       live = s;
       const c = [makeControls(), makeControls()];
       s.controlsFor = (i) => c[i];
-      const clearPresses = () => { for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.dashPressed = cc.heartPressed = cc.heyPressed = false; };
+      const clearPresses = () => { for (const cc of c) cc.jumpPressed = cc.tugPressed = cc.dashPressed = cc.shootPressed = cc.heartPressed = cc.heyPressed = false; };
       return {
         s, c, birds: s.birds, world: s.world, tether: s.tether, L: s.L,
         /** one display frame, split into the same sub-steps the app uses (presses only in the first) */
         frame(dt = 1 / 60) {
           for (let i = 0; i < 2; i++) if (c[i].tugPressed) s.tug(s.birds[i]);
+          for (let i = 0; i < 2; i++) if (c[i].shootPressed) s.shoot(s.birds[i]);
           const steps = Math.min(10, Math.max(1, Math.ceil(dt / (1 / 120) - 1e-6)));
           for (let i = 0; i < steps; i++) {
             s.update(dt / steps);
@@ -801,6 +889,14 @@ async function installSim(page) {
         reset() { s.tether.reset(s.birds[0], s.birds[1]); },
         jump(i) { c[i].jump = true; c[i].jumpPressed = true; },
         tug(b) { s.tug(b); },
+        /** aim and shoot the vine: mx/my are the stick (my up-positive), as a player holds it */
+        shoot(i, mx = 0, my = 0) {
+          c[i].moveX = mx;
+          c[i].moveY = my;
+          c[i].shootPressed = true;
+          this.frame(1 / 60);
+          c[i].moveX = c[i].moveY = 0;
+        },
       };
     };
   });
