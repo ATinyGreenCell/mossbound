@@ -28,6 +28,7 @@ export interface MoverDef {
  *   U  updraft vent (blows up the column above it)
  *   p q r  pressure plates — holding any plate of a letter opens its doors P Q R
  *   W Y Z  heavy plates for those same doors: only the tall sprout's weight holds one down
+ *   ,  a patch of soil — the small sprout grows a leaf platform out of it, two rows above
  *   *  seed            F  firefly (3 per level)          C  checkpoint (lantern)
  *   N  the nest (both birds in it = level clear)       1 2  where the birds start
  *   i  a sign — its text is the next entry of `signs`, signs taken left to right
@@ -57,6 +58,8 @@ export const enum Tile {
   Door = 6,
   Crumble = 7,
   Vent = 8,
+  /** a leaf a plant has grown: a plank once its patch of soil has been grown, nothing before */
+  Leaf = 9,
 }
 
 export interface Pt {
@@ -76,6 +79,14 @@ export interface DoorTile {
   tx: number;
   ty: number;
   group: number;
+}
+
+/** A patch of soil and the leaves it grows (see Session.growSoil). */
+export interface Soil {
+  tx: number;
+  ty: number;
+  /** tile indices of the leaf platform it sprouts */
+  leaves: number[];
 }
 
 export interface Vent {
@@ -113,6 +124,9 @@ export interface LevelData {
   doorAt: Int8Array;
   /** crumble index per tile (-1 none) */
   crumbleAt: Int16Array;
+  /** patch of soil per tile (-1 none), for the soil itself and for each leaf it grows */
+  soilAt: Int16Array;
+  leafAt: Int16Array;
   /**
    * Convex corners the string can wrap around, per grid vertex ((w+1)*(h+1)):
    * 0 none, else which of the four tiles around the vertex is the solid one: 1 TL, 2 TR, 3 BL, 4 BR.
@@ -130,6 +144,7 @@ export interface LevelData {
   doors: DoorTile[];
   doorGroups: number;
   crumbles: { tx: number; ty: number }[];
+  soils: Soil[];
   signs: SignPost[];
   movers: MoverPath[];
 }
@@ -147,6 +162,8 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
   const tiles = new Uint8Array(w * h);
   const doorAt = new Int8Array(w * h).fill(-1);
   const crumbleAt = new Int16Array(w * h).fill(-1);
+  const soilAt = new Int16Array(w * h).fill(-1);
+  const leafAt = new Int16Array(w * h).fill(-1);
   const pegs: Pt[] = [];
   const seeds: Pt[] = [];
   const feathers: Pt[] = [];
@@ -156,6 +173,7 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
   const plates: Plate[] = [];
   const doors: DoorTile[] = [];
   const crumbles: { tx: number; ty: number }[] = [];
+  const soilTiles: { tx: number; ty: number }[] = [];
   const signPts: Pt[] = [];
   let spawn1: Pt | null = null;
   let spawn2: Pt | null = null;
@@ -192,6 +210,11 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
         case 'U':
           tiles[i] = Tile.Vent;
           ventTiles.push({ tx, ty });
+          break;
+        case ',':
+          // a patch of soil is ground you can stand on; the plant grows above it
+          tiles[i] = Tile.Ground;
+          soilTiles.push({ tx, ty });
           break;
         case 'o':
           pegs.push(center(tx, ty));
@@ -266,6 +289,26 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
     }
   }
 
+  // Each patch of soil sprouts a leaf platform two rows above it, as wide as there's room for (up to
+  // three tiles), and only into open air: a plant grows where a sprout could stand, not through a
+  // girder. A patch with nowhere to grow keeps no leaves, so it simply does nothing.
+  const soils: Soil[] = soilTiles.map(({ tx, ty }, si) => {
+    soilAt[ty * w + tx] = si;
+    const leaves: number[] = [];
+    const ly = ty - 2;
+    if (ly >= 0) {
+      for (let lx = tx - 1; lx <= tx + 1; lx++) {
+        if (lx < 0 || lx >= w) continue;
+        const i = ly * w + lx;
+        if (tiles[i] !== Tile.Empty) continue;
+        tiles[i] = Tile.Leaf;
+        leafAt[i] = si;
+        leaves.push(i);
+      }
+    }
+    return { tx, ty, leaves };
+  });
+
   // vents blow up their column until the first solid tile
   const vents: Vent[] = ventTiles.map(({ tx, ty }) => {
     let top = ty;
@@ -304,6 +347,8 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
     tiles,
     doorAt,
     crumbleAt,
+    soilAt,
+    leafAt,
     corners,
     pegs,
     seeds,
@@ -317,6 +362,7 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
     doors,
     doorGroups,
     crumbles,
+    soils,
     signs,
     movers,
   };

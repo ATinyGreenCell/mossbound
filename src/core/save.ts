@@ -31,6 +31,8 @@ export type Run = {
   cp: number;
   /** seed indices collected */
   seeds: number[];
+  /** patches of soil whose plants have been grown (indices): a step you made is a step you keep */
+  grown: number[];
   /** feathers collected this run (bitmask) */
   feathers: number;
   /** seconds played */
@@ -70,6 +72,8 @@ const BACKUP_KEY = 'mossbound.save.v3.backup';
 const STASH_KEY = 'mossbound.save.v3.unreadable';
 const PROBE_KEY = 'mossbound.probe';
 const MAX_SEEDS = 2000;
+/** patches of soil in one level: far more than any level has */
+const MAX_SOILS = 64;
 /** the shared count: one tick per recorded change, and an exact integer all the way to the ceiling */
 const MAX_CLOCK = Number.MAX_SAFE_INTEGER;
 /** fresh starts of one level: beyond any amount of playing, and nowhere near the ceiling */
@@ -108,16 +112,22 @@ export function levelSig(index: number): string {
 
 /** (every run is built here, so two equal runs always print the same — the merge's tie-break) */
 function makeRun(r: Run): Run {
-  return { cp: r.cp, seeds: [...r.seeds], feathers: r.feathers, time: r.time, with: r.with, sig: r.sig };
+  // (`grown` arrived in 1.3.0: a run stored before it, or handed in by a test, simply has none. It's
+  // sorted because a merge can pool two copies of one run's plants, and a pooled list has to come out
+  // the same on both devices — the game's own runs are already in this order, counted up the soil.)
+  const grown = [...new Set(r.grown ?? [])].sort((a, b) => a - b);
+  return { cp: r.cp, seeds: [...r.seeds], grown, feathers: r.feathers, time: r.time, with: r.with, sig: r.sig };
 }
 
 function cleanRun(raw: unknown): Run | null {
   const o = record(raw);
   if (!o) return null;
   const seeds = Array.isArray(o.seeds) ? [...new Set(o.seeds.filter((s): s is number => Number.isInteger(s) && s >= 0 && s < MAX_SEEDS))] : [];
+  const grown = Array.isArray(o.grown) ? [...new Set(o.grown.filter((s): s is number => Number.isInteger(s) && s >= 0 && s < MAX_SOILS))] : [];
   return makeRun({
     cp: int(o.cp, -1, 64, -1),
     seeds,
+    grown,
     feathers: int(o.feathers, 0, 7) & 7,
     time: num(o.time, 0, 360000),
     with: clip(o.with, 40),
@@ -164,12 +174,24 @@ export function cleanSave(raw: unknown): Save | null {
   return s;
 }
 
+/**
+ * A run's identity for the dead-heat tie-break, in a fixed shape. It deliberately leaves out anything
+ * added after 1.0.1 (`grown`, and whatever comes next): the whole run's JSON would make the answer
+ * depend on which fields the build knows about, and two devices on different versions would then
+ * settle the same dead heat differently. Two runs alike but for a later field are a true tie, which
+ * `mergeInto` settles by pooling those fields rather than picking a side.
+ */
+const runKey = (r: Run | null) => (r ? `${r.cp}|${r.time}|${r.feathers}|${r.seeds.join(',')}|${r.with}|${r.sig}` : '');
+
 /** Of two copies of one level's run, is `a` the one to keep? (The same answer on both devices.) */
 function newer(a: RunSlot, b: RunSlot) {
   if (a.gen !== b.gen) return a.gen > b.gen;
   if (a.at !== b.at) return a.at > b.at;
-  return JSON.stringify(a.run) > JSON.stringify(b.run);
+  return runKey(a.run) > runKey(b.run);
 }
+
+/** Two copies of one run the tie-break can't separate: the same run but for a field added later. */
+const tied = (a: RunSlot, b: RunSlot) => a.gen === b.gen && a.at === b.at && runKey(a.run) === runKey(b.run);
 
 /**
  * Merge `o` into `s`; true if `s` changed. `foreign`: it came from the partner or a pasted save code,
@@ -196,6 +218,12 @@ function mergeInto(s: Save, o: Save, foreign = false): boolean {
     if (slot.at > lead) continue;
     const mine = s.runs[id];
     if (!mine || newer(slot, mine)) s.runs[id] = { gen: slot.gen, at: slot.at, run: slot.run && makeRun(slot.run) };
+    // A dead heat means the two runs are the same but for their plants, since runKey is all the rest of
+    // the run. A plant is a step you keep, so the two lists are pooled: whichever way round the merge
+    // happens both devices come away with the same save, which picking a side would never give them.
+    else if (mine.run && slot.run && tied(slot, mine)) {
+      mine.run.grown = [...new Set([...mine.run.grown, ...slot.run.grown])].sort((x, y) => x - y).slice(0, MAX_SOILS);
+    }
   }
   if (o.clock <= lead) s.clock = Math.max(s.clock, o.clock);
   return JSON.stringify(s) !== before;
@@ -381,13 +409,13 @@ export function latestRun(): { index: number; slot: RunSlot & { run: Run } } | n
   return best;
 }
 
-/** What continuing level `index` needs, or null when it has no run. (After an update that changed the map, the seeds start over.) */
-export function resumeOf(index: number): { cp: number; seeds: number[]; feathers: number; time: number; gen: number } | null {
+/** What continuing level `index` needs, or null when it has no run. (After an update that changed the map, the seeds and the plants start over: both are indices into a map that has moved under them.) */
+export function resumeOf(index: number): { cp: number; seeds: number[]; grown: number[]; feathers: number; time: number; gen: number } | null {
   const slot = runSlot(LEVELS[index]?.id ?? '');
   if (!slot?.run) return null;
   const r = slot.run;
   const same = !r.sig || r.sig === levelSig(index);
-  return { cp: r.cp, seeds: same ? [...r.seeds] : [], feathers: same ? r.feathers : 0, time: r.time, gen: slot.gen };
+  return { cp: r.cp, seeds: same ? [...r.seeds] : [], grown: same ? [...r.grown] : [], feathers: same ? r.feathers : 0, time: r.time, gen: slot.gen };
 }
 
 /**

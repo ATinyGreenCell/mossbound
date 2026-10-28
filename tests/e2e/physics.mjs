@@ -28,6 +28,35 @@ const r = await page.evaluate(() => {
   let y0 = s.birds[0].y, minY = y0; s.jump(0);
   for (let i = 0; i < 120; i++) { s.step(); minY = Math.min(minY, s.birds[0].y); }
   out.jumpHeight = +((y0 - minY) / T).toFixed(2);
+  // What a landing reports. A fall reaches terminal velocity in about four tiles, so by speed alone a
+  // plummet and an ordinary hop arrive at the same number — which is why the camera is told the drop.
+  out.fall = (() => {
+    const o = {};
+    for (const kind of ['tall', 'small', 'even']) {
+      const s2 = __rig(def, [kind, kind]);
+      const b = s2.birds[0];
+      const lands = [];
+      const push = b.fx.push.bind(b.fx);
+      b.fx.push = (e) => { if (e.k === 'land') lands.push({ v: Math.round(e.v), d: +(e.d / T).toFixed(2) }); return push(e); };
+      // a hop off the flat, landing back where it started: jump held for the whole rise and let go of
+      // before the fall, so it's the highest ordinary jump there is and no leaf glide slows it down
+      s2.place(0, 10, F); s2.place(1, 12, F); s2.reset(); s2.secs(0.3);
+      lands.length = 0;
+      for (let i = 0; i < 240; i++) {
+        const c = s2.c[0];
+        c.jump = i < 40;
+        c.jumpPressed = i === 0;
+        s2.step();
+      }
+      const hop = lands[0];
+      // and twelve tiles of open air onto the same floor
+      s2.place(0, 10, F - 12); s2.place(1, 12, F - 12); s2.reset();
+      lands.length = 0;
+      for (let i = 0; i < 360; i++) s2.step();
+      o[kind] = { hop, drop: lands[0] };
+    }
+    return o;
+  })();
   for (const flutter of [false, true]) {
     s = __rig(def); s.place(0, 4, F); s.place(1, 6, F); s.reset(); s.secs(0.2);
     s.c[0].moveX = 1; s.c[1].moveX = 1; s.secs(0.6);
@@ -844,6 +873,17 @@ t.check('a shot vine pulls you up to its ring when you climb it', Object.values(
 t.check('shooting again lets go of the ring, and the vine coils back in', Object.values(co.shot).every((r) => r.letGoPress.was && !r.letGoPress.hooked && r.letGoPress.vine > 300 && r.letGoPress.reeled === 256), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.letGoPress])));
 t.check('a shot with no ring in reach misses, and costs a moment', Object.values(co.shot).every((r) => !r.miss.hooked && !r.miss.hanging && r.miss.cd > 0), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.miss])));
 t.check('a shot that wouldn’t leave the partner any vine is refused', Object.values(co.shot).every((r) => !r.noVineToSpare.hooked), Object.fromEntries(Object.entries(co.shot).map(([k, r]) => [k, r.noVineToSpare])));
+
+t.check(
+  'a landing says how far it fell, not just how fast — a hop under the camera’s threshold, a plummet over it',
+  Object.values(r.fall).every((f) => f.hop && f.drop && f.hop.d < 4.6 && f.drop.d > 10 && f.drop.d < 13),
+  Object.fromEntries(Object.entries(r.fall).map(([k, f]) => [k, { hop: f.hop, drop: f.drop }])),
+);
+t.check(
+  '…which speed alone could never tell apart (both land at terminal velocity)',
+  Object.values(r.fall).every((f) => f.hop.v > 620 && Math.abs(f.drop.v - f.hop.v) < 130),
+  Object.fromEntries(Object.entries(r.fall).map(([k, f]) => [k, { hop: f.hop.v, drop: f.drop.v }])),
+);
 
 await browser.close();
 t.finish('physics', page.errors);

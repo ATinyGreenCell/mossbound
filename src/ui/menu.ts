@@ -104,7 +104,11 @@ export class ButtonList {
     const items = this.items();
     if (this.sel >= items.length) this.sel = Math.max(0, items.length - 1);
     this.root.querySelectorAll('.sel').forEach((el) => el.classList.remove('sel'));
-    items[this.sel]?.classList.add('sel');
+    const on = items[this.sel];
+    on?.classList.add('sel');
+    // a card taller than the screen scrolls inside itself (a phone held sideways, a short window), and
+    // a highlight below the fold would have you pressing a row you can't see
+    on?.scrollIntoView?.({ block: 'nearest' });
   }
 
   private press(el: HTMLElement) {

@@ -260,6 +260,28 @@ export class Flow {
     this.app.setScreen(new LevelSelect(this.app, this));
   }
 
+  /**
+   * The solo practice ground: one player, the game walking the other sprout. Always local, always
+   * from the start, and it records nothing — so it needs none of playLevel's run bookkeeping.
+   */
+  practice(swapped = settings.swap) {
+    this.mode = 'local';
+    this.app.setScreen(
+      new Session(this.app, this, {
+        level: LEVELS.length,
+        mode: 'local',
+        me: 0,
+        // one player holds the first sprout, so every device on this screen drives it
+        seats: ['keys', 'keysR'],
+        profiles: this.profiles(),
+        // `swapped` is this ground's own, so practising as the other sprout doesn't decide who you are
+        // the next time the two of you play together
+        kinds: kindsFor(settings.even, swapped),
+        practice: true,
+      }),
+    );
+  }
+
   /** Go into level `i`: where its run got to, if it has one, else from the start. */
   enterLevel(i: number) {
     this.playLevel(i, resumeOf(i) ?? undefined);
@@ -380,9 +402,11 @@ function cleanResume(r: unknown): Resume | undefined {
   if (!r || typeof r !== 'object') return undefined;
   const o = r as Partial<Resume>;
   const seeds = Array.isArray(o.seeds) ? o.seeds.filter((s) => Number.isInteger(s) && s >= 0 && s < 5000).slice(0, 5000) : [];
+  const grown = Array.isArray(o.grown) ? o.grown.filter((s) => Number.isInteger(s) && s >= 0 && s < 64).slice(0, 64) : [];
   return {
     cp: Number.isInteger(o.cp) ? Math.max(-1, Math.min(64, o.cp as number)) : -1,
     seeds,
+    grown,
     feathers: Number.isInteger(o.feathers) ? (o.feathers as number) & 7 : 0,
     time: typeof o.time === 'number' && Number.isFinite(o.time) ? Math.max(0, Math.min(360000, o.time)) : 0,
     ...(Number.isInteger(o.gen) && (o.gen as number) > 0 ? { gen: o.gen } : {}),

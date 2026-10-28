@@ -14,6 +14,9 @@ const PREV = process.argv[2] ?? 'http://127.0.0.1:5215/';
 const THIS = process.argv[3] ?? 'http://127.0.0.1:5216/';
 const t = reporter();
 
+/** The wire version a build is on, read from the build itself. */
+const protocolOf = async (page) => page.evaluate(async () => (await import('/src/net/protocol.ts')).PROTOCOL);
+
 /** One pairing: `hostBase` makes the room, `guestBase` joins it. */
 async function round(hostBase, guestBase, label) {
   const b1 = await launch();
@@ -31,6 +34,21 @@ async function round(hostBase, guestBase, label) {
   await host.evaluate(() => window.__fb.app.current.act('host'));
   const code = await waitFor(() => host.evaluate(() => window.__fb.flow.link?.code), 5000, 'room code');
   await guest.evaluate((c) => window.__fb.flow.online({ joinCode: c }), code);
+  // Two builds on different wire versions must not play: a message's shape, or what a receiver throws
+  // out, has changed under them. What they must do instead is say so — and the one who tried to join
+  // is the one told, since the other is still waiting for a partner of its own version to turn up.
+  const [vh, vg] = [await protocolOf(host), await protocolOf(guest)];
+  if (vh !== vg) {
+    // (this build says so after the six-second grace; a build from before that fix waits out its
+    // 35-second search for a partner first, and then says the same thing)
+    const t0 = Date.now();
+    const told = await waitFor(async () => /different version/i.test(await guest.evaluate(() => document.body.innerText ?? '')), 50000, 'the version notice').catch(() => false);
+    const toldAfter = Math.round((Date.now() - t0) / 1000);
+    const connected = await host.evaluate(() => window.__fb.flow.link?.status) === 'connected';
+    t.check(`${label}: across a wire version (${vh} vs ${vg}) they don't pair`, !connected, { vh, vg });
+    t.check(`${label}: …and whoever tried to join is told to reload (after ${toldAfter}s)`, !!told, await guest.evaluate(() => (document.body.innerText ?? '').replace(/\s+/g, ' ').slice(0, 160)));
+    return done(true);
+  }
   const paired = await waitFor(async () => (await host.evaluate(() => window.__fb.flow.link?.status)) === 'connected' && (await guest.evaluate(() => window.__fb.flow.link?.status)) === 'connected', 60000, 'pairing').catch(() => false);
   t.check(`${label}: paired`, !!paired, { code, via: await host.evaluate(() => window.__fb.flow.link?.via) });
   if (!paired) return done(false);

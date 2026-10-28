@@ -21,8 +21,17 @@ const r = await page.evaluate(async () => {
     if (!L.checkpoints.length) issues.push('no checkpoints');
     for (let g = 0; g < L.doorGroups; g++) if (!L.plates.some((p) => p.group === g) !== !L.doors.some((d) => d.group === g)) issues.push(`group ${g} unpaired`);
     // nothing spawns inside a wall
-    const solid = (x, y) => { const tx = Math.floor(x / T), ty = Math.floor(y / T); return ty >= 0 && ty < L.h && tx >= 0 && tx < L.w && '#XU'.includes(def.map[ty][tx]); };
+    // (`,` is a patch of soil, which parses to ground: you stand on it)
+    const solid = (x, y) => { const tx = Math.floor(x / T), ty = Math.floor(y / T); return ty >= 0 && ty < L.h && tx >= 0 && tx < L.w && '#XU,'.includes(def.map[ty][tx]); };
     for (const p of [...L.spawns, L.nest, ...L.checkpoints]) if (solid(p.x, p.y)) issues.push(`point in wall at ${p.x / T},${p.y / T}`);
+    // a plant unfurls over three tiles two rows up: nothing may already be sitting in them, or the leaf
+    // is drawn over it (a seed hidden inside a leaf reads as a bug, and it was one)
+    for (const so of L.soils) {
+      for (const k of so.leaves ?? []) {
+        const lx = k % L.w, ly = Math.floor(k / L.w);
+        if (L.seeds.some((sd) => Math.floor(sd.x / T) === lx && Math.floor(sd.y / T) === ly)) issues.push(`seed under a leaf at ${lx},${ly}`);
+      }
+    }
     out.lint[def.id] = issues;
   });
   // Both springboard pits are crossed by one sprout bouncing over and then tugging the other across —
@@ -129,6 +138,57 @@ const r = await page.evaluate(async () => {
       s.c[1].moveX = 1; s.until(() => Math.abs(s.birds[1].x - 114.5 * T) < 8, 3); s.c[1].moveX = 0;
       s.until(() => s.birds[1].vy < -500, 1); s.c[1].moveX = 0.4; s.c[1].jump = true;
       g.blossom = s.until(() => s.birds[1].grounded && feet(s, 1) === 7, 3) > 0;
+      // the patch of soil (1.3.0): standing on it, the small sprout shoots its vine into the ground
+      // and a leaf platform grows — the step up to the seeds hanging above, which a jump from the
+      // meadow floor can't reach. The soil is at column 134; the seeds it serves are 6 rows up.
+      {
+        const SOIL_X = 134;
+        const s2 = __rig(0, K);
+        const grower = s2.birds[0].traits.grow ? 0 : 1;
+        const other = 1 - grower;
+        s2.place(grower, SOIL_X, 14); s2.place(other, SOIL_X - 3, 14); s2.reset(); s2.secs(0.4);
+        const si = s2.world.soilUnder(s2.birds[grower]);
+        g.soilUnderfoot = si >= 0;
+        // pressing shoot while standing on it is the whole trigger (the rig mirrors Session.shoot)
+        g.shootGrowsThePlant = s2.shootAt(grower) === 'grew' && !!s2.world.grown[si];
+        s2.secs(0.6);
+        const leaves = (s2.L.soils[si]?.leaves ?? []).map((li) => [li % s2.L.w, (li - (li % s2.L.w)) / s2.L.w]);
+        g.leavesGrew = leaves.length === 3 && leaves.every(([lx, ly]) => s2.world.onewayAt(lx, ly));
+        // the tall sprout has no knack for it: on that very soil, its shot grows nothing
+        if (!s2.birds[other].traits.grow) {
+          const s4 = __rig(0, K);
+          s4.place(other, SOIL_X, 14); s4.place(grower, SOIL_X - 3, 14); s4.reset(); s4.secs(0.4);
+          const onIt = s4.world.soilUnder(s4.birds[other]) === si;
+          s4.shootAt(other);
+          g.soilIsNotForTheTallOne = onIt && !s4.world.grown[si];
+          g.soilIsNotForTheTallOneDetail = { onIt, grown: [...s4.world.grown] };
+        }
+        // Either of them can climb onto a grown leaf, and only from up there do the seeds come within
+        // reach (the session's own pickup rule) — so the plant is the step, not a decoration.
+        const seed = s2.L.seeds.find((p) => p.x === SOIL_X * T + T / 2 && p.y === 8 * T + T / 2);
+        const touches = (s3, i) => { const b = s3.birds[i]; return !!seed && Math.abs(seed.x - b.x) < 16 && Math.abs(seed.y - b.y) < 18; };
+        const reach = [grower, other].map((i) => {
+          const s3 = __rig(0, K);
+          s3.place(i, SOIL_X, 14); s3.place(1 - i, SOIL_X - 3, 14); s3.reset(); s3.secs(0.3);
+          // from the meadow floor the seeds stay overhead, however long you hold the jump
+          s3.jump(i);
+          const fromFloor = s3.until(() => touches(s3, i), 2) >= 0;
+          s3.until(() => s3.birds[i].grounded, 3);
+          s3.c[i].jump = false; s3.secs(0.2);
+          // grow it, hop up onto the leaf, and jump again from there
+          s3.world.grow(si);
+          s3.secs(0.6);
+          s3.jump(i);
+          const onLeaf = s3.until(() => s3.birds[i].grounded && s3.birds[i].y + s3.birds[i].h / 2 < 12.5 * T, 3) >= 0;
+          s3.c[i].jump = false; s3.secs(0.2);
+          s3.jump(i);
+          const fromLeaf = s3.until(() => touches(s3, i), 2) >= 0;
+          return { onLeaf, fromLeaf, fromFloor };
+        });
+        g.leafCarriesEither = reach.every((r) => r.onLeaf);
+        g.seedsOnlyFromTheLeaf = !!seed && reach.every((r) => r.fromLeaf && !r.fromFloor);
+        g.seedsOnlyFromTheLeafDetail = reach;
+      }
       res.garden = g;
     }
     // ---- woods: the blossom up the oak, and a stump swing
@@ -299,5 +359,5 @@ await browser.close();
 const t = reporter();
 for (const [id, issues] of Object.entries(r.lint)) t.check(`lint ${id}`, issues.length === 0, issues.join('; '));
 t.check('both springboard signs teach holding on while your partner climbs', Object.values(r.fallbackSigns).every((n) => n === 1), r.fallbackSigns);
-for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v, r[K][lvl][`${k}Detail`] ?? r[K][lvl].branchDetail);
+for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v, r[K][lvl][`${k}Detail`] ?? '');
 t.finish('levels', page.errors);

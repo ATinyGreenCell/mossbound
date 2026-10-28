@@ -29,6 +29,8 @@ import {
   JUMP_BUFFER,
   JUMP_CUT,
   JUMP_MIN_HOLD,
+  LAND_SQUASH_MAX,
+  LAND_SQUASH_V,
   MAX_SPEED,
   MAX_FALL,
   ROPE_LEN,
@@ -43,6 +45,7 @@ import {
   WALL_DOWN,
   WALL_JUMP_LOCK,
   WALL_JUMP_VX,
+  WALL_KICK_WINDOW,
   WALL_UP,
 } from './tuning';
 import { type Kind, TRAITS, type Traits } from './traits';
@@ -52,7 +55,7 @@ import type { BodyLike, World } from './world';
 export type BirdFx =
   | { k: 'jump' }
   | { k: 'hop' }
-  | { k: 'land'; v: number }
+  | { k: 'land'; v: number; d: number }
   | { k: 'flutter' }
   | { k: 'spring'; i: number }
   | { k: 'bounce' }
@@ -140,12 +143,20 @@ export class Bird implements RopeBird {
   rope: RopeEnd | null = null;
   /** this step's swing energy (after pumping), NaN when not swinging — the string keeps it */
   swingE = NaN;
-  /** ran into something this step */
+  /** ran into something this step — a wall, a ceiling, or the ground it landed on */
   bumped = false;
+  /** walked into something this step: a wall, not a landing (which `bumped` counts too) */
+  blockedX = false;
   /** clinging to a wall: on its left (-1) or right (1) */
   cling: -1 | 0 | 1 = 0;
   /** just jumped off a wall: pushing back toward it is ignored meanwhile */
   wallJumpT = 0;
+  /** a wall brushed in mid-air: which side it was on (-1 left, 1 right), 0 none */
+  wallTouch: -1 | 0 | 1 = 0;
+  /** how long that wall can still be kicked off (see WALL_KICK_WINDOW) */
+  wallTouchT = 0;
+  /** the side last kicked off: the same wall twice running is refused, so a shaft is climbed in turns */
+  kickSide: -1 | 0 | 1 = 0;
   /** the air dash is there to use (once per jump) */
   dashReady = true;
   /** a dash under way: seconds left */
@@ -153,6 +164,10 @@ export class Bird implements RopeBird {
   // --- animation (drawn identically for local and mirrored birds)
   squash = 0;
   squashV = 0;
+  /** stretched by rising, squashed by falling: drawn only, never physics (see animate) */
+  airLean = 0;
+  /** the highest point since the feet last left the ground: a landing's drop is measured from here */
+  fallTop = 0;
   walkPhase = 0;
   wingPhase = 0;
   blinkT = 2;
@@ -218,6 +233,11 @@ export class Bird implements RopeBird {
     this.flutter = FLUTTER_TIME;
     this.tuggedT = 0;
     this.cling = 0;
+    this.wallTouch = 0;
+    this.wallTouchT = 0;
+    this.kickSide = 0;
+    this.fallTop = this.y;
+    this.airLean = 0;
     this.dashT = 0;
     this.dashReady = true;
   }
@@ -235,8 +255,10 @@ export class Bird implements RopeBird {
     this.dropT -= dt;
     this.tuggedT -= dt;
     this.wallJumpT -= dt;
+    this.wallTouchT -= dt;
     this.swingE = NaN;
     this.bumped = false;
+    this.blockedX = false;
     if (this.ghost) return;
     // belt and braces: nothing should be able to make a bird's state non-finite, and one that did
     // could never fall out of the world on its own (y > floorY is false for NaN) — it would hang
@@ -351,7 +373,7 @@ export class Bird implements RopeBird {
         this.anchored = false;
         this.dashReady = true;
         this.flutter = FLUTTER_TIME;
-        this.squash = -0.3;
+        this.squash = -0.4;
         this.fx.push({ k: 'walljump' });
       } else if (this.hanging) {
         // let go: fly off with the swing's own speed (plus a flourish) and a kick upward
@@ -364,7 +386,7 @@ export class Bird implements RopeBird {
         this.jumping = false;
         this.jumpBuf = 0;
         this.flutter = FLUTTER_TIME;
-        this.squash = -0.25;
+        this.squash = -0.34;
         this.fx.push({ k: 'hop' });
       } else if (this.grounded || this.coyote > 0) {
         if (c.moveY < -0.5 && this.onPlank(world)) {
@@ -376,13 +398,32 @@ export class Bird implements RopeBird {
           this.vy = -T_.jumpV;
           this.jumping = true;
           this.jumpHold = JUMP_MIN_HOLD;
-          this.squash = -0.3;
+          this.squash = -0.44;
           this.fx.push({ k: 'jump' });
         }
         this.grounded = false;
         this.coyote = 0;
         this.jumpBuf = 0;
         this.anchored = false;
+      } else if (this.wallTouchT > 0 && this.wallTouch !== 0 && this.kickSide !== this.wallTouch) {
+        // a wall brushed in mid-air and kicked off in time: up and away from it. Both sprouts can do
+        // this; kicking the opposite wall next climbs a shaft, the same wall again is refused.
+        const side = this.wallTouch;
+        this.vx = -side * WALL_JUMP_VX;
+        this.vy = -T_.jumpV * 0.92;
+        this.facing = side > 0 ? -1 : 1;
+        this.kickSide = side;
+        this.wallTouch = 0;
+        this.wallTouchT = 0;
+        this.wallJumpT = WALL_JUMP_LOCK;
+        this.jumping = true;
+        this.jumpHold = JUMP_MIN_HOLD;
+        this.jumpBuf = 0;
+        this.anchored = false;
+        this.dashReady = true;
+        this.flutter = FLUTTER_TIME;
+        this.squash = -0.4;
+        this.fx.push({ k: 'walljump' });
       }
     }
 
@@ -401,7 +442,7 @@ export class Bird implements RopeBird {
       this.jumping = false;
       this.tuggedT = 0;
       if (dx) this.facing = dx > 0 ? 1 : -1;
-      this.squash = -0.25;
+      this.squash = -0.4;
       this.fx.push({ k: 'dash' });
     }
     if (this.dashT > 0) {
@@ -458,6 +499,10 @@ export class Bird implements RopeBird {
     // --- move
     const wasGrounded = this.grounded;
     const fallV = this.vy;
+    // How far this flight has fallen, which is not what `fallV` says: a fall hits terminal velocity in
+    // about four tiles, so by speed alone a plummet off the tower and an ordinary hop land the same.
+    if (wasGrounded) this.fallTop = this.y;
+    else this.fallTop = Math.min(this.fallTop, this.y);
     const dx = this.vx * dt;
     if (world.moveX(this, dx)) {
       // a lip a few pixels high (a lift that has started down, a crumb of ledge): step up onto it
@@ -465,6 +510,7 @@ export class Bird implements RopeBird {
         this.strain = mx !== 0 ? 1 : 0;
         this.vx = 0;
         this.bumped = true;
+        this.blockedX = true;
       }
     }
     const dy = this.vy * dt;
@@ -480,8 +526,8 @@ export class Bird implements RopeBird {
     if (r === 1) {
       if (!wasGrounded) {
         if (fallV > 220) {
-          this.squash = Math.min(0.42, fallV / 1700);
-          this.fx.push({ k: 'land', v: fallV });
+          this.squash = Math.min(LAND_SQUASH_MAX, fallV / LAND_SQUASH_V);
+          this.fx.push({ k: 'land', v: fallV, d: Math.max(0, this.y - this.fallTop) });
         }
         this.hanging = false;
         this.climbLen = Infinity;
@@ -524,7 +570,7 @@ export class Bird implements RopeBird {
         this.dashReady = true;
         this.dashT = 0;
         this.cling = 0;
-        this.squash = -0.4;
+        this.squash = -0.56;
         world.springT[i] = 0.35;
         this.fx.push({ k: 'spring', i });
       }
@@ -550,12 +596,13 @@ export class Bird implements RopeBird {
         this.dashT = 0;
         this.hanging = false;
         this.climbLen = Infinity;
-        this.squash = -0.35;
+        this.squash = -0.5;
         this.fx.push({ k: 'bounce' });
       }
     }
 
-    // --- climbing walls (the small sprout): push into one in the air to cling to it
+    // --- walls: anyone can kick off one they brush in mid-air; only a climber sticks to one
+    this.stepWallTouch(world);
     if (T_.climb) this.stepWall(world, mx, c);
 
     // --- dangers
@@ -575,6 +622,36 @@ export class Bird implements RopeBird {
         this.stepT = 0.16;
         this.fx.push({ k: 'step' });
       }
+    }
+  }
+
+  /**
+   * Note a wall brushed in mid-air, so a jump pressed within WALL_KICK_WINDOW kicks off it. Feet on
+   * the ground, a hand on the vine or a grip on a wall all clear the record: whoever lands, hangs or
+   * clings may kick off the same wall again.
+   */
+  private stepWallTouch(world: World) {
+    if (this.dashT > 0) {
+      // a dash doesn't brush anything on its way through — but it mustn't forgive the wall just kicked
+      // either, or jump-and-dash together makes a ladder of the one wall a kick is allowed off once
+      this.wallTouch = 0;
+      this.wallTouchT = 0;
+      return;
+    }
+    if (this.grounded || this.hanging || this.cling !== 0) {
+      this.wallTouch = 0;
+      this.wallTouchT = 0;
+      this.kickSide = 0;
+      return;
+    }
+    // (the wall just kicked off doesn't count again: the other one does, and kicking it frees the
+    // first again — which is what makes a shaft a climb rather than a lift off one wall)
+    if (this.kickSide !== -1 && !world.boxFree(this.x - 1.5, this.y, this.w, this.h)) {
+      this.wallTouch = -1;
+      this.wallTouchT = WALL_KICK_WINDOW;
+    } else if (this.kickSide !== 1 && !world.boxFree(this.x + 1.5, this.y, this.w, this.h)) {
+      this.wallTouch = 1;
+      this.wallTouchT = WALL_KICK_WINDOW;
     }
   }
 
@@ -633,7 +710,7 @@ export class Bird implements RopeBird {
         this.y += dy;
         this.vx = side * 40;
         this.vy = -40;
-        this.squash = 0.2;
+        this.squash = 0.3;
         this.fx.push({ k: 'mantle' });
         return;
       }
@@ -709,7 +786,7 @@ export class Bird implements RopeBird {
       this.climbLen = Infinity;
       this.droppedVine = true;
       this.grounded = true;
-      this.squash = 0.2;
+      this.squash = 0.3;
       this.fx.push({ k: 'mantle' });
       return;
     }
@@ -779,6 +856,13 @@ export class Bird implements RopeBird {
     }
     this.squash = clamp(this.squash, -0.6, 0.6);
     if (Math.abs(this.squash) < 0.002 && Math.abs(this.squashV) < 0.02) this.squash = this.squashV = 0;
+    // stretched by rising, squashed by falling: the arc reads from across the room. Eased, so it never
+    // pops, and drawn on top of the spring above — it moves nothing, it only shows what's happening.
+    // (drawing runs before the physics guard that catches a non-finite velocity, and `clamp` hands NaN
+    // back unchanged — eased into, it would stay for the rest of the level and scale the sprout away)
+    const lean = this.grounded || this.hanging || this.cling !== 0 || !Number.isFinite(this.vy) ? 0 : clamp(this.vy / 2400, -0.13, 0.12);
+    this.airLean += (lean - this.airLean) * Math.min(1, dt * 12);
+    if (!Number.isFinite(this.airLean)) this.airLean = 0;
     if (this.grounded && Math.abs(this.vx) > 20) this.walkPhase += dt * (6 + Math.abs(this.vx) * 0.05);
     else this.walkPhase = 0;
     const flapping = this.fluttering || (!this.grounded && !this.hanging && this.vy < -100) || this.ghost;

@@ -183,7 +183,8 @@ export function paintRegion(ctx: CanvasRenderingContext2D, L: LevelData, th: The
       for (let tx = x0; tx <= x1; tx++) {
         if (ty < 0) continue;
         const t = tileAt(L, tx, ty);
-        if (t === Tile.Empty || t === Tile.Door || t === Tile.Crumble) continue;
+        // (doors, crumbling blocks and grown leaves come and go: the session draws those)
+        if (t === Tile.Empty || t === Tile.Door || t === Tile.Crumble || t === Tile.Leaf) continue;
         const x = tx * T;
         const y = ty * T;
         if (t === Tile.Ground) paintGround(ctx, L, th, tx, ty, x, y, pass);

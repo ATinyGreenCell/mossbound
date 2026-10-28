@@ -147,7 +147,9 @@ const saves = await page.evaluate(async () => {
   const reset = (o) => {
     for (const k of Object.keys(S.save.levels)) delete S.save.levels[k];
     for (const k of Object.keys(S.save.runs)) delete S.save.runs[k];
-    Object.assign(S.save, structuredClone(o));
+    // through cleanSave, as a real device's copy always is: whatever a run holds, every copy of it on
+    // every device is built the same way. Assigning a raw object here would compare two shapes.
+    Object.assign(S.save, structuredClone(S.cleanSave(o) ?? o));
   };
   // a real record, then a copy whose level list is 64 made-up ids (which sort before real ones)
   reset({ unlocked: 1, levels: { garden: { seeds: 10, feathers: 5, time: 100, clears: 1 } }, finished: false, runs: {}, clock: 0 });
@@ -306,6 +308,13 @@ const ctrl = await page.evaluate(async () => {
     o.evHookString = fire({ t: 'ev', n: 1, e: { k: 'hook', i: 'x' } });
     o.evUnhookUnhooked = fire({ t: 'ev', n: 1, e: { k: 'unhook' } });
     o.vine = { wraps: s.tether.pts.length, limit: Math.round(s.tether.limit) };
+    // a plant grown in a patch of soil that isn't there (1.3.0)
+    o.evGrowOutOfRange = fire({ t: 'ev', n: 1, e: { k: 'grow', i: 999999 } });
+    o.evGrowFraction = fire({ t: 'ev', n: 1, e: { k: 'grow', i: 1.5 } });
+    o.evGrowString = fire({ t: 'ev', n: 1, e: { k: 'grow', i: 'x' } });
+    o.worldGrownNotArray = fire({ t: 'world', n: 1, seeds: [], feathers: 0, cp: -1, grown: 7 });
+    o.worldGrownFlood = fire({ t: 'world', n: 1, seeds: [], feathers: 0, cp: -1, grown: new Array(1e5).fill(1e6) });
+    o.grown = [...s.world.grown].reduce((a, b) => a + b, 0);
     o.left = { cp: s.checkpoint, feathers: s.feathers, seeds: [...s.seedTaken].reduce((a, b) => a + b, 0) };
     // and the real thing still arrives
     o.realSeed = fire({ t: 'ev', n: 1, e: { k: 'seed', i: 0 } });
@@ -320,6 +329,7 @@ const threw = Object.entries(ctrl).filter(([, v]) => typeof v === 'string' && v.
 t.check('a nonsense seed / firefly / lantern index from the partner is ignored, not thrown on', threw.length === 0, threw.length ? threw : ctrl);
 t.check('…and leaves the lantern, the fireflies and the seeds as they were', ctrl.left.cp === -1 && ctrl.left.feathers === 0 && ctrl.left.seeds === 0, ctrl.left);
 t.check('a vine shot at a ring that isn’t there leaves the vine as it was', ctrl.vine.wraps === 0 && ctrl.vine.limit === 256, ctrl.vine);
+t.check('a plant grown in a patch of soil that isn’t there grows nothing', ctrl.grown === 0, ctrl.grown);
 t.check(`…while a flood of seed indices can’t eat a frame (${ctrl.floodMs} ms)`, ctrl.floodMs < 20, ctrl.floodMs);
 t.check('the partner’s real pickups still arrive', ctrl.took.seeds === 2 && ctrl.took.cp === 0 && ctrl.took.feathers === 1, ctrl.took);
 
@@ -645,6 +655,103 @@ await page.evaluate(() => { const l = window.__fake('guest'); window.__fb.flow.a
 const ending = await waitFor(async () => (await current()) === 'EndingScreen', 3000, 'ending').catch(() => false);
 t.check('the guest sees the ending when the host gets there', !!ending, await current());
 await page.evaluate(() => window.__fb.flow.title());
+
+// ---- a partner on another wire version. The two builds can't play, so the one who typed the code has
+// to be told why rather than left watching "looking for your partner…" — and the partner is still
+// trying, so a hello of the wrong version keeps arriving the whole time it waits.
+const skew = await page.evaluate(async () => {
+  const { NetLink } = await import('/src/net/link.ts');
+  const { PROTOCOL } = await import('/src/net/protocol.ts');
+  const link = NetLink.bare('guest');
+  try {
+    let said = '';
+    link.onStatus = (st, d) => { if (st === 'error') said = d; };
+    // their build keeps saying hello, once a tick, for a good while longer than the grace
+    const hello = { t: 'hello', v: PROTOCOL - 1, role: 'host', id: 'theirs' };
+    const t0 = performance.now();
+    let heard = 0;
+    for (let k = 0; k < 40; k++) {
+      link.acceptHello(hello, () => {}, undefined);
+      if (k === 0) heard = Math.round(link.mismatchAt - t0);
+      link.tick();
+      if (said) return { said, ticks: k, heardAfter: heard, remembered: Math.round(link.mismatchAt - t0) };
+      // (a tick is a second apart in the real thing; the grace is six)
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return { said, ticks: 40, heardAfter: heard, remembered: Math.round(link.mismatchAt - t0) };
+  } finally {
+    link.close();
+  }
+});
+t.check('a partner on another version of the game is said so, not left looking', /different version/i.test(skew.said), skew);
+
+// ---- the juice, and the three things it must never do: twitch the view on an ordinary hop, pour
+// leaves out of a sprout standing still in a pause, or draw one out of existence after one bad frame.
+// Plus the plants: grown ones have to be standing when you come back, in whatever order they're listed.
+const juice = await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { T } = await import('/src/game/tuning.ts');
+  const { app, flow } = window.__fb;
+  // a local pair: the second sprout is a seat nobody is holding, so it stands where it's put
+  const make = (opts = {}) => new Session(app, flow, { level: 0, mode: 'local', me: 0, seats: ['keys', 'keysR'], profiles: flow.profiles(), ...opts });
+  const on = (fn) => { const s = make(); try { return fn(s); } finally { s.dispose(); } };
+  const out = {};
+  // the camera, by how far the sprout actually fell. A sprout's own jump tops out at ~4.1 tiles, so a
+  // kick keyed below that is a kick on every hop — which is what the view twitching across a level is.
+  const kickFor = (tiles) => on((s) => {
+    s.cam.shakeAmt = 0;
+    s.onFx(s.birds[0], { k: 'land', v: 840, d: tiles * T }, 0, 1);
+    return +s.cam.shakeAmt.toFixed(3);
+  });
+  out.anOrdinaryHopDoesntShakeTheView = kickFor(4.2) === 0;
+  out.aProperFallDoes = kickFor(12) > 0;
+  out.andTheBiggerFallKicksHarder = kickFor(12) > kickFor(7);
+  // a plant your partner grew, thirty tiles off-screen, is their news — not a kick in your view
+  out.aPartnersPlantDoesntShakeYourView = on((s) => {
+    s.cam.shakeAmt = 0;
+    s.growSoil(0, false);
+    return s.cam.shakeAmt === 0;
+  });
+  out.yourOwnPlantStillDoes = on((s) => {
+    s.cam.shakeAmt = 0;
+    s.growSoil(0, true);
+    return s.cam.shakeAmt > 0;
+  });
+  // the dash trail is spawned where the drawing happens, which keeps running in a pause — but the dash
+  // itself only ticks down in the physics, which doesn't. Left alone it's a fountain out of a still sprout.
+  out.aPausedDashStopsTrailing = on((s) => {
+    s.spawnAmbient = () => {};   // (the drifting motes of the level would be counted too)
+    const leaves = (dashT) => {
+      s.paused = true;
+      s.fx.clear();
+      for (let k = 0; k < 30; k++) {
+        s.birds[0].dashT = dashT;
+        s.frame(1 / 60);
+      }
+      return s.fx.n;
+    };
+    return leaves(0.2) === 0 && leaves(0) === 0;
+  });
+  // one frame of non-finite velocity reaches the drawing before the physics catches it, and a lean that
+  // eases toward NaN keeps it for good — which scales the sprout by NaN and draws nothing, all level
+  out.aGarbledFrameDoesntEraseASprout = on((s) => {
+    const b = s.birds[0];
+    b.vy = NaN;
+    b.animate(1 / 60, null);
+    b.vy = 0;
+    b.animate(1 / 60, null);
+    return Number.isFinite(b.airLean);
+  });
+  // a resumed run names its plants; the list is a set of indices, so its order is nobody's promise
+  out.aResumedRunGrowsEveryPlantItNames = on(() => {
+    const s = make({ resume: { cp: -1, seeds: [], grown: [2, 0], feathers: 0, time: 0 } });
+    try {
+      return s.world.grown[0] === 1 && s.world.growT[0] >= 1;
+    } finally { s.dispose(); }
+  });
+  return out;
+});
+for (const [k, v] of Object.entries(juice)) t.check(k, v === true, v);
 
 const errs = [...page.errors];
 await browser.close();

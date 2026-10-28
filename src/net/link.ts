@@ -324,7 +324,12 @@ export class NetLink {
       // likeliest stranger on the code is one of the players' own stale tabs, and ending the room on
       // its hello would be the new version refusing to let anyone play. Remember it instead — if no
       // partner of our own version turns up, tick() says what the trouble was.
-      this.mismatchAt = performance.now();
+      //
+      // When it was *first* heard, not the last: the partner on the other version goes on saying hello
+      // once a tick for as long as they're waiting, so a time that moved with each one would never be
+      // the grace ago, and the one who typed the code would watch "looking for your partner…" for ever
+      // — in precisely the case this is here to explain.
+      this.mismatchAt ||= performance.now();
       return false;
     }
     if (m.role === this.role) {

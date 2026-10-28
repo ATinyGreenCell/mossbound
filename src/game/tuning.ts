@@ -47,12 +47,32 @@ export const DASH_V = 560;
 export const DASH_TIME = 0.15;
 /** after a dash, this much of its speed carries on */
 export const DASH_KEEP = 0.7;
+/**
+ * How hard a landing squashes a sprout: `/V` of the speed it hit the ground at, up to `MAX`. The
+ * mirrored partner's landing is worked out on this side too (remote.ts), so both screens use these.
+ */
+/**
+ * A landing kicks the camera by how far the sprout fell, not how fast: a fall reaches terminal velocity
+ * in about four tiles, so by speed a plummet and a hop arrive the same. A sprout's own jump tops out at
+ * ~4.1 tiles, so the kick starts just past that — below it, every hop would twitch the view.
+ */
+export const LAND_KICK_DROP = 4.6 * T;
+export const LAND_KICK_FULL = 12 * T;
+export const LAND_SQUASH_MAX = 0.56;
+export const LAND_SQUASH_V = 1250;
+
 /** clinging to a wall: climbing up / down it */
 export const WALL_UP = 120;
 export const WALL_DOWN = 170;
 /** jumping off a wall: sideways speed, and how long pushing back toward the wall is ignored */
 export const WALL_JUMP_VX = 300;
 export const WALL_JUMP_LOCK = 0.16;
+/**
+ * Brushing a wall in mid-air leaves a kick available for this long — the Mario-style wall jump, which
+ * both sprouts have (the climber's sticky cling is its own thing). Time two of them against opposite
+ * walls and you climb a shaft; the same wall twice running is refused, so it's a climb, not a lift.
+ */
+export const WALL_KICK_WINDOW = 0.12;
 
 // ---- the string
 export const ROPE_LEN = 8 * T;
@@ -116,6 +136,9 @@ export const VENT_HEIGHT = 12;
 export const CRUMBLE_SHAKE = 0.45;
 export const CRUMBLE_GONE = 3.2;
 export const DOOR_HOLD = 0.5;
+
+/** seconds a plant takes to unfurl its leaves after the small sprout grows it */
+export const GROW_TIME = 0.45;
 
 // ---- death & regroup
 export const GHOST_TIME = 0.95;

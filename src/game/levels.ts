@@ -103,6 +103,12 @@ function garden(): LevelDef {
   m.set(115, F - 8, 'F');
   m.seeds(113, 117, F - 10);
   m.seeds(120, 132, F - 2, 3);
+  // a patch of soil: the small sprout grows a leaf platform, and from it both of them reach the
+  // seeds hanging above — two rows higher than a jump from the meadow can manage. (Clear of the seed
+  // row above: a leaf unfurls over three tiles two rows up, and would be drawn over a seed sitting there.)
+  m.set(131, F - 1, 'i');
+  m.set(134, F, ',');
+  m.seeds(133, 135, F - 6);
   m.set(140, F - 1, 'N');
   return {
     id: 'garden',
@@ -121,6 +127,7 @@ function garden(): LevelDef {
       'A branch, too high to jump to. Point at it and {shoot} to throw your vine over it — then swing, {climb} to pull yourself up, or {shoot} again to let go.',
       'Too far again! Run and bounce off your partner’s head to sail across — then {tug} to yank them over (too heavy? hold on while they climb).',
       'Flowers bounce. And send your partner a {heart} now and then.',
+      'Soil! Small sprout — stand on it and {shoot} your vine into the ground. Something will grow for you both to stand on.',
     ],
   };
 }
@@ -163,6 +170,10 @@ function woods(): LevelDef {
   m.row(88, 90, F - 8, '=');
   m.set(89, F - 9, 'F');
   m.seeds(86, 98, F - 3, 2);
+  // a patch of soil in the clearing: a grown leaf is the step up to the seeds in the branches
+  m.set(92, F - 3, 'i');
+  m.set(94, F - 2, ',');
+  m.seeds(93, 95, F - 8);
   // stepping stumps: take turns swinging, each a little lower
   m.set(97, F - 3, 'i');
   m.pit(101, 106);
@@ -197,6 +208,7 @@ function woods(): LevelDef {
       'Swing, land, swing again. Push along the swing to build it up — {jump} to let go.',
       'This bridge is cracking! Cross it quickly — whoever falls, the other catches.',
       'A blossom! It bounces you up the old oak — or hop on your partner.',
+      'More soil here. Grow a leaf and hop up — the tall one can use it too.',
       'Take turns: one swings to the next stump, then the other follows.',
     ],
   };
@@ -436,3 +448,136 @@ function tower(): LevelDef {
 }
 
 export const LEVELS: LevelDef[] = [garden(), woods(), mill(), paris(), tower()];
+
+// ------------------------------------------------------------------ the practice ground (solo)
+
+/**
+ * A place to learn the moves, on your own. Every station stands on one long flat floor and is
+ * optional: you can walk past any of them, come back to any of them, and nothing can be failed or
+ * lost. The dips are two tiles deep rather than pits, so falling in is a hop back out; the only
+ * thing that hurts is the patch of thorns at the end, which is there to show you that it doesn't.
+ *
+ * It isn't in LEVELS on purpose: it has no place in the level select, it unlocks nothing, and it
+ * keeps no run (see SessionOpts.practice), so nothing a player does here touches their save.
+ */
+function practice(): LevelDef {
+  const m = new Map(212, 20);
+  const F = 15;
+  m.ground(0, 211, F);
+  // --- walking and jumping
+  m.set(3, F - 1, '1').set(5, F - 1, '2');
+  m.set(8, F - 1, 'i');
+  m.set(11, F - 1, 'i');
+  m.fill(13, F - 2, 15, F - 1, '#');
+  m.fill(17, F - 4, 19, F - 1, '#');
+  m.seeds(13, 19, F - 5, 3);
+  // --- a dip to hop in and out of, and to glide into
+  m.set(21, F - 1, 'i');
+  m.fill(23, F, 28, F + 1, ' ');
+  // --- the glide: steps up to a high shelf, then a long drop
+  m.set(30, F - 1, 'i');
+  m.fill(31, F - 3, 32, F - 1, '#');
+  m.fill(33, F - 5, 34, F - 1, '#');
+  m.fill(35, F - 7, 39, F - 1, '#');
+  m.seeds(36, 38, F - 8);
+  // --- the wall-kick shaft: two walls three tiles apart, a way in at the bottom left
+  m.set(44, F - 1, 'i');
+  m.fill(46, F - 11, 46, F - 3, '#');
+  m.fill(50, F - 11, 50, F - 1, '#');
+  m.row(51, 54, F - 12, '#');
+  m.set(52, F - 13, 'F');
+  // --- a wall to cling to and climb (the small sprout), with planks for the tall one
+  m.set(56, F - 1, 'i');
+  m.fill(58, F - 9, 58, F - 1, '#');
+  m.row(60, 61, F - 3, '=');
+  m.row(62, 63, F - 5, '=');
+  m.fill(64, F - 6, 66, F - 6, '#');
+  m.seeds(64, 66, F - 7);
+  // --- a ring to swing from, over a dip
+  m.set(70, F - 1, 'i');
+  m.fill(72, F, 79, F + 1, ' ');
+  m.set(75, F - 6, 'o');
+  m.seeds(73, 78, F - 3, 2);
+  // --- a ring too high to reach: shoot the vine at it
+  m.set(84, F - 1, 'i');
+  m.set(90, F - 8, 'o');
+  m.fill(92, F - 5, 95, F - 1, '#');
+  m.seeds(88, 92, F - 6, 2);
+  // --- a shelf only a head-bounce reaches
+  m.set(98, F - 1, 'i');
+  m.set(100, F - 1, 'C');
+  m.row(103, 107, F - 6, '#');
+  m.set(105, F - 7, 'F');
+  // --- the tug: a gap, and a shelf on the far side
+  m.set(112, F - 1, 'i');
+  m.fill(114, F, 119, F + 1, ' ');
+  m.fill(120, F - 4, 123, F - 1, '#');
+  m.seeds(120, 123, F - 5);
+  // --- a flower that bounces you
+  m.set(126, F - 1, 'i');
+  m.set(130, F - 1, 'S');
+  m.row(128, 132, F - 7, '=');
+  m.seeds(128, 132, F - 8, 2);
+  // --- an updraft to ride
+  m.set(136, F - 1, 'i');
+  m.set(141, F, 'U');
+  m.fill(143, F - 9, 146, F - 9, '#');
+  m.set(144, F - 10, 'F');
+  // --- a pad and a gate, with a pad on either side so neither of you can be shut out
+  m.set(148, F - 1, 'i');
+  m.set(151, F - 1, 'p');
+  m.fill(156, F - 3, 156, F - 1, 'P');
+  m.set(159, F - 1, 'p');
+  m.fill(160, F - 4, 162, F - 1, '#');
+  m.seeds(160, 162, F - 5);
+  // --- blocks that crumble underfoot
+  m.set(163, F - 1, 'i');
+  m.fill(165, F - 5, 166, F - 1, '#');
+  m.row(167, 172, F - 5, '%');
+  m.fill(173, F - 5, 174, F - 1, '#');
+  m.seeds(167, 172, F - 6, 2);
+  // --- a ferry across a dip
+  m.set(177, F - 1, 'i');
+  m.fill(179, F, 186, F + 1, ' ');
+  // --- a patch of soil to grow something out of
+  m.set(190, F - 1, 'i');
+  m.set(193, F, ',');
+  m.seeds(192, 194, F - 6);
+  // --- thorns, to show that they only send you back to your partner
+  m.set(199, F - 1, 'i');
+  m.set(201, F - 1, 'C');
+  m.row(204, 206, F - 1, '^');
+  m.set(209, F - 1, 'N');
+  return {
+    id: 'practice',
+    name: 'The Practice Ground',
+    subtitle: 'on your own · take your time',
+    theme: 'garden',
+    song: 'garden',
+    map: m.build(),
+    doorHold: 3,
+    movers: [{ x: 179, y: F - 3, w: 3, path: [[5, 0]], period: 6 }],
+    signs: [
+      'The practice ground. Nothing here is a race and nothing can be lost — try a thing, then try it again. {move} to walk, {jump} to jump. Your partner follows you about and holds the vine when you need them to.',
+      'Steps. A jump carries you about three tiles up — the small sprout a little higher.',
+      'A dip. Hop in, hop out. Or hold {jump} as you fall and a leaf opens to float you down.',
+      'Up the steps, then off the edge — hold {jump} the whole way down for the long glide.',
+      'A shaft. Touch a wall in mid-air and {jump} straight away to kick off it; kick off the far wall next, and take the two in turns to climb. The same wall twice running won’t do.',
+      'A wall. The small sprout pushes into it in mid-air to cling on, then {climb} to go up it like ivy. The tall one takes the planks.',
+      'A ring. Leap past it and the vine catches on it — push {move} to pump the swing, {jump} to let go.',
+      'This one is too high to jump to. Point at it and {shoot} to throw your vine over it, then {climb} to pull yourself up.',
+      'Too high again, and no ring. Stand your partner still and hop off their head.',
+      '{tug} yanks your partner to you — and if they’re holding on ({anchor}), it yanks you to them instead. Get a feel for it here; crossing on it takes two.',
+      'Flowers bounce.',
+      'An updraft. Ride it up — it lifts you both.',
+      'Stand on a pad to open the gate. There’s a pad on each side, so neither of you can be shut out.',
+      'These crumble under your feet. Keep moving.',
+      'A ferry. Hop on, ride across.',
+      'Soil. The small sprout stands on it and {shoot}s its vine into the ground — something grows for you both to stand on.',
+      'Thorns. They can’t really hurt you: you’ll drift back to your partner as a seed. The pot is just past them.',
+    ],
+  };
+}
+
+/** The solo practice ground — deliberately not one of LEVELS (see practice()). */
+export const PRACTICE: LevelDef = practice();

@@ -1,5 +1,5 @@
 import { isSolidTile, moverPos, Tile, type LevelData, type Pt } from './level';
-import { CORNER_NUDGE, CRUMBLE_GONE, CRUMBLE_SHAKE, DOOR_HOLD, T } from './tuning';
+import { CORNER_NUDGE, CRUMBLE_GONE, CRUMBLE_SHAKE, DOOR_HOLD, GROW_TIME, T } from './tuning';
 
 /** Anything with a box that stands on things: the local birds and the partner's mirrored bird. */
 export interface BodyLike {
@@ -21,11 +21,6 @@ export interface Body extends BodyLike {
   /** > 0: falling through planks on purpose */
   dropT: number;
 }
-
-export type WorldEvent =
-  | { k: 'crumble'; x: number; y: number }
-  | { k: 'door'; group: number; open: boolean }
-  | { k: 'plate'; x: number; y: number; down: boolean };
 
 const enum Crumble {
   Intact = 0,
@@ -54,7 +49,10 @@ export class World {
   readonly moverDX: Float32Array;
   readonly moverDY: Float32Array;
   readonly springT: Float32Array;
-  readonly events: WorldEvent[] = [];
+  /** 1 once a patch of soil has been grown (see grow) */
+  readonly grown: Uint8Array;
+  /** how far a patch's leaves have unfurled, 0..1 (drawing) */
+  readonly growT: Float32Array;
   private readonly tmp: Pt = { x: 0, y: 0 };
   private readonly hold: number;
 
@@ -73,6 +71,8 @@ export class World {
     this.moverDX = new Float32Array(L.movers.length);
     this.moverDY = new Float32Array(L.movers.length);
     this.springT = new Float32Array(L.springs.length);
+    this.grown = new Uint8Array(L.soils.length);
+    this.growT = new Float32Array(L.soils.length);
     this.hold = L.def.doorHold ?? DOOR_HOLD;
     this.placeMovers(0, true);
   }
@@ -96,7 +96,12 @@ export class World {
   onewayAt(tx: number, ty: number) {
     const L = this.L;
     if (tx < 0 || tx >= L.w || ty < 0 || ty >= L.h) return false;
-    return L.tiles[ty * L.w + tx] === Tile.Plank;
+    const i = ty * L.w + tx;
+    const t = L.tiles[i];
+    if (t === Tile.Plank) return true;
+    // a leaf is a plank once its plant has grown, and open air before (and while it unfurls, so
+    // nobody is caught standing inside one)
+    return t === Tile.Leaf && this.grown[L.leafAt[i]] === 1 && this.growT[L.leafAt[i]] >= 1;
   }
 
   /** Solid at a world point (for the string's line-of-sight tests: static solids only). */
@@ -299,7 +304,6 @@ export class World {
       for (const b of bodies) if (this.standingOn(b, p.tx, p.ty + 1) && (!p.heavy || b.heavy)) down = 1;
       if (down !== this.plateDown[i]) {
         this.plateDown[i] = down;
-        this.events.push({ k: 'plate', x: p.tx * T + T / 2, y: p.ty * T + T, down: !!down });
       }
     }
     for (let g = 0; g < this.doorOpen.length; g++) {
@@ -318,7 +322,6 @@ export class World {
       }
       if (open !== !!this.doorWant[g]) {
         this.doorWant[g] = open ? 1 : 0;
-        this.events.push({ k: 'door', group: g, open });
       }
       const o = this.doorOpen[g];
       this.doorOpen[g] = open ? Math.min(1, o + dt * 3.5) : Math.max(0, o - dt * 3.5);
@@ -340,7 +343,6 @@ export class World {
         if (this.crumbleT[i] <= 0) {
           this.crumbleState[i] = Crumble.Gone;
           this.crumbleT[i] = CRUMBLE_GONE;
-          this.events.push({ k: 'crumble', x: c.tx * T + T / 2, y: c.ty * T + T / 2 });
         }
       } else {
         this.crumbleT[i] -= dt;
@@ -352,6 +354,31 @@ export class World {
       }
     }
     for (let i = 0; i < this.springT.length; i++) if (this.springT[i] > 0) this.springT[i] = Math.max(0, this.springT[i] - dt);
+    for (let i = 0; i < this.growT.length; i++) if (this.grown[i] && this.growT[i] < 1) this.growT[i] = Math.min(1, this.growT[i] + dt / GROW_TIME);
+  }
+
+  /**
+   * Grow the plant in a patch of soil: its leaves unfurl into a platform both sprouts can stand on.
+   * Once grown it stays for the rest of the level — a step you made is a step you keep. `instant`
+   * skips the unfurling, for the plants a continued run comes back to: they grew before you quit.
+   */
+  grow(i: number, instant = false) {
+    if (!Number.isInteger(i) || i < 0 || i >= this.grown.length || this.grown[i]) return false;
+    this.grown[i] = 1;
+    if (instant) this.growT[i] = 1;
+    return true;
+  }
+
+  /** Which patch of soil a body is standing on (-1 none). */
+  soilUnder(b: BodyLike) {
+    const L = this.L;
+    const ty = Math.floor((b.y + b.h / 2 + 2) / T);
+    for (let tx = Math.floor((b.x - b.w / 2 + 2) / T); tx <= Math.floor((b.x + b.w / 2 - 2) / T); tx++) {
+      if (tx < 0 || tx >= L.w || ty < 0 || ty >= L.h) continue;
+      const i = L.soilAt[ty * L.w + tx];
+      if (i >= 0) return i;
+    }
+    return -1;
   }
 
   /** How far a crumbling block has shaken (0 intact .. 1 about to fall), or -1 when gone. */

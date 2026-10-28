@@ -1,11 +1,14 @@
 import { clamp, TAU } from '../core/math';
 import type { Bird } from '../game/bird';
+import { LAND_SQUASH_MAX } from '../game/tuning';
 import { drawHat, glow, hexRgb, type BirdColor } from './art';
 
 /** Fresh yellow-green leaves (and the deeper green of their veins and outline). */
 export const LEAF = '#a8d64a';
 export const LEAF_DARK = '#5e8f22';
 const ROOT = '#8a5a34';
+/** the far-side limbs, in shadow */
+const LIMB_DARK = '#6e4729';
 
 // The sprouts' fixed details, kept here rather than written inline: these are drawn for both sprouts
 // every frame, and a table written inside the draw call is a fresh array (and iterator) each time.
@@ -15,19 +18,19 @@ const CROWN: readonly (readonly number[])[] = [
   [-Math.PI / 2 + 0.75, 11],
   [-Math.PI / 2 + 0.1, 13],
 ];
-/** Creases down the bark: x, then how much the curve leans. */
+/** Creases down the bark of the torso: x, then how much the curve leans. */
 const BARK: readonly (readonly number[])[] = [
-  [-7.2, 0.6],
-  [-4.2, -0.5],
-  [-1.5, 0.3],
-  [7.5, -0.2],
+  [-4.2, 0.6],
+  [-1.8, -0.5],
+  [1.4, 0.3],
+  [4.4, -0.2],
 ];
-/** Speckles in the moss at the foot of the trunk, from the feet. */
+/** Speckles in the moss on the hips, from the hip line. */
 const MOSS: readonly (readonly number[])[] = [
-  [-7, -6],
-  [-4, -4.4],
-  [-2, -6.2],
-  [3.5, -4.6],
+  [-4.2, -1.6],
+  [-2.4, -0.2],
+  [-1.1, -2.1],
+  [2.1, -0.6],
 ];
 /** Speckles on the small sprout's seed, from its centre. */
 const SPECKS: readonly (readonly number[])[] = [
@@ -38,7 +41,7 @@ const SPECKS: readonly (readonly number[])[] = [
 
 /** How far above its centre a sprout's head reaches (leaves and all): bubbles and name tags sit above it. */
 export function sproutTop(b: Bird) {
-  return b.kind === 'tall' ? b.h / 2 + 14 : b.h / 2 + 9;
+  return b.kind === 'tall' ? b.h / 2 + 17 : b.h / 2 + 15;
 }
 
 /** A pointed leaf from (0, 0) along +x, `len` long and `wid` wide. */
@@ -116,30 +119,83 @@ function face(ctx: CanvasRenderingContext2D, b: Bird, x: number, y: number, r: n
   }
 }
 
-/** Little root feet at the bottom (y = feet), stepping while walking, braced while holding on. */
-function roots(ctx: CanvasRenderingContext2D, b: Bird, feet: number, spread: number) {
-  const walk = Math.sin(b.walkPhase);
-  const brace = b.anchored ? 2.5 : 0;
-  ctx.strokeStyle = ROOT;
-  ctx.lineWidth = 2.2;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  if (b.grounded || b.anchored) {
-    ctx.moveTo(-spread, feet - 4);
-    ctx.lineTo(-spread - 1 - brace + walk * 2.5, feet);
-    ctx.moveTo(spread, feet - 4);
-    ctx.lineTo(spread + 1 + brace - walk * 2.5, feet);
-    // a holding sprout digs a little root in
-    if (b.anchored) {
-      ctx.moveTo(0, feet - 3);
-      ctx.lineTo(1.5, feet + 2.5);
+/**
+ * One twig leg: a thigh and a shin with a knot for a knee, ending in a little splayed root of a foot.
+ * `side` is -1 for the far leg (drawn behind the body, in shadow) and 1 for the near one. The pose
+ * comes from what the sprout is doing — striding on the ground, knees tucked while it rises, legs
+ * trailing while it falls, folded against a wall it clings to, dangling while it hangs.
+ */
+function leg(ctx: CanvasRenderingContext2D, b: Bird, side: -1 | 1, hipX: number, hipY: number, feet: number, len: number) {
+  const back = side < 0;
+  let fx = hipX;
+  let fy = feet;
+  // how far the knee pushes forward of the straight line from hip to foot
+  let bend = 1.2;
+  if (b.cling !== 0) {
+    // folded against the wall, toes braced on it (it faces the wall, and +x here is forward)
+    fx = hipX + (back ? 1.4 : 3.4);
+    fy = feet - (back ? 3 : 0.5);
+    bend = 3.2;
+  } else if (b.hanging) {
+    fx = hipX + Math.sin(b.wingPhase * 0.6 + (back ? 1.1 : 0)) * 1.7;
+    fy = feet + 1;
+    bend = 1.5;
+  } else if (b.dashT > 0) {
+    fx = hipX - 4.4;
+    fy = feet - 2.6;
+    bend = 1;
+  } else if (b.anchored) {
+    // planted: legs braced apart, knees deep, toes dug in
+    fx = hipX + (back ? -2.8 : 2.4);
+    fy = feet;
+    bend = len * 0.34;
+  } else if (!b.grounded) {
+    if (b.vy < 0) {
+      fx = hipX + (back ? -1.5 : 2.1);
+      fy = feet - (back ? 0.42 : 0.26) * len;
+      bend = len * 0.36;
+    } else {
+      fx = hipX + (back ? -2.1 : 1.1);
+      fy = feet + 0.6;
+      bend = 1.3;
     }
+  } else if (Math.abs(b.vx) > 20) {
+    // striding: the foot swings fore and aft, and lifts over the top of its arc
+    const ph = b.walkPhase + (back ? Math.PI : 0);
+    const up = Math.max(0, Math.cos(ph));
+    fx = hipX + Math.sin(ph) * len * 0.44;
+    fy = feet - up * len * 0.3;
+    bend = 0.9 + up * len * 0.26;
   } else {
-    ctx.moveTo(-spread, feet - 4);
-    ctx.lineTo(-spread - 1.5, feet - 0.5);
-    ctx.moveTo(spread, feet - 4);
-    ctx.lineTo(spread - 0.5, feet - 0.5);
+    fx = hipX + (back ? -1.1 : 1.3);
+    fy = feet;
+    bend = 1.1;
   }
+  const kx = hipX + (fx - hipX) * 0.5 + bend;
+  const ky = hipY + (fy - hipY) * 0.5;
+  const col = back ? LIMB_DARK : ROOT;
+  ctx.strokeStyle = col;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = back ? 2.4 : 2.9;
+  ctx.beginPath();
+  ctx.moveTo(hipX, hipY);
+  ctx.lineTo(kx, ky);
+  ctx.lineTo(fx, fy);
+  ctx.stroke();
+  // the knot of a knee
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(kx, ky, back ? 1.3 : 1.6, 0, TAU);
+  ctx.fill();
+  // three little roots for toes
+  const toe = len * 0.26;
+  ctx.lineWidth = back ? 1.5 : 1.8;
+  ctx.beginPath();
+  ctx.moveTo(fx - toe * 0.8, fy + 0.3);
+  ctx.lineTo(fx, fy - 1.1);
+  ctx.lineTo(fx + toe, fy + 0.3);
+  ctx.moveTo(fx + toe * 0.2, fy - 0.9);
+  ctx.lineTo(fx + toe * 0.45, fy + 0.4);
   ctx.stroke();
 }
 
@@ -148,7 +204,7 @@ function arm(ctx: CanvasRenderingContext2D, x: number, y: number, a: number, len
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(a);
-  ctx.strokeStyle = back ? '#6e4729' : ROOT;
+  ctx.strokeStyle = back ? LIMB_DARK : ROOT;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(0, 0);
@@ -195,9 +251,9 @@ function armPose(b: Bird): [number, number] {
 
 /**
  * A sprout, drawn around its body centre like a bird was: tilted toward the vine while it hangs,
- * leaning back while it holds on, squashed and stretched by its springy `squash`. The tall one is a
- * little sapling — a bark-textured trunk in its player's colour under a crown of leaves; the small one
- * (and two sprouts alike) a round seedling with two leaves that flap like wings.
+ * leaning back while it holds on, squashed and stretched by its springy `squash`. Both are little
+ * twig folk on two jointed legs: the tall one a bark-grained torso and a round head under a crown of
+ * leaves, the small one a seed that is head and body at once, with two leaves that flap like wings.
  */
 export function drawSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: number, ink: string, hat: string, menu: boolean) {
   ctx.save();
@@ -231,10 +287,12 @@ export function drawSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColo
   else if (b.grounded && Math.abs(b.vx) > 40) rot = Math.sign(b.vx) * 0.06 + (b.strain > 0.3 ? Math.sign(b.vx) * 0.1 : 0);
   else if (!b.grounded) rot = clamp(b.vx / 1800, -0.22, 0.22);
   ctx.rotate(rot);
-  // squash around the feet
-  const sq = b.squash;
+  // Squash around the feet: the springy impulse plus the lean of rising or falling. A landing takes
+  // the full flattening — that's where the punch reads — but a stretch is given less height than it
+  // takes width, or a tall sprout leaving the ground draws as a tube rather than a sprout.
+  const sq = clamp(b.squash + b.airLean, -0.42, LAND_SQUASH_MAX);
   ctx.translate(0, feet);
-  ctx.scale(b.facing * (1 + sq * 0.8), 1 - sq);
+  ctx.scale(b.facing * (1 + sq * 0.8), 1 - sq * (sq < 0 ? 0.72 : 1));
   ctx.translate(0, -feet);
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
@@ -263,102 +321,148 @@ export function drawSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColo
   ctx.restore();
 }
 
-/** The tall sprout: feet at y = feet (half its height), head near -feet. */
+/**
+ * The tall sprout: a twig fellow on two legs — a slim bark torso in its player's colour, a round bark
+ * head under a crown of three leaves, twig arms with leaves for hands. Feet at y = feet.
+ */
 function drawTall(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: number, ink: string, feet: number, menu: boolean, open: boolean) {
-  const top = -feet + 6;
+  const LEG = 11;
+  const hipY = feet - LEG;
+  const shoulderY = -1;
+  const headY = -10;
+  const crownY = headY - 8.4;
   const sway = Math.sin(t * 2.3 + b.idx) * 0.08 + clamp(-b.vx / 2500, -0.2, 0.2);
-  if (b.fluttering) glideLeaf(ctx, top - 12, t, ink, 34);
-  // the crown: three leaves on a short stem
+  if (b.fluttering) glideLeaf(ctx, crownY - 9, t, ink, 34);
+  // the crown: three leaves on a short stem out of the top of its head
   ctx.save();
-  ctx.translate(0, top);
+  ctx.translate(0, crownY);
   ctx.rotate(sway);
   ctx.lineWidth = 1.3;
   ctx.strokeStyle = LEAF_DARK;
   ctx.beginPath();
-  ctx.moveTo(0, 2);
-  ctx.lineTo(0, -6);
+  ctx.moveTo(0, 3);
+  ctx.lineTo(0, -4);
   ctx.stroke();
   for (let i = 0; i < CROWN.length; i++) {
     const a = CROWN[i][0];
     ctx.save();
-    ctx.translate(0, -5);
+    ctx.translate(0, -3.5);
     ctx.rotate(a + Math.sin(t * 3 + a) * 0.06);
     leaf(ctx, CROWN[i][1], 4.4, LEAF, ink);
     ctx.restore();
   }
   ctx.restore();
   const [aBack, aFront] = armPose(b);
-  arm(ctx, -3, 1, aBack + Math.PI, 8, ink, true);
-  roots(ctx, b, feet, 4.5);
-  // the trunk: in the player's colour, narrower at the crown and flaring into roots, with a lighter
-  // face, a bark grain and a patch of moss
-  const trunk = () => {
-    const base = feet - 2.5;
+  // the far arm and far leg go behind the body; the near ones in front of it
+  arm(ctx, -3, shoulderY + 1.5, aBack + Math.PI, 8, ink, true);
+  leg(ctx, b, -1, -3.4, hipY, feet, LEG);
+  // the torso: slim, bark-grained, with moss on its hips
+  const torso = () => {
     ctx.beginPath();
-    ctx.moveTo(-11.5, base);
-    ctx.bezierCurveTo(-9, base - 4, -10.5, top + 16, -9, top + 7);
-    ctx.quadraticCurveTo(-8, top, 0, top - 0.5);
-    ctx.quadraticCurveTo(8, top, 9, top + 7);
-    ctx.bezierCurveTo(10.5, top + 16, 9, base - 4, 11.5, base);
-    ctx.quadraticCurveTo(0, base + 2.5, -11.5, base);
+    ctx.moveTo(-6, hipY + 1.5);
+    ctx.bezierCurveTo(-7.3, hipY - 3, -7.6, shoulderY + 3, -6.9, shoulderY - 1);
+    ctx.quadraticCurveTo(0, shoulderY - 3.2, 6.9, shoulderY - 1);
+    ctx.bezierCurveTo(7.6, shoulderY + 3, 7.3, hipY - 3, 6, hipY + 1.5);
+    ctx.quadraticCurveTo(0, hipY + 3.4, -6, hipY + 1.5);
     ctx.closePath();
   };
   ctx.fillStyle = col.body;
   ctx.strokeStyle = ink;
   ctx.lineWidth = 2.1;
-  trunk();
+  torso();
   ctx.fill();
   ctx.save();
   ctx.clip();
   ctx.fillStyle = col.belly;
   ctx.beginPath();
-  ctx.ellipse(3.5, top + 11, 8, 9.5, 0, 0, TAU);
+  ctx.ellipse(2, (shoulderY + hipY) / 2 + 1, 5.2, 5.4, 0, 0, TAU);
   ctx.fill();
   ctx.strokeStyle = col.dark;
-  ctx.globalAlpha *= 0.75;
-  ctx.lineWidth = 1.3;
+  ctx.globalAlpha *= 0.7;
+  ctx.lineWidth = 1.1;
   for (let i = 0; i < BARK.length; i++) {
     const x = BARK[i][0];
     const a = BARK[i][1];
     ctx.beginPath();
-    ctx.moveTo(x, top + 17 + a * 5);
-    ctx.bezierCurveTo(x + 1.8, top + 21, x - 1.6, top + 26, x + 0.6, top + 31 + a * 2);
+    ctx.moveTo(x, shoulderY + 2 + a * 2);
+    ctx.bezierCurveTo(x + 1.3, shoulderY + 5, x - 1.1, hipY - 4, x + 0.5, hipY + 1 + a);
     ctx.stroke();
   }
-  // a knot in the bark
-  ctx.beginPath();
-  ctx.ellipse(-5.5, top + 13, 1.6, 2.2, 0.3, 0, TAU);
-  ctx.stroke();
-  ctx.globalAlpha /= 0.75;
-  // a patch of moss low on the trunk, soft and speckled
+  ctx.globalAlpha /= 0.7;
+  // a patch of moss across its hips, soft and speckled
   ctx.fillStyle = 'rgba(140,196,62,0.85)';
   ctx.beginPath();
-  ctx.ellipse(-5, feet - 5, 6.5, 3.4, -0.25, 0, TAU);
-  ctx.ellipse(3, feet - 4, 4, 2.4, 0.2, 0, TAU);
+  ctx.ellipse(-2.4, hipY - 0.6, 5, 2.6, -0.2, 0, TAU);
+  ctx.ellipse(3.4, hipY, 3.2, 1.9, 0.2, 0, TAU);
   ctx.fill();
   ctx.fillStyle = 'rgba(214,240,120,0.9)';
   for (let i = 0; i < MOSS.length; i++) {
     ctx.beginPath();
-    ctx.arc(MOSS[i][0], feet + MOSS[i][1], 0.8, 0, TAU);
+    ctx.arc(MOSS[i][0], hipY + MOSS[i][1], 0.75, 0, TAU);
     ctx.fill();
   }
   ctx.fillStyle = 'rgba(40,20,60,0.12)';
   ctx.beginPath();
-  ctx.ellipse(0, feet - 2, 13, 5, 0, 0, TAU);
+  ctx.ellipse(0, hipY + 2, 8, 3.5, 0, 0, TAU);
   ctx.fill();
   ctx.restore();
   ctx.strokeStyle = ink;
   ctx.lineWidth = 2.1;
-  trunk();
+  torso();
   ctx.stroke();
-  face(ctx, b, 3, top + 9, 2.8, 7, ink, menu, open);
-  arm(ctx, 5, 2, aFront, 8, ink, false);
+  // a knot of a neck, then the head
+  ctx.strokeStyle = ROOT;
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.moveTo(0.4, shoulderY - 1);
+  ctx.lineTo(0.5, headY + 6);
+  ctx.stroke();
+  const head = () => {
+    ctx.beginPath();
+    ctx.ellipse(0.5, headY, 9.4, 8.8, 0, 0, TAU);
+  };
+  ctx.fillStyle = col.body;
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 2.1;
+  head();
+  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  // a lighter grain across the face, and a knot in the bark of its cheek
+  ctx.fillStyle = col.belly;
+  ctx.beginPath();
+  ctx.ellipse(2.6, headY - 0.4, 7, 6.6, 0, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = col.dark;
+  ctx.globalAlpha *= 0.55;
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.ellipse(-5.6, headY + 1.6, 1.5, 2.1, 0.3, 0, TAU);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-8.4, headY - 3);
+  ctx.quadraticCurveTo(-5.6, headY - 1.4, -7.4, headY + 5);
+  ctx.stroke();
+  ctx.globalAlpha /= 0.55;
+  ctx.restore();
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 2.1;
+  head();
+  ctx.stroke();
+  face(ctx, b, 2.6, headY - 1.2, 2.9, 7.2, ink, menu, open);
+  arm(ctx, 5, shoulderY + 1.5, aFront, 8, ink, false);
+  leg(ctx, b, 1, 3.4, hipY, feet, LEG);
 }
 
-/** The small sprout (or, scaled, two sprouts alike): a round seedling with two leaves on top. */
+/**
+ * The small sprout (or, scaled, two sprouts alike): a twig child whose seed is head and body at once,
+ * two seed leaves for hair, and short twig legs with root toes.
+ */
 function drawSeedling(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: number, ink: string, feet: number, menu: boolean, open: boolean, k: number) {
-  const r = 8.4 * k;
-  const cy = feet - r - 1.5 * k;
+  const LEG = 4.6 * k;
+  const hipY = feet - LEG;
+  const r = 7 * k;
+  const cy = hipY - r * 0.82;
   if (b.fluttering) glideLeaf(ctx, cy - r - 10 * k, t, ink, 28 * k);
   // the two seed leaves: they flap like little wings in the air
   let flap = 0.35 + Math.sin(t * 2.4 + b.idx) * 0.06;
@@ -385,8 +489,8 @@ function drawSeedling(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t:
   }
   ctx.restore();
   const [aBack, aFront] = armPose(b);
-  roots(ctx, b, feet, 3 * k);
   arm(ctx, -2 * k, cy + 1.5 * k, aBack + Math.PI, 4.5 * k, ink, true);
+  leg(ctx, b, -1, -2.3 * k, hipY, feet, LEG);
   // the seed
   ctx.fillStyle = col.body;
   ctx.strokeStyle = ink;
@@ -417,8 +521,9 @@ function drawSeedling(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t:
   ctx.beginPath();
   ctx.ellipse(0, cy, r, r * 0.95, 0, 0, TAU);
   ctx.stroke();
-  face(ctx, b, 2.2 * k, cy - 1.8 * k, 2.25 * k, 5 * k, ink, menu, open);
+  face(ctx, b, 2.2 * k, cy - 1.4 * k, 2.25 * k, 5 * k, ink, menu, open);
   arm(ctx, 3 * k, cy + 2 * k, aFront, 4.5 * k, ink, false);
+  leg(ctx, b, 1, 2.3 * k, hipY, feet, LEG);
 }
 
 /** A sprout that's dropped out of play: a glowing seed drifting back to its partner. */

@@ -203,7 +203,8 @@ export async function installRig(page) {
         jump(i) { c[i].jump = true; c[i].jumpPressed = true; },
         /**
          * The session's vine shot (see Session.shoot): the ring most nearly where the stick points,
-         * within this sprout's reach. Its numbers are copied from tuning.ts, as the yank's are.
+         * within this sprout's reach — or, standing on a patch of soil, into the ground to grow a
+         * plant (then it returns 'grew'). Its numbers are copied from tuning.ts, as the yank's are.
          */
         shootAt(i, mx = 0, my = 0) {
           const b = birds[i];
@@ -212,6 +213,14 @@ export async function installRig(page) {
             this.unhook(i);
             b.shotCd = 0.15;
             return null;
+          }
+          if (b.traits.grow && b.grounded) {
+            const si = world.soilUnder(b);
+            if (si >= 0 && !world.grown[si]) {
+              world.grow(si);
+              b.shotCd = 0.3;
+              return 'grew';
+            }
           }
           let ax = Math.abs(mx) > 0.3 ? mx : 0;
           let ay = Math.abs(my) > 0.3 ? -my : 0;

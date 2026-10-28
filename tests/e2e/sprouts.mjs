@@ -43,6 +43,73 @@ const r = await page.evaluate(() => {
   }
   out.jumps = jumps;
 
+  // ---- the wall kick (1.3.0): brush a wall in mid-air and jump in time to kick off it. Taking the
+  // two walls of a shaft in turns climbs it — and every sprout can, not only the one that clings.
+  const shaft = level((g) => { for (let y = F - 15; y < F; y++) { g[y][24] = '#'; g[y][28] = '#'; } });
+  const shaftClimb = {};
+  for (const k of ['tall', 'small', 'even']) {
+    const s = __rig(shaft, [k, k]);
+    // (the partner directly below, so the vine's 8 tiles are all of them straight up)
+    s.place(0, 26, F); s.place(1, 26, F); s.reset(); s.secs(0.3);
+    const b = s.birds[0];
+    const floor = feet(b);
+    let top = floor;
+    s.jump(0);
+    for (let i = 0; i < 700; i++) {
+      const c = s.c[0];
+      // steer at whichever wall isn't the one just kicked, and kick the moment one is there
+      c.moveX = b.kickSide !== 0 ? -b.kickSide : 1;
+      if (b.wallTouchT > 0 && b.wallTouch !== 0 && b.kickSide !== b.wallTouch) s.jump(0);
+      else c.jump = b.vy < 0;
+      s.step();
+      if (!b.ghost) top = Math.min(top, feet(b));
+    }
+    shaftClimb[k] = +(floor - top).toFixed(2);
+  }
+  out.shaftClimb = shaftClimb;
+
+  // ---- one wall is a step, not a staircase: the same wall twice running is refused
+  {
+    const one = level((g) => { for (let y = F - 15; y < F; y++) g[y][24] = '#'; });
+    const s = __rig(one, ['tall', 'tall']);
+    s.place(0, 26, F); s.place(1, 27, F); s.reset(); s.secs(0.3);
+    const b = s.birds[0];
+    s.jump(0);
+    s.c[0].moveX = -1;
+    const found = s.until(() => b.wallTouchT > 0 && b.wallTouch === -1, 3);
+    s.jump(0);
+    s.step();
+    const kicked = b.kickSide === -1;
+    // push back into that same wall for a good while: it must never offer itself again
+    let again = false;
+    for (let i = 0; i < 200; i++) {
+      s.c[0].moveX = -1;
+      s.step();
+      if (!b.grounded && b.wallTouchT > 0 && b.wallTouch === -1) again = true;
+    }
+    out.sameWall = { found: found >= 0, kicked, again };
+  }
+
+  // ---- …and a dash mustn't forgive it: a dash used to wipe the record of the wall just kicked, while
+  // the kick handed the dash back, so jump-and-dash together took 55 kicks off a wall that allows one.
+  // (Set up directly — a sprout that can dash can also cling, and it grips the wall long before a
+  // hand-played sequence gets as far as a second kick.)
+  {
+    const dashRecord = {};
+    for (const k of ['small', 'even']) {
+      const one = level((g) => { for (let y = F - 15; y < F; y++) g[y][24] = '#'; });
+      const s = __rig(one, [k, k]);
+      s.place(0, 26, F - 6); s.place(1, 25, F); s.reset();
+      const b = s.birds[0];
+      b.kickSide = -1;       // as a kick off the wall on its left leaves it
+      b.dashT = 0.1;         // and a dash under way through the air
+      b.grounded = false;
+      s.step();
+      dashRecord[k] = { dashing: b.dashT > 0, kickSide: b.kickSide };
+    }
+    out.dashRecord = dashRecord;
+  }
+
   // ---- a one-tile gap: the small one (and two alike) through it, the tall one stopped at its mouth
   const tunnel = level((g) => { for (let x = 24; x <= 34; x++) g[F - 2][x] = '#'; });
   const through = {};
@@ -135,13 +202,20 @@ const r = await page.evaluate(() => {
   return out;
 });
 
-const { jumps, through, climb, wallJump, wallJumpDash, dash, ground } = r;
+const { jumps, through, climb, wallJump, wallJumpDash, dash, ground, shaftClimb, sameWall, dashRecord } = r;
 t.check(`the small sprout jumps higher than the tall one (${jumps.small.rise} vs ${jumps.tall.rise} tiles; alike ${jumps.even.rise})`, jumps.small.rise > jumps.tall.rise + 0.6 && jumps.tall.rise > 3.1 && jumps.even.rise > 3.2, jumps);
 t.check('both run at the same speed', jumps.tall.run === jumps.small.run && jumps.small.run === jumps.even.run, jumps);
 t.check(`a one-tile gap lets the small sprout (and two alike) through, not the tall one (${through.tall} / ${through.small} / ${through.even})`, through.tall < 24 && through.small > 35 && through.even > 35, through);
 t.check('the small sprout clings to a wall, climbs it and steps over the top', climb.small.clung && climb.small.onTop, climb);
 t.check('the tall sprout can’t climb walls; two alike can', !climb.tall.clung && !climb.tall.onTop && climb.even.onTop, climb);
 t.check(`a wall jump goes up and away from the wall (${wallJump.away} tiles)`, wallJump.away > 0.5 && wallJump.up && wallJump.cling === 0, wallJump);
+t.check(`every sprout climbs a shaft by kicking its two walls in turns (tall ${shaftClimb.tall}, small ${shaftClimb.small}, alike ${shaftClimb.even} tiles)`, Object.values(shaftClimb).every((v) => v > 4), shaftClimb);
+t.check('one wall is a step, not a staircase: the same wall twice running is refused', sameWall.found && sameWall.kicked && !sameWall.again, sameWall);
+t.check(
+  '…and a dash through the air doesn’t forgive it either',
+  Object.values(dashRecord).every((d) => d.dashing && d.kickSide === -1),
+  dashRecord,
+);
 t.check('the small sprout dashes once per jump (and again after landing)', dash.small.first > 450 && dash.small.again < 450 && dash.small.nextJump < -450, dash);
 t.check('the tall sprout doesn’t dash; two alike do', dash.tall.first < 300 && dash.even.first > 450, dash);
 t.check('jump and dash pressed together give both, not just the jump', dash.small.together > 450 && dash.even.together > 450 && dash.small.togetherJumped && dash.even.togetherJumped, dash);

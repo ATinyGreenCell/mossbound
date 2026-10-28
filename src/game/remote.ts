@@ -18,6 +18,7 @@ import {
   type Snap,
 } from '../net/protocol';
 import type { Bird } from './bird';
+import { LAND_SQUASH_MAX, LAND_SQUASH_V } from './tuning';
 import { BIRD_H, BIRD_W, FALL_MULT, FLUTTER_FALL, GRAVITY, MAX_FALL } from './tuning';
 import type { World } from './world';
 
@@ -282,7 +283,7 @@ export class RemoteFeed {
   private applyFlags(bird: Bird, f: number) {
     const grounded = (f & F_GROUND) !== 0;
     // landing squash, worked out on this side
-    if (grounded && !this.prevGrounded && this.prevVy > 220) bird.squash = Math.min(0.42, this.prevVy / 1700);
+    if (grounded && !this.prevGrounded && this.prevVy > 220) bird.squash = Math.min(LAND_SQUASH_MAX, this.prevVy / LAND_SQUASH_V);
     this.prevGrounded = grounded;
     this.prevVy = bird.vy;
     bird.grounded = grounded;

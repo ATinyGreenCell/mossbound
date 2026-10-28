@@ -50,6 +50,15 @@ const r = await page.evaluate(async () => {
   out.clearClosesRun = S.save.runs.paris.run === null && S.save.unlocked >= 4 && S.save.levels.paris.clears === 1 && S.save.levels.paris.feathers === 3 && S.save.runs.woods?.run?.cp === 1;
   // a run is never written over by an older start of the same level
   out.olderStartRefused = S.setRun('mill', 1, run(5, 1)) === false && S.save.runs.mill.gen === 2;
+  // grown plants ride along in a run (1.3.0), and a garbled list of them is cleaned, not believed
+  S.setRun('woods', 9, run(1, 50, { grown: [2, 0] }));
+  // (in soil order, whichever order they were grown in: a merge pools two copies of the one list, so
+  // every copy of a run has to print its plants the same way round — see makeRun)
+  out.grownKept = S.save.runs.woods.run.grown.join() === '0,2';
+  S.mergeSave({ ...theirs, runs: { woods: { gen: 9, at: S.save.runs.woods.at + 1, run: run(1, 60, { grown: ['x', -1, 1e9, 3.5, 3, 3, null] }) } } });
+  out.grownCleaned = S.save.runs.woods.run.grown.join() === '3' && S.save.runs.woods.run.time === 60;
+  // a run saved before 1.3.0 (no `grown` at all) still loads, with no plants grown
+  out.grownOptional = Array.isArray(S.cleanSave({ unlocked: 1, runs: { mill: { gen: 1, at: 1, run: { cp: 0, seeds: [1], feathers: 0, time: 30, with: '', sig: '' } } } })?.runs.mill.run.grown);
   // save codes
   const code = S.exportCode();
   localStorage.clear();
@@ -60,6 +69,7 @@ const r = await page.evaluate(async () => {
   const pasted = `here: ${code.slice(0, 30)}\n ${code.slice(30, 60)}​${code.slice(60)}  `;
   out.importOk = S.importCode(pasted) && S.save.unlocked >= 4 && S.save.levels.paris?.feathers === 3 && S.save.runs.woods?.run?.cp === 1;
   out.importJunk = !S.importCode('MB1-!!!!') && !S.importCode('hello') && !S.importCode('MB1-' + btoa('[1,2]'));
+  out.grownThroughCode = S.save.runs.woods?.run?.grown?.join() === '3';
   // a copy whose shared count is wildly ahead was never counted: believing it would pin our own count
   // for good, and from then on every save would be stamped the same — a stale copy of a run could
   // then overwrite real progress (a corrupted save code, or a partner on a damaged build)
@@ -87,6 +97,63 @@ const r = await page.evaluate(async () => {
   // persisted
   S.persist();
   out.persisted = JSON.parse(localStorage.getItem('mossbound.save.v3')).unlocked >= 4;
+  // a dead heat whose only difference is a plant (one of us grew it, or one of us is on a build with
+  // no `grown` at all). The tie-break can't read that field — it has to mean the same thing on every
+  // version — so without the plants being pooled the two devices would keep different saves for good.
+  const heat = (plant) => ({ v: 3, unlocked: 1, levels: {}, finished: false, clock: 3,
+    runs: { paris: { gen: 4, at: 3, run: plant ? run(2, 88, { grown: [1, 0] }) : run(2, 88) } } });
+  const settle = (mine, theirs) => {
+    for (const k of Object.keys(S.save)) delete S.save[k];
+    Object.assign(S.save, S.cleanSave(mine));
+    S.mergeSave(JSON.parse(JSON.stringify(theirs)));
+    return JSON.stringify(S.cleanSave(JSON.parse(JSON.stringify(S.save))));
+  };
+  const grewIt = settle(heat(true), heat(false));
+  const didnt = settle(heat(false), heat(true));
+  out.deadHeatAgreesOnPlants = grewIt === didnt && JSON.parse(didnt).runs.paris.run.grown.join() === '0,1';
+  // CONTINUE has to bring the plants back too: it's the one path every local resume goes through, and
+  // a plant is often the step up to the seeds above it. Like the seeds, they only come back when the
+  // map still matches — a level edit moves the patches of soil, so the indices would mean someone else.
+  const first = { ...run(1, 44, { grown: [0] }), sig: S.levelSig(0) };
+  S.setRun('garden', 3, first);
+  const carried = S.resumeOf(0);
+  S.setRun('garden', 4, { ...first, sig: 'notthemap' });
+  const stale = S.resumeOf(0);
+  out.continueBringsThePlantsBack = carried?.grown?.join() === '0' && stale?.grown?.length === 0;
+  // and the same thing as a property, over saves neither of us would ever write on purpose: whatever
+  // two devices hold, they have to come away agreeing, and a copy they've already taken in must change
+  // nothing a second time. (This is the guard on the next field someone adds to a run.)
+  let seed = 99991;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const NASTY = [null, undefined, 'seven', {}, [], [0.5], [-1], [1e9], [NaN], [1, 1, 1], [3, 3, 2],
+    Array.from({ length: 300 }, (_, i) => i), [0, 'x', 2], [[1]], { 0: 1 }];
+  const anyRun = () => {
+    const o = run(Math.floor(rnd() * 8) - 1, +(rnd() * 400).toFixed(2), { feathers: Math.floor(rnd() * 8), with: pick(['', 'Pip', 'Fern']), sig: pick(['', 'aaaa', 'bbbb']) });
+    const k = rnd();
+    if (k < 0.45) o.grown = Array.from({ length: Math.floor(rnd() * 4) }, () => Math.floor(rnd() * 6));
+    else if (k < 0.75) o.grown = pick(NASTY);      // a damaged copy, or a build that never had the field
+    return o;
+  };
+  const anySave = () => {
+    const runs = {};
+    for (const id of ['garden', 'woods', 'mill', 'paris', 'tower']) if (rnd() < 0.7) runs[id] = { gen: Math.floor(rnd() * 3), at: Math.floor(rnd() * 5), run: rnd() < 0.15 ? null : anyRun() };
+    return { v: 3, unlocked: Math.floor(rnd() * 5), finished: rnd() < 0.3, clock: Math.floor(rnd() * 5), levels: {}, runs };
+  };
+  const bad = [];
+  for (let n = 0; n < 150 && bad.length < 3; n++) {
+    const A = anySave(), B = anySave();
+    const ab = settle(A, B);
+    if (ab !== settle(B, A)) { bad.push({ why: 'order matters', n }); continue; }
+    if (settle(JSON.parse(ab), B) !== ab) bad.push({ why: 'taking it again changed it', n });
+    for (const slot of Object.values(JSON.parse(ab).runs)) {
+      const g = slot.run?.grown;
+      if (!slot.run) continue;
+      if (!Array.isArray(g) || g.length > 64 || new Set(g).size !== g.length) bad.push({ why: 'plants not a clean list', n, g });
+      else if (g.some((i) => !Number.isInteger(i) || i < 0 || i >= 64) || g.some((i, k) => k && i < g[k - 1])) bad.push({ why: 'plants out of range or order', n, g });
+    }
+  }
+  out.anyTwoDevicesAgree = bad.length === 0 || bad;
   return out;
 });
 await browser.close();

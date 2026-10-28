@@ -1,14 +1,14 @@
 import type { Save } from '../core/save';
 
 /** Bump whenever messages change shape; peers with different versions refuse to play. */
-export const PROTOCOL = 3;
+export const PROTOCOL = 4;
 export const APP_ID = 'mossbound/coop/v1';
 
 export type Role = 'host' | 'guest';
 
 /** Where a continued level picks up (mirrors save.ts Run). */
 /** Where a continued run picks up — and which fresh start of the level it belongs to (see save.ts). */
-export type Resume = { cp: number; seeds: number[]; feathers: number; time: number; gen?: number };
+export type Resume = { cp: number; seeds: number[]; feathers: number; time: number; gen?: number; grown?: number[] };
 
 export type Profile = {
   name: string;
@@ -43,8 +43,8 @@ export type CtrlMsg =
   | { t: 'end'; c: number }
   /** gameplay events for level session `n` */
   | { t: 'ev'; n: number; e: GameEvent }
-  /** the collectables and checkpoint as this side knows them (merged by union / max) */
-  | { t: 'world'; n: number; seeds: number[]; feathers: number; cp: number }
+  /** the collectables, checkpoint and grown plants as this side knows them (merged by union / max) */
+  | { t: 'world'; n: number; seeds: number[]; feathers: number; cp: number; grown?: number[] }
   /** host: level cleared */
   | { t: 'clear'; n: number; time: number }
   /** clock sync: ping with sender time, pong echoes it plus the replier's time */
@@ -63,6 +63,8 @@ export type GameEvent =
   /** the sender shot its vine over ring `i` (a peg index), or let go of the one it held */
   | { k: 'hook'; i: number }
   | { k: 'unhook' }
+  /** the sender grew the plant in patch of soil `i` */
+  | { k: 'grow'; i: number }
   /** pause-menu "regroup": both birds back to the checkpoint */
   | { k: 'regroup' };
 

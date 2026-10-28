@@ -501,6 +501,80 @@ export function drawDoor(ctx: CanvasRenderingContext2D, tx: number, ty: number, 
   ctx.restore();
 }
 
+/**
+ * A patch of soil: turned earth with a seedling in it, and a little glow once its plant is grown so
+ * you can see which patches are still waiting.
+ */
+export function drawSoil(ctx: CanvasRenderingContext2D, tx: number, ty: number, grown: number, t: number) {
+  const x = tx * T;
+  const y = ty * T;
+  ctx.fillStyle = '#4a3524';
+  ctx.beginPath();
+  ctx.roundRect(x + 1, y + 1, T - 2, 9, 3);
+  ctx.fill();
+  ctx.fillStyle = '#5e452e';
+  for (let i = 0; i < 4; i++) {
+    const px = x + 5 + i * 7;
+    ctx.fillRect(px, y + 2 + ((i * 3) % 4), 3, 3);
+  }
+  // the seedling: it straightens up and opens as the plant grows
+  const g = grown;
+  const sway = Math.sin(t * 1.6 + tx) * (1 - g) * 1.6;
+  ctx.strokeStyle = '#7fc45a';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + T / 2, y + 4);
+  ctx.quadraticCurveTo(x + T / 2 + sway, y - 2 - g * 3, x + T / 2 + sway * 1.5, y - 6 - g * 5);
+  ctx.stroke();
+  ctx.fillStyle = g > 0 ? '#b6e887' : '#8ed06a';
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(x + T / 2 + sway * 1.2 + side * 3.5, y - 5 - g * 4, 3.4, 2.2, side * 0.6, 0, TAU);
+    ctx.fill();
+  }
+  if (g > 0) {
+    ctx.globalAlpha = 0.18 * g;
+    ctx.fillStyle = '#ffe9a8';
+    ctx.beginPath();
+    ctx.ellipse(x + T / 2, y + 2, 13 + g * 3, 7, 0, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+/** A leaf of a grown plant: a broad leaf you can stand on, unfurling as it grows. */
+export function drawLeaf(ctx: CanvasRenderingContext2D, tx: number, ty: number, open: number, t: number) {
+  if (open <= 0) return;
+  const x = tx * T;
+  const y = ty * T;
+  const w = T * Math.min(1, open * 1.1);
+  const h = 7 * Math.min(1, open * 1.4);
+  const bob = Math.sin(t * 1.3 + tx * 0.7) * 0.8 * open;
+  ctx.save();
+  ctx.translate(x + T / 2, y + 5 + bob);
+  ctx.fillStyle = '#86cf5e';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, w / 2, h, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = '#6cb349';
+  ctx.beginPath();
+  ctx.ellipse(0, h * 0.35, w / 2.1, h * 0.5, 0, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = '#d6f0b4';
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.8;
+  // (only once the leaf is wide enough to hold it: inset from nothing is a line wider than its leaf,
+  // which is what an unfurling plant's first frames would otherwise show)
+  if (w > 5) {
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 + 2, 0);
+    ctx.lineTo(w / 2 - 2, 0);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
 export function drawCrumble(ctx: CanvasRenderingContext2D, tx: number, ty: number, shake: number, th: Theme, t: number) {
   const x = tx * T;
   const y = ty * T;

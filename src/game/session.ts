@@ -30,7 +30,7 @@ import {
   type Profile,
   type Resume,
 } from '../net/protocol';
-import { drawBubble, drawCheckpoint, drawCrumble, drawDoor, drawFirefly, drawLooseEnd, drawMover, drawNest, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSpring, nameLabel } from '../render/art';
+import { drawBubble, drawCheckpoint, drawCrumble, drawDoor, drawFirefly, drawLeaf, drawLooseEnd, drawMover, drawNest, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSoil, drawSpring, nameLabel } from '../render/art';
 import { Backdrop } from '../render/backdrop';
 import { Particles, PK } from '../render/particles';
 import { drawSprout, sproutTop } from '../render/sprouts';
@@ -40,11 +40,12 @@ import { ButtonList, esc } from '../ui/menu';
 import { Hud } from '../ui/hud';
 import { Bird, BIRD_COLORS, type BirdFx } from './bird';
 import { Camera } from './camera';
+import { Dummy } from './dummy';
 import { parseLevel, type LevelData, type Pt } from './level';
-import { LEVELS } from './levels';
+import { LEVELS, PRACTICE } from './levels';
 import { menuOpen, RemoteFeed } from './remote';
 import { Tether } from './tether';
-import { ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TUG_COOLDOWN, TUG_MIN } from './tuning';
+import { LAND_KICK_DROP, LAND_KICK_FULL, ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TUG_COOLDOWN, TUG_MIN } from './tuning';
 import type { Kind } from './traits';
 import { World } from './world';
 
@@ -71,6 +72,12 @@ export interface SessionOpts {
   runGen?: number;
   /** which sprout each bird is (see traits.ts); both "even" if left out */
   kinds?: [Kind, Kind];
+  /**
+   * The solo practice ground: the player holds the first sprout and the game walks the second one
+   * (see dummy.ts). It plays the PRACTICE level rather than one of LEVELS, and keeps no run, banks
+   * no fireflies and unlocks nothing — nothing done here touches the save.
+   */
+  practice?: boolean;
 }
 
 /** Snapshots per second to the partner (the relay path thins this to what its broker allows). */
@@ -78,6 +85,9 @@ const SNAP_HZ = 40;
 /** Silence from the partner after which the level holds still until they're back. */
 const FREEZE_MS = 1600;
 const NEUTRAL = makeControls();
+
+/** how much the sprout underfoot flattens when its partner bounces off its head (both screens) */
+const BOUNCED_SQUASH = 0.5;
 
 /**
  * One level being played by two birds: locally on one screen (both simulated here), or online (this
@@ -140,13 +150,20 @@ export class Session implements Screen {
   private readonly offResize: () => void;
   private seatLost = [false, false];
   private readonly seatGen: [number, number] | null;
+  /** the solo practice ground (see SessionOpts.practice) */
+  readonly practice: boolean;
+  /** practice: what walks the second sprout, and the frame it last asked for */
+  private readonly dummy: Dummy | null;
+  private dummyFrame = NEUTRAL;
 
   constructor(
     private readonly app: App,
     private readonly flow: Flow,
     readonly opts: SessionOpts,
   ) {
-    this.L = parseLevel(LEVELS[opts.level], opts.level);
+    this.practice = opts.practice === true;
+    this.L = parseLevel(this.practice ? PRACTICE : LEVELS[opts.level], opts.level);
+    this.dummy = this.practice ? new Dummy() : null;
     this.world = new World(this.L);
     this.theme = THEMES[this.L.def.theme];
     this.online = opts.mode === 'online';
@@ -183,6 +200,10 @@ export class Session implements Screen {
     const r = opts.resume;
     if (r) {
       for (const i of r.seeds) if (i >= 0 && i < this.seedTaken.length) this.seedTaken[i] = 1;
+      // plants grown before you quit are standing when you come back, already unfurled (every index is
+      // checked by World.grow, and the list is capped where it's stored — so walk all of it: cutting it
+      // to the number of patches would drop a real plant that happened to be listed after a bad index)
+      for (const i of Array.isArray(r.grown) ? r.grown : []) this.world.grow(i, true);
       this.feathers = r.feathers & ((1 << this.L.feathers.length) - 1);
       this.checkpoint = r.cp >= 0 && r.cp < this.L.checkpoints.length ? r.cp : -1;
       this.time = r.time;
@@ -235,6 +256,7 @@ export class Session implements Screen {
         const n = Math.min(seeds.length, this.seedTaken.length);
         for (let k = 0; k < n; k++) if (Number.isInteger(seeds[k]) && seeds[k] >= 0 && seeds[k] < this.seedTaken.length) this.takeSeed(seeds[k], false);
         for (let i = 0; i < 3; i++) if (m.feathers & (1 << i)) this.takeFeather(i, false);
+        for (const i of Array.isArray(m.grown) ? m.grown : []) this.growSoil(i, false, false);
         if (Number.isInteger(m.cp) && m.cp > this.checkpoint && m.cp < this.L.checkpoints.length) this.light(m.cp, false);
         break;
       }
@@ -282,7 +304,7 @@ export class Session implements Screen {
         if (Number.isInteger(e.i) && e.i >= 0 && e.i < this.L.checkpoints.length) this.light(e.i, false);
         break;
       case 'bounce':
-        mine.squash = 0.4;
+        mine.squash = BOUNCED_SQUASH;
         audio.play('bounce', 0.5);
         break;
       // the partner shot their vine over a ring (or let go of one): the vine bends there on this
@@ -299,6 +321,10 @@ export class Session implements Screen {
       case 'unhook':
         this.tether.release(other.idx);
         other.hooked = false;
+        break;
+      // (an index from the partner is checked by World.grow, as the collectables' are here)
+      case 'grow':
+        this.growSoil(e.i, false);
         break;
       case 'regroup':
         // (not during the end-of-level ceremony: nothing respawns once the level is won, so both
@@ -363,7 +389,9 @@ export class Session implements Screen {
         this.worldT = 2;
         const seeds: number[] = [];
         this.seedTaken.forEach((v, i) => v && seeds.push(i));
-        this.link.send({ t: 'world', n: this.nonce, seeds, feathers: this.feathers, cp: this.checkpoint });
+        const grown: number[] = [];
+        this.world.grown.forEach((v, i) => v && grown.push(i));
+        this.link.send({ t: 'world', n: this.nonce, seeds, feathers: this.feathers, cp: this.checkpoint, grown });
       }
     }
     if (this.paused || this.state !== 'play') {
@@ -389,6 +417,7 @@ export class Session implements Screen {
 
   private controlsFor(i: number): ControlFrame {
     if (this.overlay || this.paused) return NEUTRAL;
+    if (this.dummy && i === 1) return this.dummyFrame;
     // online — or a local seat on 'keys' (everything: keyboard, pads and touch together)
     if (this.online || this.seats?.[i] === 'keys') return this.app.input.controls;
     const dev = this.seats ? this.app.input.device(this.seats[i]) : null;
@@ -442,6 +471,8 @@ export class Session implements Screen {
 
   update(dt: number) {
     if (this.paused || this.state !== 'play' || this.frozen) return;
+    // practice: the game asks for the second sprout's controls, once per step, before anyone moves
+    if (this.dummy) this.dummyFrame = this.dummy.step(dt, this.birds[1], this.birds[0]);
     this.time += dt;
     // the platforms' clock (online it's also kept in step with the host's, in frame())
     this.sharedT += dt;
@@ -551,24 +582,27 @@ export class Session implements Screen {
     this.ropeOffUntil = this.time + 1.5;
   }
 
-  /** What a continued run needs: lantern, seeds, feathers, time. */
+  /** What a continued run needs: lantern, seeds, grown plants, feathers, time. */
   resumeState(): Resume {
     const seeds: number[] = [];
     this.seedTaken.forEach((v, i) => v && seeds.push(i));
-    return { cp: this.checkpoint, seeds, feathers: this.feathers, time: this.time, gen: this.runGen };
+    const grown: number[] = [];
+    this.world.grown.forEach((v, i) => v && grown.push(i));
+    return { cp: this.checkpoint, seeds, feathers: this.feathers, time: this.time, gen: this.runGen, grown };
   }
 
   private saveRun() {
     const now = this.runUrgent;
     this.runDirty = this.runUrgent = false;
     this.runT = 1.5;
-    if (this.state !== 'play') return;
+    // the practice ground keeps no run: it isn't one of LEVELS, and nothing done there is progress
+    if (this.practice || this.state !== 'play') return;
     const r = this.resumeState();
     // nothing found yet and barely begun: not worth a CONTINUE card (and an older run of this level stays)
-    if (r.cp < 0 && !r.seeds.length && !r.feathers && r.time < 20) return;
+    if (r.cp < 0 && !r.seeds.length && !r.grown?.length && !r.feathers && r.time < 20) return;
     // both names (the run is shared: "with" reads the same on either device)
     const [a, b] = this.profiles;
-    const run = { cp: r.cp, seeds: r.seeds, feathers: r.feathers, time: r.time, with: this.online ? [a.name, b.name].filter(Boolean).join(' & ') : '', sig: this.sig };
+    const run = { cp: r.cp, seeds: r.seeds, grown: r.grown ?? [], feathers: r.feathers, time: r.time, with: this.online ? [a.name, b.name].filter(Boolean).join(' & ') : '', sig: this.sig };
     setRun(this.L.def.id, this.runGen, run, now);
     this.savedTime = r.time;
     this.flow.shareSave();
@@ -603,8 +637,9 @@ export class Session implements Screen {
     if (!Number.isInteger(i) || i < 0 || i >= this.L.feathers.length) return;
     if (this.feathers & (1 << i)) return;
     this.feathers |= 1 << i;
-    // found is found: it counts (for hats too) even if this level never gets finished
-    bankFeathers(this.L.def.id, 1 << i);
+    // found is found: it counts (for hats too) even if this level never gets finished — but the practice
+    // ground keeps nothing, and its fireflies are there to be reached, not banked
+    if (!this.practice) bankFeathers(this.L.def.id, 1 << i);
     this.runDirty = this.runUrgent = true;
     this.runT = 0;
     const s = this.L.feathers[i];
@@ -654,6 +689,16 @@ export class Session implements Screen {
       this.unhook(b);
       b.shotCd = SHOT_COOLDOWN * 0.5;
       return;
+    }
+    // standing on a patch of soil, the vine goes into the ground instead of at a ring: a plant
+    // grows out of it. Only the small sprout (and either of two alike) has the knack.
+    if (b.traits.grow && b.grounded) {
+      const si = this.world.soilUnder(b);
+      if (si >= 0 && !this.world.grown[si]) {
+        this.growSoil(si, true);
+        b.shotCd = SHOT_COOLDOWN;
+        return;
+      }
     }
     const c = this.controlsFor(b.idx);
     let ax = Math.abs(c.moveX) > 0.3 ? c.moveX : 0;
@@ -705,6 +750,33 @@ export class Session implements Screen {
     audio.play('grab', 0.75, 0, 1.05);
     audio.play('zip', 0.35, 0, 1.25);
     if (b.local) this.send({ k: 'hook', i: this.L.pegs.indexOf(best) });
+  }
+
+  /** Grow the plant in a patch of soil: its leaves unfurl into a platform for both of you. */
+  /**
+   * `announce`: a plant unfurls, with its burst and its sound. A plant that was already standing before
+   * you arrived (the partner's world sync) is simply there — otherwise joining a level part-way through
+   * grows every plant in it at once, in one frame, with a shake and two sounds apiece.
+   */
+  private growSoil(i: number, mine: boolean, announce = true) {
+    if (!this.world.grow(i, !announce)) return;
+    this.runDirty = true;
+    if (!announce) return;
+    const so = this.L.soils[i];
+    const x = so.tx * T + T / 2;
+    const y = so.ty * T;
+    this.fx.burst(PK.Leaf, x, y - 10, 10, 90, 0.9, 10, '#9fd36a', -70, 2.5, 40);
+    this.fx.burst(PK.Dust, x, y, 6, 70, 0.4, 5, '#6b4f36', 0, 4);
+    this.fx.add(PK.Ring, x, y - 4, 0, 0, 0.34, 18, '#d6f0b4');
+    // your own doing shakes the view and sounds close by; your partner's, thirty tiles off, does not
+    if (mine) {
+      this.cam.shake(0.9);
+      audio.play('seed', 0.7, 0, 0.7);
+      audio.play('grab', 0.5, 0, 0.8);
+      this.send({ k: 'grow', i });
+    } else {
+      audio.play('seed', 0.4, 0, 0.8);
+    }
   }
 
   /** Let go of the ring a sprout shot: the vine comes off it and coils back in. */
@@ -825,29 +897,40 @@ export class Session implements Screen {
     switch (e.k) {
       case 'jump':
         audio.play('jump', 0.55 * vol, pan, 0.95 + b.idx * 0.08);
-        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 1, 4, 60, 0.35, 4, '#f2e8d8', 0, 5);
+        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 1, 7, 95, 0.4, 4, '#f2e8d8', 0, 5);
+        fx.add(PK.Ring, b.x, b.y + b.h / 2 - 1, 0, 0, 0.22, 11, '#fffaf0');
         break;
       case 'hop':
         audio.play('hop', 0.6 * vol, pan);
         break;
-      case 'land':
+      case 'land': {
+        // dust on every landing, a ring on a real one, and the camera only for a proper thump — a
+        // kick on every hop would have the view twitching all the way across a level
         audio.play('land', clamp(e.v / 900, 0.25, 0.9) * vol, pan);
-        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 1, Math.round(clamp(e.v / 120, 3, 10)), 90, 0.4, 5, '#f2e8d8', 0, 5);
-        if (e.v > 700 && b.local) this.cam.shake(1.2);
+        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 1, Math.round(clamp(e.v / 90, 3, 14)), 110, 0.45, 5, '#f2e8d8', 0, 5);
+        if (e.v > 420) fx.add(PK.Ring, b.x, b.y + b.h / 2 - 1, 0, 0, 0.28, 13 + clamp((e.v - 420) / 40, 0, 15), '#fffaf0');
+        const kick = clamp((e.d - LAND_KICK_DROP) / (LAND_KICK_FULL - LAND_KICK_DROP), 0, 1);
+        if (kick > 0 && b.local) this.cam.shake(0.8 + kick * 2.2);
         break;
+      }
       case 'flutter':
         audio.play('flutter', 0.5 * vol, pan, 1 + b.idx * 0.1);
         fx.burst(PK.Leaf, b.x, b.y - b.h / 2, 2, 40, 0.8, 4, '#a8d64a', 60, 1);
         break;
       case 'spring':
         audio.play('spring', 0.7 * vol, pan);
-        fx.burst(PK.Spark, b.x, b.y + b.h / 2 - 2, 8, 160, 0.4, 4, '#ffffff', 0, 4);
+        fx.burst(PK.Spark, b.x, b.y + b.h / 2 - 2, 14, 220, 0.45, 4, '#ffffff', 0, 4);
+        fx.add(PK.Ring, b.x, b.y + b.h / 2 - 2, 0, 0, 0.3, 20, '#fff6d0');
+        if (b.local) this.cam.shake(1.1);
         break;
       case 'bounce':
         audio.play('bounce', 0.7 * vol, pan);
+        fx.burst(PK.Spark, b.x, b.y + b.h / 2, 9, 150, 0.35, 4, '#ffe9a8', 0, 4);
+        fx.add(PK.Ring, b.x, b.y + b.h / 2, 0, 0, 0.26, 15, '#fff2c4');
         if (b.local) {
+          this.cam.shake(1);
           const other = this.birds[1 - b.idx];
-          if (other.local) other.squash = 0.4;
+          if (other.local) other.squash = BOUNCED_SQUASH;
           else this.send({ k: 'bounce' });
         }
         break;
@@ -857,14 +940,14 @@ export class Session implements Screen {
       case 'die':
         audio.play('die', 0.7 * vol, pan);
         fx.burst(PK.Leaf, b.x, Math.min(b.y, this.world.floorY), 10, 160, 1.2, 5, '#a8d64a', 120, 1.5);
-        if (b.local) this.cam.shake(2);
+        if (b.local) this.cam.shake(2.8);
         break;
       case 'respawn':
         audio.play('respawn', 0.6 * vol, pan);
         fx.burst(PK.Star, b.x, b.y, 10, 120, 0.6, 5, '#fff3c0', 0, 3);
         break;
       case 'step':
-        if (Math.random() < 0.5) fx.add(PK.Dust, b.x - b.facing * 6, b.y + b.h / 2 - 1, -b.facing * 20, -10, 0.3, 3, '#efe4d2', 0, 4);
+        if (Math.random() < 0.75) fx.add(PK.Dust, b.x - b.facing * 6, b.y + b.h / 2 - 1, -b.facing * 20, -10, 0.3, 3, '#efe4d2', 0, 4);
         audio.play('step', 0.25 * vol, pan, 0.9 + Math.random() * 0.25);
         break;
       case 'grab':
@@ -872,11 +955,12 @@ export class Session implements Screen {
         break;
       case 'mantle':
         audio.play('mantle', 0.5 * vol, pan);
-        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 2, 4, 50, 0.3, 4, '#f2e8d8', 0, 5);
+        fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 2, 6, 75, 0.35, 4, '#f2e8d8', 0, 5);
         break;
       case 'dash':
         audio.play('zip', 0.55 * vol, pan, 1.25);
-        fx.burst(PK.Leaf, b.x, b.y, 6, 120, 0.5, 4, '#b9e45a', 0, 2);
+        fx.burst(PK.Leaf, b.x, b.y, 9, 150, 0.5, 4, '#b9e45a', 0, 2);
+        if (b.local) this.cam.shake(0.6);
         break;
       case 'cling':
         audio.play('grab', 0.4 * vol, pan, 1.2);
@@ -884,7 +968,9 @@ export class Session implements Screen {
         break;
       case 'walljump':
         audio.play('jump', 0.55 * vol, pan, 1.15);
-        fx.burst(PK.Dust, b.x - b.facing * (b.w / 2), b.y, 4, 70, 0.3, 4, '#f2e8d8', 0, 5);
+        fx.burst(PK.Dust, b.x - b.facing * (b.w / 2), b.y, 7, 110, 0.35, 4, '#f2e8d8', 0, 5);
+        fx.add(PK.Ring, b.x - b.facing * (b.w / 2), b.y, 0, 0, 0.22, 12, '#fffaf0');
+        if (b.local) this.cam.shake(0.9);
         break;
     }
   }
@@ -900,8 +986,10 @@ export class Session implements Screen {
     for (let k = 0; k < 3; k++) this.fx.burst(PK.Heart, n.x, n.y - 20, 8, 160, 1.6, 9, ['#ff6f9a', '#ffb3c8', '#ffd75a'][k], -60, 1.5, 40);
     let seeds = 0;
     for (const v of this.seedTaken) seeds += v;
-    recordClear(this.L.def.id, this.L.index, seeds, this.feathers, time, this.runGen);
-    this.flow.shareSave();
+    if (!this.practice) {
+      recordClear(this.L.def.id, this.L.index, seeds, this.feathers, time, this.runGen);
+      this.flow.shareSave();
+    }
     // a 'clear' lost in a path hand-over would strand the guest in the level: keep repeating it
     if (this.online && this.me === 0) this.clearRepeat = window.setInterval(() => this.link?.send({ t: 'clear', n: this.nonce, time }), 1500);
     const last = this.L.index >= LEVELS.length - 1;
@@ -911,7 +999,10 @@ export class Session implements Screen {
       () => {
         if (this.disposed) return;
         const stars = [0, 1, 2].map((i) => `<i class="feather-ico${this.feathers & (1 << i) ? ' on' : ''}"></i>`).join('');
-        const buttons = lead
+        const buttons = this.practice
+          ? `<div class="btn" data-act="again">AGAIN</div>
+             <div class="btn small" data-act="levels">BACK</div>`
+          : lead
           ? `${last ? '<div class="btn" data-act="ending">THE END ♥</div>' : '<div class="btn" data-act="next">NEXT LEVEL</div>'}
              <div class="btn small" data-act="again">PLAY AGAIN</div>
              <div class="btn small" data-act="levels">LEVELS</div>`
@@ -922,8 +1013,8 @@ export class Session implements Screen {
            <div class="ov-buttons">${buttons}</div>`,
           (a) => {
             if (a === 'next') this.flow.enterLevel(this.L.index + 1);
-            else if (a === 'again') this.flow.playLevel(this.L.index);
-            else if (a === 'levels') this.flow.levels();
+            else if (a === 'again') this.practice ? this.flow.practice() : this.flow.playLevel(this.L.index);
+            else if (a === 'levels') this.practice ? this.flow.title() : this.flow.levels();
             else if (a === 'ending') this.flow.ending();
             else if (a === 'leave') this.flow.leaveOnline();
           },
@@ -948,7 +1039,7 @@ export class Session implements Screen {
     }
     this.paused = !this.online;
     this.app.touch?.setPlayActive(false);
-    const leave = this.online ? (this.me === 0 ? 'BACK TO LEVELS' : 'LEAVE ROOM') : 'QUIT TO LEVELS';
+    const leave = this.online ? (this.me === 0 ? 'BACK TO LEVELS' : 'LEAVE ROOM') : this.practice ? 'QUIT TO THE TITLE' : 'QUIT TO LEVELS';
     this.openOverlay(
       `<div class="ov-title">${this.online ? 'menu' : 'paused'}</div>
        ${this.online ? `<p class="ov-note">the game keeps going for ${esc(this.profiles[1 - this.me]?.name || 'your partner')}</p>` : ''}
@@ -956,7 +1047,9 @@ export class Session implements Screen {
        <div class="ov-buttons">
          <div class="btn" data-act="resume">RESUME</div>
          <div class="btn small" data-act="regroup">REGROUP AT THE LANTERN</div>
-         ${this.online && this.me === 1 ? '' : '<div class="btn small" data-act="restart">START THE LEVEL OVER</div>'}
+         ${this.practice ? '<div class="btn small" data-act="callback">BRING THEM BACK TO ME</div>' : ''}
+         ${this.practice && this.birds[0].kind !== this.birds[1].kind ? `<div class="btn small" data-act="swap">PRACTISE AS THE ${this.birds[0].kind === 'tall' ? 'SMALL' : 'TALL'} SPROUT</div>` : ''}
+         ${this.online && this.me === 1 ? '' : `<div class="btn small" data-act="restart">${this.practice ? 'START THE GROUND OVER' : 'START THE LEVEL OVER'}</div>`}
          <div class="btn small" data-act="controls">HOW TO PLAY</div>
          <div class="btn small" data-act="quit">${leave}</div>
        </div>`,
@@ -970,10 +1063,20 @@ export class Session implements Screen {
             for (const b of this.birds) if (b.local) b.die('fall');
             this.send({ k: 'regroup' });
           }
-        } else if (a === 'restart') this.flow.playLevel(this.L.index);
+        } else if (a === 'callback') {
+          // the practice partner has got itself stuck: send it home as a seed, which drifts it back
+          // to wherever the player is standing (see Bird.ghostHome)
+          this.closeOverlay();
+          if (this.state === 'play' && !this.birds[1].ghost) this.birds[1].die('fall');
+        } else if (a === 'swap') {
+          // Just for this ground: swapping here must not decide who's which sprout the next time the
+          // two of you play together. (Two alike have nothing to swap, so that button isn't offered.)
+          this.flow.practice(this.birds[0].kind === 'tall');
+        } else if (a === 'restart') this.practice ? this.flow.practice() : this.flow.playLevel(this.L.index);
         else if (a === 'controls') this.flow.showControls();
         else if (a === 'quit') {
           if (this.online && this.me === 1) this.flow.leaveOnline();
+          else if (this.practice) this.flow.title();
           else this.flow.levels();
         }
       },
@@ -1056,6 +1159,14 @@ export class Session implements Screen {
     const [A, B] = this.birds;
     A.animate(dt, B.present ? B : null);
     B.animate(dt, A.present ? A : null);
+    // a streak of leaves behind a dash (DASH_TIME is short, so this is a dozen or so particles). Only
+    // while the physics is running: `dashT` ticks down in there, so in a pause or a freeze it is stuck
+    // where it was and this would pour leaves out of a sprout that is standing perfectly still.
+    const moving = !this.paused && !this.frozen && this.state === 'play';
+    for (const b of this.birds) {
+      if (!moving || b.dashT <= 0 || !b.present || b.ghost) continue;
+      this.fx.add(PK.Leaf, b.x - b.facing * 5, b.y, -b.vx * 0.1, -b.vy * 0.1, 0.24, 4, '#cdee7a', 0, 3);
+    }
     this.fx.update(dt);
     this.followCamera(dt, false);
     this.spawnAmbient(dt);
@@ -1128,7 +1239,8 @@ export class Session implements Screen {
       const s = this.L.signs[i];
       for (let k = 0; k < 2; k++) {
         const b = this.birds[k];
-        if (!this.auth[k] || b.ghost) continue;
+        // (practice: the second sprout is the game's, and a sign it wanders past is not the player's)
+        if (!this.auth[k] || b.ghost || (this.practice && k !== 0)) continue;
         const d = Math.hypot(b.x - s.x, b.y - s.y);
         if (d < bestD) {
           bestD = d;
@@ -1185,6 +1297,15 @@ export class Session implements Screen {
     // dynamic level pieces
     const w = this.world;
     for (const d of this.L.doors) if (vis(d.tx * T, d.ty * T, T)) drawDoor(ctx, d.tx, d.ty, w.doorOpen[d.group], d.group, th);
+    for (let i = 0; i < this.L.soils.length; i++) {
+      const so = this.L.soils[i];
+      if (vis(so.tx * T, so.ty * T, T)) drawSoil(ctx, so.tx, so.ty, w.growT[i], t);
+      for (const li of so.leaves) {
+        const lx = li % this.L.w;
+        const ly = (li - lx) / this.L.w;
+        if (vis(lx * T, ly * T, T)) drawLeaf(ctx, lx, ly, w.growT[i], t);
+      }
+    }
     for (let i = 0; i < this.L.crumbles.length; i++) {
       const c = this.L.crumbles[i];
       if (vis(c.tx * T, c.ty * T, T)) drawCrumble(ctx, c.tx, c.ty, w.crumbleShake(i), th, t);
@@ -1249,6 +1370,8 @@ export class Session implements Screen {
       const name = this.profiles[i].name;
       if (!name || b.ghost || (!b.present && !b.local)) continue;
       if (this.online && i === this.me) continue;
+      // (nobody is holding the practice partner, so there is no second player to name)
+      if (this.practice && i === 1) continue;
       const lab = nameLabel(name, '#ffffff', px);
       const sx = Math.round(b.x * s - cam.ox - lab.width / 2);
       let sy = Math.round((b.y - sproutTop(b) - 4) * s - cam.oy - lab.height - (b.emote ? 26 * s : 0));

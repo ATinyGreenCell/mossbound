@@ -15,8 +15,12 @@ sprout gets anywhere alone.
   it along rather than being stopped by it, and its tug flings it far. But it jumps a little lower,
   and it can't fit through a one-tile gap.
 - **The small one** is nimble. It jumps higher, fits through tight spaces, climbs walls like ivy (and
-  jumps off them), and has a burst of speed through the air once per jump. Its tug barely budges the
-  tall one, so when the tall one is the one stuck below, the small one holds on while it climbs up.
+  jumps off them), has a burst of speed through the air once per jump, grows plants out of patches of
+  soil, and shoots its vine nearly twice as far. Its tug barely budges the tall one, so when the tall
+  one is the one stuck below, the small one holds on while it climbs up.
+
+Both of them can **kick off a wall** they brush in mid-air. Take two parallel walls in turns and you
+can climb the shaft between them; the same wall twice running won't have you.
 
 Both run at the same speed. Whoever made the room (or holds the first controller) starts as the tall
 one; either of you can **swap** at the level select. *Settings → sprouts → alike* gives both of you
@@ -29,6 +33,10 @@ holds for both.
   controller drops out (or dozes off), reconnect it and press Ⓐ to take your sprout back.
 - **Far apart** — *Play online*: one of you makes a room and reads out the four-letter code; the other
   joins with it (or opens the invite link, `…/mossbound/#join=CODE`). Phones play in landscape.
+- **On your own** — *Practice on your own*: one long practice ground with a signed station for every
+  move, and a partner the game walks for you, so the swings and tugs still work single-handed. Nothing
+  there can be failed and nothing is written to the journal. Its pause menu swaps which sprout you're
+  practising as — half the moves belong to the small one.
 - **Xbox** — open the game in Edge and hold **☰ Menu → Use game controls**. Until then Edge keeps the
   controllers for its cursor. Hold **⧉ View** for full screen. For two of you on one Xbox, pick *Play on
   one screen* and each press Ⓐ on your own controller. ☰ or ⧉ opens the menu, and the level also pauses
@@ -53,14 +61,17 @@ save code from *Settings* and paste it on the other device.
 | leaf glide | hold jump (falling) | hold Ⓐ              | hold JUMP    |
 | hold on    | Shift · X · J       | Ⓧ · triggers        | HOLD         |
 | tug        | E · C · L           | Ⓑ                   | TUG          |
+| vine shot  | T · B · O           | RT                  | VINE         |
 | dash (small sprout) | R · V · ;  | RB                  | DASH         |
 | ♥          | Q · H               | Ⓨ                   | ♥            |
 | menu       | Esc                 | ☰ · ⧉               | ❚❚           |
 
 Two on one keyboard: the left player uses WASD, Space, Shift, E, R, Q; the right player uses the
-arrows, `/` jump, `.` hold, `,` tug, `;` dash, `M` ♥. The backquote key toggles a frame-rate meter.
-Climbing walls (small sprout): push into a wall in the air to cling to it, up / down to climb, jump
-to leap off it.
+arrows, `/` jump, `.` hold, `,` tug, `;` dash, `[` vine, `M` ♥. The backquote key toggles a frame-rate
+meter. Climbing walls (small sprout): push into a wall in the air to cling to it, up / down to climb,
+jump to leap off it. Kicking off a wall (either sprout): jump the moment you brush one in mid-air.
+The vine shot reaches for a ring, a branch or a corner you can't jump to — and, for the small sprout,
+a patch of soil, which grows a leaf you can both stand on.
 
 ## Levels
 

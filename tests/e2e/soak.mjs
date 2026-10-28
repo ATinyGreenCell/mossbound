@@ -42,6 +42,8 @@ const fuzz = await page.evaluate(async () => {
           // vine shots, aimed anywhere (including at nothing), and let go of again
           if (rnd() < 0.18) s.shootAt(Math.floor(rnd() * 2), rnd() * 2 - 1, rnd() * 2 - 1);
           if (rnd() < 0.08) s.unhook(Math.floor(rnd() * 2));
+          // plants grown out of soil, which turn open air into leaves the sprouts can stand on
+          if (rnd() < 0.06 && s.world.grown.length) s.world.grow(Math.floor(rnd() * s.world.grown.length));
         }
         s.step();
         for (let i = 0; i < 2; i++) {

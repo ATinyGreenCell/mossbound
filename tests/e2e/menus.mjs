@@ -51,8 +51,9 @@ const guestRoom = (page) => page.evaluate(() => {
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
   await sleep(450);
   t.check('the title highlights PLAY ONLINE', (await sel(page)) === 'PLAY ONLINE', await sel(page));
-  for (let i = 0; i < 3; i++) await key(page, 'ArrowDown');
-  t.check('arrows walk the menu', (await sel(page)) === 'SETTINGS', await sel(page));
+  // (PLAY ONLINE · PLAY ON ONE SCREEN · PRACTICE ON YOUR OWN · HOW TO PLAY · SETTINGS)
+  for (let i = 0; i < 4; i++) await key(page, 'ArrowDown');
+  t.check('arrows walk the menu to its last row', (await sel(page)) === 'SETTINGS', await sel(page));
   await key(page, 'Enter');
   await waitFor(() => page.evaluate(() => !!document.querySelector('.settings .name-input')), 3000, 'settings');
   await page.click('.name-input');
@@ -83,6 +84,8 @@ const guestRoom = (page) => page.evaluate(() => {
   const page = await open(browser, { pads: 1 });
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
   await sleep(450);
+  // (down past PLAY ON ONE SCREEN and PRACTICE ON YOUR OWN)
+  await padPress(page, 0, 13);
   await padPress(page, 0, 13);
   await padPress(page, 0, 13);
   await padPress(page, 0, 0); // HOW TO PLAY
@@ -91,6 +94,7 @@ const guestRoom = (page) => page.evaluate(() => {
   await padPress(page, 0, 1);
   const closed = await waitFor(() => page.evaluate(() => !document.querySelector('.controls-panel')), 3000, 'card closed');
   t.check('Ⓐ opens the controls card, Ⓑ closes it', open1 && closed);
+  await padPress(page, 0, 12);
   await padPress(page, 0, 12);
   await padPress(page, 0, 12);
   await padPress(page, 0, 0); // PLAY ONLINE

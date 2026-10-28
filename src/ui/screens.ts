@@ -26,11 +26,11 @@ export const CONTROLS_HTML = `
     <dl>
       <dt>A D · ← →</dt><dd>walk</dd>
       <dt>W S · ↑ ↓</dt><dd>climb the vine (and walls)</dd>
-      <dt>SPACE · Z · K</dt><dd>jump · hold while falling to glide</dd>
+      <dt>SPACE · Z · K</dt><dd>jump · hold while falling to glide · against a wall, kick off it</dd>
       <dt>SHIFT · X · J</dt><dd>hold on (plant your roots)</dd>
       <dt>E · C · L</dt><dd>tug the vine</dd>
       <dt>R · V · ;</dt><dd>dash (small sprout)</dd>
-      <dt>T · B · [</dt><dd>shoot your vine at a ring</dd>
+      <dt>T · B · [</dt><dd>shoot your vine — at a ring, or into soil to grow a plant</dd>
       <dt>Q · H</dt><dd>♥ to your partner</dd>
       <dt>ESC</dt><dd>menu</dd>
     </dl>
@@ -39,11 +39,11 @@ export const CONTROLS_HTML = `
     <h3>controller</h3>
     <dl>
       <dt>stick · d-pad</dt><dd>walk · up/down climbs</dd>
-      <dt>Ⓐ</dt><dd>jump · hold to glide</dd>
+      <dt>Ⓐ</dt><dd>jump · hold to glide · against a wall, kick off it</dd>
       <dt>Ⓧ · triggers</dt><dd>hold on</dd>
       <dt>Ⓑ</dt><dd>tug the vine</dd>
       <dt>RB</dt><dd>dash (small sprout)</dd>
-      <dt>RT</dt><dd>shoot your vine at a ring</dd>
+      <dt>RT</dt><dd>shoot your vine — at a ring, or into soil to grow a plant</dd>
       <dt>Ⓨ</dt><dd>♥</dd>
       <dt>☰ · ⧉</dt><dd>menu</dd>
     </dl>
@@ -54,11 +54,11 @@ export const CONTROLS_HTML = `
     <h3>phone</h3>
     <dl>
       <dt>left thumb</dt><dd>stick: walk · up/down climbs</dd>
-      <dt>JUMP</dt><dd>jump · hold to glide</dd>
+      <dt>JUMP</dt><dd>jump · hold to glide · wall kick</dd>
       <dt>HOLD</dt><dd>hold on</dd>
       <dt>TUG</dt><dd>tug the vine</dd>
       <dt>DASH</dt><dd>dash (small sprout)</dd>
-      <dt>VINE</dt><dd>shoot your vine at a ring</dd>
+      <dt>VINE</dt><dd>shoot your vine — at a ring, or into soil</dd>
       <dt>♥</dt><dd>send a heart</dd>
     </dl>
   </div>
@@ -67,9 +67,11 @@ export const CONTROLS_HTML = `
   <span>The vine keeps you within 8 tiles of each other — and catches you when you fall.</span>
   <span>The tall sprout is strong: it can't be budged, and its tug flings the small one far. The small one jumps higher, climbs walls and dashes through the air.</span>
   <span>Jump on your partner's head to bounce up high.</span>
+  <span>Touch a wall in mid-air and jump straight away to kick off it — take the two walls of a shaft in turns and you climb it. The same wall twice running won't do.</span>
   <span>Hang under your partner and climb up with ↑.</span>
   <span>The vine wraps around corners and rings: swing under them.</span>
   <span>Or shoot your vine straight at a ring and hang from it. The small sprout's shot reaches nearly twice as far; climb up with ↑, or tug your partner over to you.</span>
+  <span>Standing on a patch of soil, the small sprout's vine goes into the ground instead: a plant grows, with leaves you can both stand on.</span>
   <span>TUG yanks your partner to you. If they're holding on, it yanks <i>you</i> to them.</span>
   <span>Fall in? You float back to your partner as a little seed.</span>
 </div>`;
@@ -246,6 +248,7 @@ export class TitleScreen implements Screen {
       <div class="menu">
         <div class="btn" data-act="online">PLAY ONLINE</div>
         <div class="btn" data-act="local">PLAY ON ONE SCREEN</div>
+        <div class="btn small" data-act="practice">PRACTICE ON YOUR OWN</div>
         <div class="btn small" data-act="controls">HOW TO PLAY</div>
         <div class="btn small" data-act="settings">SETTINGS</div>
       </div>
@@ -262,6 +265,9 @@ export class TitleScreen implements Screen {
       case 'local':
         this.flow.local();
         break;
+      case 'practice':
+        this.flow.practice();
+        break;
       case 'controls':
         this.flow.showControls();
         break;
@@ -269,7 +275,8 @@ export class TitleScreen implements Screen {
         this.list.dispose();
         this.list = buildSettings(this.el, this.app, () => {
           this.list = this.buildMain();
-          this.list.sel = 3;
+          // (the row SETTINGS itself is on: PLAY ONLINE, PLAY ON ONE SCREEN, PRACTICE, HOW TO PLAY)
+          this.list.sel = 4;
           this.list.highlight();
         });
         break;
