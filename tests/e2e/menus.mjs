@@ -1,7 +1,7 @@
 // Menus with every kind of input: keyboard through the title and settings (which persist), a
 // controller through the controls card and out of the room-code and name boxes, phone layout, Xbox,
 // the level select's CONTINUE, a fresh room code over an old one, and guards against a stray Ⓐ.
-import { XBOX_UA, frames, launch, open, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
+import { XBOX_UA, frames, launch, open, padPress, reporter, screenName, sleep, waitFor, canTimePhysics } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -250,7 +250,14 @@ const guestRoom = (page) => page.evaluate(() => {
   await sleep(500);
   await padPress(page, 0, 0);
   const toEnding = await waitFor(async () => (await screenName(page)) === 'EndingScreen', 3000, 'the ending').catch(() => false);
-  t.check('the level-clear card isn’t pressed by the Ⓐ already being tapped in the nest', cardUp && !!toEnding, { cardUp, toEnding: !!toEnding });
+// Held across a screen change, and the hold is counted in FRAMES (installTap holds for three).
+// Three frames is fifty milliseconds on a machine with a GPU and a full second on one without, so
+// what gets tested there is not "a button still down as the card appears" but "a button held for a
+// second" — a different question with a different right answer. Frame-coupled by construction, so
+// it needs a machine whose frames are short (see canTimePhysics).
+  const slowClear = await canTimePhysics(page);
+  if (slowClear) t.skip('the level-clear card isn’t pressed by the Ⓐ already being tapped in the nest', `${slowClear} — saw ${JSON.stringify({ cardUp, toEnding: !!toEnding })}`);
+  else t.check('the level-clear card isn’t pressed by the Ⓐ already being tapped in the nest', cardUp && !!toEnding, { cardUp, toEnding: !!toEnding });
   // and the ending itself: the same tap mustn't carry straight past it to the title
   await page.evaluate(() => window.__fb.flow.title());
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 4000, 'title');
@@ -259,7 +266,9 @@ const guestRoom = (page) => page.evaluate(() => {
   await sleep(500);
   await padPress(page, 0, 0);
   const toTitle = await waitFor(async () => (await screenName(page)) === 'TitleScreen', 3000, 'title again').catch(() => false);
-  t.check('the ending stays up for the Ⓐ still being tapped, and leaves on the next one', stillEnding && !!toTitle, { stillEnding, toTitle: !!toTitle });
+  const slowEnd = await canTimePhysics(page);
+  if (slowEnd) t.skip('the ending stays up for the Ⓐ still being tapped, and leaves on the next one', `${slowEnd} — saw ${JSON.stringify({ stillEnding, toTitle: !!toTitle })}`);
+  else t.check('the ending stays up for the Ⓐ still being tapped, and leaves on the next one', stillEnding && !!toTitle, { stillEnding, toTitle: !!toTitle });
   t.check('no errors (clear card and ending)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -399,8 +408,10 @@ const guestRoom = (page) => page.evaluate(() => {
   await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: false, touched: false, value: 0 }; });
   await sleep(700);
   const later = await screenName(page);
-  if (hitTheWindow) t.check('BACK with both seats taken stays on the title', atOnce === 'TitleScreen' && later === 'TitleScreen', { atOnce, later });
-  else t.skip('BACK with both seats taken stays on the title', 'the lobby had already handed over to the level select — this machine draws too few frames to land inside that window');
+  const slowBack = await canTimePhysics(page);
+  if (!hitTheWindow) t.skip('BACK with both seats taken stays on the title', 'the lobby had already handed over to the level select — this machine draws too few frames to land inside that window');
+  else if (slowBack) t.skip('BACK with both seats taken stays on the title', `${slowBack} — saw ${JSON.stringify({ atOnce, later })}`);
+  else t.check('BACK with both seats taken stays on the title', atOnce === 'TitleScreen' && later === 'TitleScreen', { atOnce, later });
   t.check('no errors (lobby back)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -503,7 +514,9 @@ const guestRoom = (page) => page.evaluate(() => {
   // the guest is mid-level tugging with Ⓑ; the host picks BACK TO LEVELS and the list appears under them
   await page.evaluate(() => { window.__fb.flow.levels(); return window.__tapWhen(() => window.__fb.app.current?.constructor.name === 'LevelSelect', 1); });
   const after = await page.evaluate(() => ({ screen: window.__fb.app.current?.constructor.name, closed: window.__link.closed, link: !!window.__fb.flow.link }));
-  t.check('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room', after.screen === 'LevelSelect' && !after.closed && after.link, after);
+  const slowTugRoom = await canTimePhysics(page);
+  if (slowTugRoom) t.skip('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room', `${slowTugRoom} — saw ${JSON.stringify(after)}`);
+  else t.check('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room', after.screen === 'LevelSelect' && !after.closed && after.link, after);
   // ...and once they've had a moment to see where they are, LEAVE ROOM works
   await sleep(500);
   await padPress(page, 0, 1);

@@ -176,7 +176,11 @@ const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {
   const ratio = () => page.evaluate(() => window.__fb.app.renderer.pixelRatio);
   const r1 = await ratio();
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 2, mobile: false });
-  await sleep(400);
+  // A density change fires no resize event — nothing moved — so the renderer notices it in flush(),
+  // which runs once a frame. Waiting 400 ms assumed that was several frames; on a machine drawing
+  // three a second it is barely one. Wait for the change instead. If the renderer never follows it,
+  // this still fails, and `devDpr` below says whether the machine ever made the change at all.
+  await waitFor(async () => (await ratio()) === 2, 3000, 'the canvas to follow the pixel density').catch(() => undefined);
   const r2 = await ratio();
   // What the PAGE thinks its ratio is, read while the override is still on — afterwards it is back
   // to 1 and says nothing. If r2 is still 1 the question is whether the renderer ignored the change
@@ -184,7 +188,7 @@ const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {
   // machine that cannot be asked. This is the only moment the difference is visible.
   const devDpr = await page.evaluate(() => window.devicePixelRatio);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
-  await sleep(400);
+  await waitFor(async () => (await ratio()) === 1, 3000, 'the canvas to follow it back').catch(() => undefined);
   const r3 = await ratio();
   if (r2 !== 2 && devDpr < 1.5) {
     t.skip('a change of pixel density alone is followed', `this machine kept devicePixelRatio at ${devDpr} when asked for 2, so there was no change to follow`);
