@@ -155,10 +155,21 @@ const guestRoom = (page) => page.evaluate(() => {
   // (one frame between presses — quick scrolling: a frame is at most 0.1 s of game time, inside the
   // highlight's 0.15 s settle, however slow a busy machine makes the frames)
   const from = await act();
-  for (let i = 0; i < 4; i++) {
-    await page.keyboard.press('ArrowRight');
-    await frames(page, 1);
-  }
+  // One frame between presses, driven from inside the page. It used to be page.keyboard.press in a
+  // loop out here, and every one of those is a round trip to the browser — nothing on a machine
+  // drawing sixty frames a second, but a whole frame of game time on one drawing three, which let
+  // the highlight's 0.15 s settle elapse between steps and repaint the scenery at each. The point
+  // of the check is that a QUICK scroll paints once, so the scroll has to actually be quick, and
+  // the only way to guarantee that is to stop leaving the page between presses.
+  await page.evaluate(() => new Promise((done) => {
+    let n = 0;
+    const press = () => {
+      if (n++ >= 4) return done();
+      for (const type of ['keydown', 'keyup']) window.dispatchEvent(new KeyboardEvent(type, { code: 'ArrowRight', key: 'ArrowRight', bubbles: true }));
+      requestAnimationFrame(press);
+    };
+    requestAnimationFrame(press);
+  }));
   const to = await act();
   await sleep(600);
   paints = await page.evaluate(() => window.__paints);
