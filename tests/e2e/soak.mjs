@@ -86,7 +86,16 @@ for (let li = 0; li < 5; li++) {
       await page.keyboard.press('Escape');
     }
   }
-  real.push(await page.evaluate(() => { const s = window.__fbSession; return { ok: s.birds.every((b) => Number.isFinite(b.x) && Number.isFinite(b.y)), paused: s.paused, level: s.L.def.id }; }));
+  real.push(await page.evaluate(() => {
+    const s = window.__fbSession;
+    // A minute of mashing every button can legitimately end up somewhere that is not a level — a
+    // pause menu taken to its conclusion, a level cleared. That is not a crash, and reaching through
+    // a session that is no longer there is what turns it into one: this used to throw on `s.birds`
+    // and take the group down with a stack trace instead of a result. Anything that really broke
+    // shows up in the page's errors, which are collected either way.
+    if (!s) return { ok: true, paused: false, level: 'left the level', on: window.__fb?.app?.current?.constructor.name ?? null };
+    return { ok: s.birds.every((b) => Number.isFinite(b.x) && Number.isFinite(b.y)), paused: s.paused, level: s.L.def.id };
+  }));
 }
 await browser.close();
 

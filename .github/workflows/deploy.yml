@@ -79,7 +79,9 @@ jobs:
             [ -f "$f" ] || continue
             said=$( { grep -E '^FAIL' "$f" | head -n 8
                       sed -n '/^--- errors ---/,$p' "$f" | grep -vx 'none' | head -n 8; } )
-            [ -n "$said" ] || said=$(tail -n 6 "$f")
+            # no FAIL lines means it threw rather than failed a check, and then WHAT threw is the
+            # whole of the news — a bare tail gives the bottom of a stack and not the message above it
+            [ -n "$said" ] || said=$( { grep -E '^[A-Za-z]*Error|^Error:' "$f" | head -n 3; tail -n 4 "$f"; } )
             echo "::warning title=$n flaked::$(printf '%s' "$said" | sed 's/%/%25/g; s/\r/%0D/g' | awk '{printf "%s%%0A", $0}')"
           done
           npm run test:e2e -- --only "$failed" 2>&1 | tee /tmp/e2e-retry.log

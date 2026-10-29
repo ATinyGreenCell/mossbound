@@ -464,7 +464,14 @@ export function mergeSave(raw: unknown): boolean {
   const o = cleanSave(raw);
   if (!o) return false;
   const did = mergeInto(save, o, true);
-  if (did) persist();
+  // Tell whatever is on screen, as every other merge does. A save arriving from another tab or from
+  // the partner redraws the cards showing it; one pasted in as a save code did not, so the level
+  // select went on showing the progress from before the paste until you navigated away and back.
+  // The save was right the whole time, which is what made it look like a merge that had gone wrong.
+  if (did) {
+    persist();
+    changed();
+  }
   return did;
 }
 
