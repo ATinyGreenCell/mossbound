@@ -168,6 +168,10 @@ let ropeN = 0;
 export function drawRope(ctx: CanvasRenderingContext2D, path: readonly Pt[], total: number, colA: string, colB: string, tension: number, twang: number, twangFrom: 0 | 1, t: number, glow: number, solid?: (x: number, y: number) => boolean) {
   ropeN = 0;
   ropeAcc.length = 0;
+  // No vine between the sprouts until they tie one (see Tether.tied), and then there is no path:
+  // the loop below is happy with that, but the gradient wants two endpoints and an empty path has
+  // none. Nothing to draw, so draw nothing.
+  if (path.length < 2) return;
   const slack = clamp(ROPE_LEN - total, 0, 70) * 0.5;
   let acc = 0;
   for (let i = 0; i < path.length - 1; i++) {

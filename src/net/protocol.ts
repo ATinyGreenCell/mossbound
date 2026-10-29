@@ -10,8 +10,9 @@ import type { Save } from '../core/save';
  * page is still open on the old build and a level that no longer exists.
  *
  * 5: creatures (beetles and snaptraps), and the five levels rebuilt around them.
+ * 6: the vine is tied between the sprouts rather than always there, and the small one is taller.
  */
-export const PROTOCOL = 5;
+export const PROTOCOL = 6;
 export const APP_ID = 'mossbound/coop/v1';
 
 export type Role = 'host' | 'guest';
@@ -73,6 +74,9 @@ export type GameEvent =
   /** the sender shot its vine over ring `i` (a peg index), or let go of the one it held */
   | { k: 'hook'; i: number }
   | { k: 'unhook' }
+  /** the sender tied the vine between the two sprouts, standing next to the receiver — or untied it */
+  | { k: 'tie' }
+  | { k: 'untie' }
   /** the sender grew the plant in patch of soil `i` */
   | { k: 'grow'; i: number }
   /** pause-menu "regroup": both birds back to the checkpoint */

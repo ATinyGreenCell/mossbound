@@ -135,6 +135,19 @@ export class Tether {
   ];
   /** a ghost was at one end: tie the string afresh once both birds are back (see follow) */
   private retie = false;
+  /**
+   * Is there a vine between the two sprouts at all?
+   *
+   * There isn't, to begin with. The sprouts are two independent creatures who happen to be in the
+   * same level, and they are roped together only when one of them walks up to the other and presses
+   * the vine button (see Session.shoot). Everything the string does hangs off this: the length
+   * limit, swings, hangs, climbs, tugs, lifts, and the drawing of it.
+   *
+   * A pair tied together the whole time was the first shape of this game, and it made every moment
+   * a negotiation — you could not cross a room without dragging someone out of theirs. Asking for
+   * the vine turns that from a condition into a move.
+   */
+  tied = false;
 
   constructor(private readonly world: World) {}
 
@@ -152,12 +165,48 @@ export class Tether {
     this.measure();
   }
 
+  /** Tie the vine between the two sprouts, straight, from here. */
+  tie(a: RopeGrip, b: RopeGrip) {
+    this.tied = true;
+    this.retie = false;
+    this.reset(a, b);
+  }
+
+  /**
+   * Let the vine go: the two sprouts are independent again.
+   *
+   * Clearing `active` on both ends is what releases anyone hanging from it — a bird drops off a
+   * rope that isn't active of its own accord (see Bird.step), so there is nothing else to undo and
+   * no way for a sprout to be left dangling from a vine that no longer exists.
+   */
+  untie() {
+    this.tied = false;
+    this.retie = false;
+    this.pts.length = 0;
+    this.length = 0;
+    this.tension = 0;
+    this.twang = 0;
+    this.grown = this.growWant = 0;
+    this.owed = 0;
+    this.limit = ROPE_LEN;
+    this.caught[0] = this.caught[1] = 0;
+    for (const e of this.ends) {
+      e.active = false;
+      e.taut = false;
+      e.pivotIsBird = true;
+      e.pivotIsCorner = false;
+      e.seg = 0;
+      e.limit = ROPE_LEN;
+    }
+  }
+
   /**
    * Track the birds for one step. A string with a ghost (or nobody) at one end isn't there: it doesn't
    * wrap around whatever a ghost flies through, and it's tied afresh, straight, the moment both birds
    * are back — on both screens alike, whichever screen simulates the bird that died.
    */
   follow(a: RopeGrip & { present: boolean; ghost: boolean }, b: RopeGrip & { present: boolean; ghost: boolean }) {
+    if (!this.tied) return;
     if (a.present && b.present && !a.ghost && !b.ghost) {
       if (this.retie) this.reset(a, b);
       else this.update(a, b);
@@ -529,6 +578,7 @@ export class Tether {
   /** The path from bird 0 to bird 1 (positions as of the last update), into `out` (reused). */
   path(out: Pt[]) {
     out.length = 0;
+    if (!this.tied) return out;
     out.push({ x: this.ax, y: this.ay });
     for (const p of this.pts) out.push(p);
     out.push({ x: this.bx, y: this.by });
@@ -541,6 +591,7 @@ export class Tether {
    * estimated from their snapshots).
    */
   solve(birds: readonly [RopeBird, RopeBird], auth: readonly [boolean, boolean], dt = 1 / 120) {
+    if (!this.tied) return;
     const [A, B] = birds;
     const active = A.present && B.present && !A.ghost && !B.ghost;
     this.reel(dt);
@@ -636,6 +687,7 @@ export class Tether {
 
   /** Unit direction from a bird toward its pivot (for tugs), or null when it sits on it. */
   pullDir(end: 0 | 1, me: Pt & { ropeOff?: number }): Pt | null {
+    if (!this.tied) return null;
     const piv = this.ends[end].pivot;
     const dx = piv.x - me.x;
     const dy = piv.y - knotY(me);

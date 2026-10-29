@@ -71,6 +71,20 @@ const stayed = await guest.evaluate((n) => window.__fb.app.next === window.__fbS
 t.check('a stale host command arriving late is ignored', stayed);
 await waitFor(() => host.evaluate(() => window.__fbSession.birds[1].present), 10000, 'host hears the guest');
 await waitFor(() => guest.evaluate(() => window.__fbSession.birds[0].present), 10000, 'guest hears the host');
+// The sprouts spawn beside each other with no vine between them, so the host asks for one (the vine
+// button, next to their partner) and BOTH screens have to end up holding it: the vine is shared
+// world state, and a pair who disagree about whether it exists disagree about everything after.
+// Every rope check below needs it, so this one goes first.
+const tiedBoth = await (async () => {
+  await host.keyboard.press('KeyT');
+  const ok = await waitFor(async () => {
+    const h = await host.evaluate(() => window.__fbSession.tether.tied);
+    const g = await guest.evaluate(() => window.__fbSession.tether.tied);
+    return h && g ? { h, g } : null;
+  }, 8000, 'both screens tied').catch(() => null);
+  return ok;
+})();
+t.check('the vine button beside your partner ties the vine on both screens', !!tiedBoth, tiedBoth);
 // host walks right: the guest sees it
 // (headless pages run at a few fps here, so walk until it has moved rather than for a fixed time)
 const hx0 = await host.evaluate(() => window.__fbSession.birds[0].x);

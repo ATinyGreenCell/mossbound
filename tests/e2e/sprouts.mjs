@@ -242,6 +242,8 @@ const tug = async (tugger) => {
     }
     s.devTeleport((fx + 1) * 32 + 16, fy * 32 - 10.01, 0);
     s.devTeleport((fx + 7) * 32 + 16, fy * 32 - 10.01, 1);
+    // a tug needs a vine, and there is no vine until the sprouts ask for one
+    s.tether.tie(s.birds[0], s.birds[1]);
     // game seconds, not wall seconds: how far a tug throws someone is a distance per unit of GAME
     // time, and the two clocks only agree on a machine fast enough to keep up (see gameTime)
     const settle = (sec) => new Promise((done) => {

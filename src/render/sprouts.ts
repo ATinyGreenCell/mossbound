@@ -41,7 +41,7 @@ const SPECKS: readonly (readonly number[])[] = [
 
 /** How far above its centre a sprout's head reaches (leaves and all): bubbles and name tags sit above it. */
 export function sproutTop(b: Bird) {
-  return b.kind === 'tall' ? b.h / 2 + 17 : b.h / 2 + 15;
+  return b.kind === 'tall' ? b.h / 2 + 17 : b.h / 2 + 15 * b.traits.art;
 }
 
 /** A pointed leaf from (0, 0) along +x, `len` long and `wid` wide. */
@@ -298,13 +298,14 @@ export function drawSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColo
   ctx.lineCap = 'round';
   const open = b.fluttering || b.dashT > 0 || b.strain > 0.5;
   if (b.kind === 'tall') drawTall(ctx, b, col, t, ink, feet, menu, open);
-  else drawSeedling(ctx, b, col, t, ink, feet, menu, open, b.kind === 'even' ? 1.2 : 1);
+  else drawSeedling(ctx, b, col, t, ink, feet, menu, open, b.traits.art);
   if (hat !== 'none') {
     ctx.save();
     // (hats were drawn for a round head of radius 12 centred at 0)
     if (b.kind === 'tall') ctx.translate(0, -feet + 9);
     else {
-      const k = b.kind === 'even' ? 0.82 : 0.7;
+      // hats were drawn for the seedling at scale 1, so they follow its art scale
+      const k = b.traits.art * 0.69;
       ctx.translate(0, -feet + 9 * k);
       ctx.scale(k, k);
     }

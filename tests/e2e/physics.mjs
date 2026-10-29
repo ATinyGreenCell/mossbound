@@ -926,7 +926,7 @@ async function installSim(page) {
         until(pred, t, dt = 1 / 60) { for (let k = 0; k < t / dt; k++) { this.frame(dt); if (pred()) return +((k + 1) * dt).toFixed(2); } return -1; },
         /** feet on tile row ty, column tx */
         place(i, tx, ty) { s.birds[i].placeCenter({ x: tx * T + 16, y: ty * T - s.birds[i].h / 2 - 0.01 }); },
-        reset() { s.tether.reset(s.birds[0], s.birds[1]); },
+        reset() { s.tether.tie(s.birds[0], s.birds[1]); },
         jump(i) { c[i].jump = true; c[i].jumpPressed = true; },
         tug(b) { s.tug(b); },
         /** aim and shoot the vine: mx/my are the stick (my up-positive), as a player holds it */

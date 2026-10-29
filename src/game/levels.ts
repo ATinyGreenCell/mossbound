@@ -124,12 +124,12 @@ function garden(): LevelDef {
     song: 'garden',
     map: m.build(),
     signs: [
-      'Hello, little sprouts! {move} to walk, {jump} to jump. The vine keeps you two close.',
+      'Hello, little sprouts! {move} to walk, {jump} to jump. You two go your own way — until you stand together and {shoot} to tie your vines. Then the vine keeps you close (and {shoot} again lets it go).',
       'Hold {jump} while falling to glide down on a leaf. The small sprout can {dash} in mid-air, and climb walls.',
-      'Fell in? If your partner is on the ground, the vine catches you — push {climb} to climb back up.',
+      'Fell in? If you are tied together and your partner is on the ground, the vine catches you — push {climb} to climb back up.',
       'Too high to jump? Stand still and let your partner hop on your head!',
-      'Left down here? Stand below and push {climb} to climb the vine.',
-      'Too far to jump. Leap over the ring — the vine wraps around it. Push {move} to pump the swing, {jump} to let go.',
+      'Left down here? Tied together, stand below and push {climb} to climb the vine.',
+      'Too far to jump. Tie up first, then leap over the ring — the vine wraps around it. Push {move} to pump the swing, {jump} to let go.',
       'A branch, too high to jump to. Point at it and {shoot} to throw your vine over it — then swing, {climb} to pull yourself up, or {shoot} again to let go.',
       'Too far again! Run and bounce off your partner’s head to sail across — then {tug} to yank them over (too heavy? hold on while they climb).',
       'A bristle beetle. It only ever paces its own patch — walk round it, or hop over. Those bristles smart.',
@@ -220,7 +220,7 @@ function woods(): LevelDef {
     song: 'woods',
     map: m.build(),
     signs: [
-      'Old rings in the trees: the vine wraps around them, so you can swing.',
+      'Old rings in the trees: tied together, the vine wraps around them, so you can swing.',
       'Swing, land, swing again. Push along the swing to build it up — {jump} to let go.',
       'This bridge is cracking! Cross it quickly — whoever falls, the other catches.',
       'A blossom! It bounces you up the old oak — or hop on your partner.',
@@ -309,7 +309,7 @@ function mill(): LevelDef {
     signs: [
       'Plates open the gates of their color. Stand on one so your partner can pass — then swap.',
       'This millstone slab is heavy — only the tall sprout can hold it down. Small one, slip through and stand on the latch.',
-      'The lift goes up the mill wall. Hop on together — the vine won’t stretch for one of you.',
+      'The lift goes up the mill wall. Tie up and hop on together — the vine won’t stretch for one of you.',
       'The ferry crosses the mill race. Ride it together!',
       'Fans in the floor: the warm air floats you up to the loft.',
       'Remember the springboard? Bounce, sail across, then {tug} (too heavy? hold on while they climb).',
@@ -379,7 +379,7 @@ function paris(): LevelDef {
     movers: [{ x: 71, y: 6, w: 3, path: [[7, 0]], period: 8 }],
     signs: [
       'Paris at sunset! The streets are narrow up here — hop across.',
-      'Warm chimney air floats you up. Ride it together — the tall roof is out of one vine’s reach!',
+      'Warm chimney air floats you up. Tied together, ride it as a pair — the tall roof is out of one vine’s reach!',
       'Hop on the window-washer’s gondola together.',
       'Café awnings are bouncy!',
       'Loose tiles! Run across — they come back in a moment.',
@@ -600,7 +600,7 @@ function practice(): LevelDef {
     doorHold: 3,
     movers: [{ x: 179, y: F - 3, w: 3, path: [[5, 0]], period: 6 }],
     signs: [
-      'The practice ground. Nothing here is a race and nothing can be lost — try a thing, then try it again. {move} to walk, {jump} to jump. Your partner follows you about and holds the vine when you need them to.',
+      'The practice ground. Nothing here is a race and nothing can be lost — try a thing, then try it again. {move} to walk, {jump} to jump. Stand beside your partner and {shoot} to tie your vines together; {shoot} again unties them.',
       'Steps. A jump carries you about three tiles up — the small sprout a little higher.',
       'A dip. Hop in, hop out. Or hold {jump} as you fall and a leaf opens to float you down.',
       'Up the steps, then off the edge — hold {jump} the whole way down for the long glide.',

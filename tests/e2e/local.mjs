@@ -6,7 +6,7 @@ import { frames, gameTime, launch, open, padAxis, padPress, reporter, screenName
 const browser = await launch();
 const page = await open(browser, { pads: 2 });
 const t = reporter();
-const A = 0, B = 1, Y = 3, START = 9, DOWN = 13;
+const A = 0, B = 1, Y = 3, RT = 7, START = 9, DOWN = 13;
 
 await waitFor(async () => (await screenName(page)) === 'TitleScreen', 10000, 'title');
 await sleep(400);
@@ -56,6 +56,21 @@ await sleep(400);
 await padPress(page, 0, A);
 const resumed = await waitFor(() => page.evaluate(() => !window.__fbSession.paused && !document.querySelector('.overlay')), 3000, 'resume');
 t.check('START pauses, A resumes', paused && resumed);
+// The sprouts start loose, each going their own way, so the vine has to be asked for: RT beside your
+// partner ties it, and again lets it go. Everything below here is about the vine, so it is tied first
+// — and the asking is checked on the way, since this is the only place two real players press real
+// buttons at each other.
+const loose = await page.evaluate(() => window.__fbSession.tether.tied);
+await padPress(page, 0, RT);
+await gameTime(page, 0.3);
+const linked = await page.evaluate(() => window.__fbSession.tether.tied);
+await padPress(page, 0, RT);
+await gameTime(page, 0.3);
+const dropped = await page.evaluate(() => window.__fbSession.tether.tied);
+await padPress(page, 0, RT);
+await gameTime(page, 0.3);
+const relinked = await page.evaluate(() => ({ tied: window.__fbSession.tether.tied, len: window.__fbSession.tether.length }));
+t.check('the sprouts start loose; the vine button beside your partner ties the vine, and again lets it go', !loose && linked && !dropped && relinked.tied, { loose, linked, dropped, relinked });
 // tug: pad 2 walks away to stretch the string, then B yanks bird 1 over
 await padAxis(page, 1, 1, 0);
 await gameTime(page, 1.3);
@@ -96,7 +111,7 @@ const w1 = await xs();
 const swapped = await page.evaluate(() => window.__fb.flow.seats);
 t.check('controllers back in swapped slots go to whoever presses Ⓐ, not by slot', swapped[0] === 'pad1' && swapped[1] === 'pad0' && w1[0] < w0[0] - 20 && Math.abs(w1[1] - w0[1]) < 30, { swapped, w0, w1 });
 // clear the level: both birds into the nest
-await page.evaluate(() => { const s = window.__fbSession; const n = s.L.nest; s.birds[0].place({ x: n.x - 10, y: n.y - 6 }); s.birds[1].place({ x: n.x + 10, y: n.y - 6 }); s.tether.reset(s.birds[0], s.birds[1]); });
+await page.evaluate(() => { const s = window.__fbSession; const n = s.L.nest; s.birds[0].place({ x: n.x - 10, y: n.y - 6 }); s.birds[1].place({ x: n.x + 10, y: n.y - 6 }); s.tether.tie(s.birds[0], s.birds[1]); });
 const cleared = await waitFor(() => page.evaluate(() => !!document.querySelector('.overlay.clear [data-act="next"]')), 8000, 'clear overlay');
 await sleep(500);
 await padPress(page, 0, A);
@@ -108,7 +123,7 @@ await page.screenshot({ path: `${process.env.E2E_OUT ?? './.out'}/local-level2.p
 
 // a sign names the buttons of the player standing at it, not of whoever touched a device last
 const hint = () => page.evaluate(() => document.querySelector('.hud-hint:not(.hidden)')?.textContent ?? null);
-const atSign = (k) => page.evaluate((k) => { const s = window.__fbSession; const g = s.L.signs[0]; s.birds[k].place({ x: g.x, y: g.y }); s.birds[1 - k].place({ x: g.x + (k ? -5 : 5) * 32, y: g.y }); s.tether.reset(s.birds[0], s.birds[1]); }, k);
+const atSign = (k) => page.evaluate((k) => { const s = window.__fbSession; const g = s.L.signs[0]; s.birds[k].place({ x: g.x, y: g.y }); s.birds[1 - k].place({ x: g.x + (k ? -5 : 5) * 32, y: g.y }); s.tether.tie(s.birds[0], s.birds[1]); }, k);
 await page.evaluate(() => { const f = window.__fb.flow; f.seats = ['keysL', 'keysR']; f.seatGen = [0, 0]; f.playLevel(0); });
 await waitFor(() => page.evaluate(() => window.__fbSession?.opts.seats[1] === 'keysR' && window.__fbSession.L.index === 0), 5000, 'two on one keyboard');
 await sleep(500);

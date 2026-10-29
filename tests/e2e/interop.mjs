@@ -61,6 +61,9 @@ async function round(hostBase, guestBase, label) {
   t.check(`${label}: the host's pick starts the level on both`, !!inLevel);
   if (!inLevel) return done(false);
   await sleep(1200);
+  // there is no vine until a sprout asks for one; this check is about what the vine does, so tie it
+  // on both screens (online.mjs is where the asking itself is tested)
+  for (const pg of [host, guest]) await pg.evaluate(() => { const s = window.__fbSession; s.tether.tie(s.birds[0], s.birds[1]); });
   // the host walks right: on the guest's screen that sprout must walk, and the vine must take up and
   // drag the guest's own sprout along once it is at full stretch
   const read = () => guest.evaluate(() => { const s = window.__fbSession; return { x: s.birds.map((b) => Math.round(b.x)), mirror: s.auth.findIndex((a) => !a), vine: Math.round(s.tether.length) }; });

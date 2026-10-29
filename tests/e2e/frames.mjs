@@ -30,7 +30,7 @@ const swing = await page.evaluate(() => {
   const [a, b] = s.birds;
   a.place({ x: 60 * 32 + 16, y: 9 * 32 - 10 });
   b.placeCenter({ x: 66 * 32, y: 9 * 32 + 10 });
-  s.tether.reset(a, b);
+  s.tether.tie(a, b);
   const hold = { moveX: 0, moveY: 0, jump: false, jumpPressed: false, anchor: true, tugPressed: false, dashPressed: false, heartPressed: false, heyPressed: false };
   const push = { ...hold, anchor: false, moveX: 1 };
   s.controlsFor = (i) => (i === 0 ? hold : push);

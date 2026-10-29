@@ -5,6 +5,7 @@ import '@fontsource/fredoka/latin-700.css';
 import './style.css';
 import { App } from './app';
 import { audio } from './audio/audio';
+import { registerWorker, watchInstall } from './core/install';
 import { IS_XBOX } from './core/platform';
 import { settings } from './core/settings';
 import { debugOn } from './core/debug';
@@ -56,6 +57,10 @@ async function loadFonts() {
   await Promise.race([fonts, new Promise((r) => setTimeout(r, 1500))]).catch(() => undefined);
 }
 
+// Before boot, not inside it: the browser's offer to install can land at any moment, and a listener
+// added after it has landed hears nothing.
+watchInstall();
+
 async function boot() {
   const root = document.getElementById('app')!;
   await loadFonts();
@@ -81,6 +86,8 @@ async function boot() {
     flow.title();
   }
   app.start();
+  // the worker is what makes the browser willing to install this at all (see core/install.ts)
+  registerWorker();
   if (import.meta.env.DEV) Object.assign(window, { __fb: { app, flow, audio, save: await import('./core/save') } });
 }
 

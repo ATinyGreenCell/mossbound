@@ -18,8 +18,14 @@ export const AIR_CARRY = 150;
 /** landed faster than a run and still pushing that way: slide down to running speed this slowly */
 export const SLIDE_DECEL = 900;
 export const GRAVITY = 1900;
-/** gravity multiplier while falling or after letting go of jump early */
-export const FALL_MULT = 1.6;
+/**
+ * Gravity multiplier while falling, or after letting go of jump early.
+ *
+ * This is the descent only — a jump's height is set by JUMP_V against GRAVITY, so easing this slows
+ * the way down without lowering the hop. At 1.6 the drop was quicker than the games this one is
+ * shaped after; a jump went up like Mario's and came down like a dropped stone.
+ */
+export const FALL_MULT = 1.3;
 export const JUMP_V = 640;
 /** letting go of jump while rising keeps this much of the upward speed */
 export const JUMP_CUT = 0.45;
@@ -30,7 +36,11 @@ export const JUMP_CUT = 0.45;
  * the hop a 60 Hz screen always gave, which is the one most of this game is played on.
  */
 export const JUMP_MIN_HOLD = 1 / 60;
-export const MAX_FALL = 840;
+/**
+ * Terminal velocity. 700 rather than 840: a shade over twenty tiles a second, and it happens to be
+ * exactly LAND_SQUASH_MAX × LAND_SQUASH_V, so a landing at full speed still squashes all the way.
+ */
+export const MAX_FALL = 700;
 /** nothing moves a bird faster than this (springs, tugs and big swings stay well under it) */
 export const MAX_SPEED = 2000;
 export const COYOTE = 0.1;
@@ -75,6 +85,11 @@ export const WALL_JUMP_LOCK = 0.16;
 export const WALL_KICK_WINDOW = 0.12;
 
 // ---- the string
+/**
+ * How close the two sprouts have to be for the vine button to tie them together — near enough that
+ * you walked over to do it on purpose, not so near that you have to stand on each other's feet.
+ */
+export const LINK_REACH = 2.5 * T;
 export const ROPE_LEN = 8 * T;
 /** shortest a bird can climb the string to */
 export const ROPE_MIN = 18;

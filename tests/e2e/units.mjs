@@ -473,7 +473,7 @@ const vine = await page.evaluate(async () => {
       for (let f = 0; f < n; f++) {
         A.place(home);
         B.place({ x: home.x + far, y: home.y });
-        s.tether.reset(A, B);
+        s.tether.tie(A, B);
         now += dt * 1000;
         const t0 = performance.now();
         s.update(dt);

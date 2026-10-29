@@ -5,6 +5,7 @@ import { debugOn } from '../core/debug';
 import { canSave, exportCode, importCode, latestRun, levelRecord, runSlot, save } from '../core/save';
 import { saveSettings, settings, type PerfMode } from '../core/settings';
 import { ceremony } from '../core/testmode';
+import { canInstall, install, onInstallable } from '../core/install';
 import { IS_IOS, IS_STANDALONE, IS_XBOX, XBOX_HINT } from '../core/platform';
 import type { Flow } from '../flow';
 import { Bird, BIRD_COLORS } from '../game/bird';
@@ -31,7 +32,7 @@ export const CONTROLS_HTML = `
       <dt>SHIFT · X · J</dt><dd>hold on (plant your roots)</dd>
       <dt>E · C · L</dt><dd>tug the vine</dd>
       <dt>R · V · ;</dt><dd>dash (small sprout)</dd>
-      <dt>T · B · [</dt><dd>shoot your vine — at a ring, or into soil to grow a plant</dd>
+      <dt>T · B · [</dt><dd>your vine — beside your partner it ties you together (press again to let go); otherwise at a ring, or into soil to grow a plant</dd>
       <dt>Q · H</dt><dd>♥ to your partner</dd>
       <dt>ESC</dt><dd>menu</dd>
     </dl>
@@ -44,7 +45,7 @@ export const CONTROLS_HTML = `
       <dt>Ⓧ · triggers</dt><dd>hold on</dd>
       <dt>Ⓑ</dt><dd>tug the vine</dd>
       <dt>RB</dt><dd>dash (small sprout)</dd>
-      <dt>RT</dt><dd>shoot your vine — at a ring, or into soil to grow a plant</dd>
+      <dt>RT</dt><dd>your vine — beside your partner it ties you together (again to let go); otherwise at a ring, or into soil</dd>
       <dt>Ⓨ</dt><dd>♥</dd>
       <dt>☰ · ⧉</dt><dd>menu</dd>
     </dl>
@@ -59,19 +60,19 @@ export const CONTROLS_HTML = `
       <dt>HOLD</dt><dd>hold on</dd>
       <dt>TUG</dt><dd>tug the vine</dd>
       <dt>DASH</dt><dd>dash (small sprout)</dd>
-      <dt>VINE</dt><dd>shoot your vine — at a ring, or into soil</dd>
+      <dt>VINE</dt><dd>beside your partner, ties you together (again to let go) · otherwise at a ring, or into soil</dd>
       <dt>♥</dt><dd>send a heart</dd>
     </dl>
   </div>
 </div>
 <div class="ctl-tips">
-  <span>The vine keeps you within 8 tiles of each other — and catches you when you fall.</span>
+  <span>You start loose: two sprouts going their own way. Stand next to your partner and press VINE to tie the vine between you — then it keeps you within 8 tiles of each other, and catches you when you fall. Press it again to let go.</span>
   <span>The tall sprout is strong: it can't be budged, and its tug flings the small one far. The small one jumps higher, climbs walls and dashes through the air.</span>
   <span>Jump on your partner's head to bounce up high.</span>
   <span>Touch a wall in mid-air and jump straight away to kick off it — take the two walls of a shaft in turns and you climb it. The same wall twice running won't do.</span>
   <span>Hang under your partner and climb up with ↑.</span>
   <span>The vine wraps around corners and rings: swing under them.</span>
-  <span>Or shoot your vine straight at a ring and hang from it. The small sprout's shot reaches nearly twice as far; climb up with ↑, or tug your partner over to you.</span>
+  <span>Tied together, you can also shoot the vine straight at a ring and hang from it. The small sprout's shot reaches nearly twice as far; climb up with ↑, or tug your partner over to you.</span>
   <span>Standing on a patch of soil, the small sprout's vine goes into the ground instead: a plant grows, with leaves you can both stand on.</span>
   <span>TUG yanks your partner to you. If they're holding on, it yanks <i>you</i> to them.</span>
   <span>Fall in? You float back to your partner as a little seed.</span>
@@ -239,11 +240,26 @@ export class TitleScreen implements Screen {
     app.ui.appendChild(this.el);
     this.list = this.buildMain();
     audio.music('title');
+    // The browser decides whether it will take an install, and it decides a moment after the page
+    // loads — usually after this screen has already been built. So rebuild when the answer arrives,
+    // or the button only ever turns up on the second visit to the title.
+    onInstallable(() => {
+      if (this.app.current !== this) return;
+      const sel = this.list.sel;
+      this.list.dispose();
+      this.list = this.buildMain();
+      this.list.sel = Math.min(Math.max(sel, 0), this.list.items().length - 1);
+      this.list.highlight();
+    });
     if (import.meta.env.DEV) Object.assign(window, { __fbTitle: this });
   }
 
   private buildMain() {
+    // Android and the desktops offer a real install once the browser says it will take one (see
+    // core/install.ts); iOS never fires that event and installs from Safari's own Share menu, so it
+    // gets the sentence instead. Installed already? Neither is any use, and both go.
     const iosHint = IS_IOS && !IS_STANDALONE ? '<div class="foot-hint">tip: Share → <b>Add to Home Screen</b> to play full screen</div>' : '';
+    const installBtn = !IS_STANDALONE && canInstall() ? '<div class="btn small" data-act="install">INSTALL</div>' : '';
     this.el.innerHTML = `
       <div class="logo-wrap"><div class="logo">moss<span>bound</span></div><div class="logo-sub">two little sprouts · one vine · any distance</div></div>
       <div class="menu">
@@ -252,6 +268,7 @@ export class TitleScreen implements Screen {
         <div class="btn small" data-act="practice">PRACTICE ON YOUR OWN</div>
         <div class="btn small" data-act="controls">HOW TO PLAY</div>
         <div class="btn small" data-act="settings">SETTINGS</div>
+        ${installBtn}
         ${debugOn() ? '<div class="btn small" data-act="debug">DEBUG GROUND</div>' : ''}
       </div>
       ${IS_XBOX ? `<div class="xbox-hint">${XBOX_HINT}</div>` : iosHint}`;
@@ -275,6 +292,16 @@ export class TitleScreen implements Screen {
         break;
       case 'controls':
         this.flow.showControls();
+        break;
+      case 'install':
+        // the browser takes it from here; either way the offer is spent, so rebuild without it
+        void install().then(() => {
+          const sel = this.list.sel;
+          this.list.dispose();
+          this.list = this.buildMain();
+          this.list.sel = Math.min(sel, this.list.items().length - 1);
+          this.list.highlight();
+        });
         break;
       case 'settings':
         this.list.dispose();

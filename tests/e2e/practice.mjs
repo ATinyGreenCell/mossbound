@@ -152,7 +152,7 @@ const lit = await page.evaluate(() => {
   // (both of them, or the vine snaps the player back to a partner a hundred tiles away)
   s.birds[0].placeCenter({ x: f.x, y: f.y });
   s.birds[1].placeCenter({ x: f.x + 40, y: f.y });
-  s.tether.reset(s.birds[0], s.birds[1]);
+  s.tether.tie(s.birds[0], s.birds[1]);
   return { feathers: s.feathers, at: { x: f.x, y: f.y } };
 });
 await waitFor(() => page.evaluate(() => window.__fbSession.feathers !== 0), 4000, 'the firefly');

@@ -94,6 +94,13 @@ export async function open(browser, { viewport = { width: 1280, height: 720 }, u
     hidePads,
   );
   await page.setViewport(viewport);
+  // Every waitFor below follows SLOW; this one is puppeteer's own deadline and does not, so it was
+  // the last timeout in the suite still written for a machine with a GPU. `networkidle0` on a page
+  // that pulls four font files and builds a level, on a runner drawing software frames with another
+  // group running beside it, does not reliably finish inside thirty seconds — and when it misses,
+  // the group dies at `open` with a navigation timeout and no checks at all, which looks like a
+  // broken test rather than a busy machine.
+  page.setDefaultNavigationTimeout(30000 * SLOW);
   await page.goto(url(query), { waitUntil: 'networkidle0' });
   await page.bringToFront();
   await waitFor(() => page.evaluate(() => !!window.__fb?.app?.current), 20000, 'boot');
@@ -248,14 +255,14 @@ export async function installRig(page) {
       const birds = [new Bird(0), new Bird(1)];
       birds.forEach((b, i) => { b.setKind(kinds[i]); b.place(L.spawns[i]); });
       const tether = new Tether(world);
-      tether.reset(birds[0], birds[1]);
+      tether.tie(birds[0], birds[1]);
       const c = [makeControls(), makeControls()];
       let t = 0;
       const rig = {
         L, world, birds, tether, c, T: 32,
         /** put a bird with its feet on tile row `ty` (column tx) */
         place(i, tx, ty) { birds[i].place({ x: tx * 32 + 16, y: ty * 32 - 10.01 }); },
-        reset() { tether.reset(birds[0], birds[1]); },
+        reset() { tether.tie(birds[0], birds[1]); },
         /** set the clock that moving platforms run on */
         at(s) { t = s; world.setTime(s); },
         /** one physics step of `dt` seconds, leaving the one-shot presses for step()/frame() to spend */

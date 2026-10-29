@@ -47,7 +47,7 @@ import { Creature, parseLevel, type LevelData, type Pt } from './level';
 import { LEVELS, PRACTICE } from './levels';
 import { menuOpen, RemoteFeed } from './remote';
 import { Tether } from './tether';
-import { INVULN_TIME, LAND_KICK_DROP, LAND_KICK_FULL, NOCLIP_SPEED, ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TRAP_RANGE, TUG_COOLDOWN, TUG_MIN } from './tuning';
+import { INVULN_TIME, LAND_KICK_DROP, LAND_KICK_FULL, LINK_REACH, NOCLIP_SPEED, ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TRAP_RANGE, TUG_COOLDOWN, TUG_MIN } from './tuning';
 import type { Kind } from './traits';
 import { Trap, World } from './world';
 
@@ -341,8 +341,16 @@ export class Session implements Screen {
         }
         break;
       case 'unhook':
-        this.tether.release(other.idx);
+        // (their vine can only be over a ring while there is a vine; untied, there is nothing to let go of)
+        if (this.tether.tied) this.tether.release(other.idx);
         other.hooked = false;
+        break;
+      // the partner walked up to us and asked for the vine (or let it go)
+      case 'tie':
+        if (other.present && !other.ghost && !this.tether.tied) this.tieVine(other, false);
+        break;
+      case 'untie':
+        if (this.tether.tied) this.untieVine(other, false);
         break;
       // (an index from the partner is checked by World.grow, as the collectables' are here)
       case 'grow':
@@ -816,11 +824,43 @@ export class Session implements Screen {
    * pointing rather than by a line through it — a thumb aims roughly, and the swing is forgiving in
    * the same way when the vine wraps on its own.
    */
+  /**
+   * Tie the vine between the sprouts. Either of them can do it, and it replicates the way a vine
+   * over a ring does — the partner's screen ties its own copy from its own view of where the two of
+   * them are, which is what the rope solver already expects of every screen.
+   */
+  private tieVine(b: Bird, mine = true) {
+    this.tether.tie(this.birds[0], this.birds[1]);
+    const o = this.birds[1 - b.idx];
+    audio.play('grab', 0.55, 0, 0.95);
+    this.fx.burst(PK.Leaf, (b.x + o.x) / 2, (b.y + o.y) / 2 - 4, 7, 90, 0.5, 5, '#9fd36a', -30, 2.5);
+    if (mine && b.local) this.send({ k: 'tie' });
+  }
+
+  /** Let the vine go. Anyone hanging from it drops, which Tether.untie arranges by itself. */
+  private untieVine(b: Bird, mine = true) {
+    this.tether.untie();
+    for (const sp of this.birds) sp.hooked = false;
+    audio.play('uiBack', 0.45, 0, 1.15);
+    this.fx.burst(PK.Leaf, b.x, b.y - 4, 4, 70, 0.45, 4, '#9fd36a', 40, 2.5);
+    if (mine && b.local) this.send({ k: 'untie' });
+  }
+
   private shoot(b: Bird) {
     if (b.ghost || b.shotCd > 0) return;
     // pressing it again lets go of the ring you hold: the vine coils back in and you keep your speed
     if (this.tether.hooked(b.idx)) {
       this.unhook(b);
+      b.shotCd = SHOT_COOLDOWN * 0.5;
+      return;
+    }
+    const near = this.birds[1 - b.idx];
+    // Standing next to your partner, the vine button is about the two of you: it ties the vine
+    // between you, or lets it go again. That is the only way the two sprouts are ever roped
+    // together — walk off on your own and you are on your own, which is the point.
+    if (near.present && !near.ghost && Math.hypot(near.x - b.x, near.y - b.y) <= LINK_REACH) {
+      if (this.tether.tied) this.untieVine(b);
+      else this.tieVine(b);
       b.shotCd = SHOT_COOLDOWN * 0.5;
       return;
     }
@@ -1064,11 +1104,12 @@ export class Session implements Screen {
         audio.play('hop', 0.6 * vol, pan);
         break;
       case 'land': {
-        // dust on every landing, a ring on a real one, and the camera only for a proper thump — a
-        // kick on every hop would have the view twitching all the way across a level
+        // Dust on every landing, and the camera only for a proper thump — a kick on every hop would
+        // have the view twitching all the way across a level. There used to be a white ring as well,
+        // on anything above a hop: at two or three landings a second it read as a flash going off in
+        // your face rather than as weight, so the dust carries the landing on its own now.
         audio.play('land', clamp(e.v / 900, 0.25, 0.9) * vol, pan);
         fx.burst(PK.Dust, b.x, b.y + b.h / 2 - 1, Math.round(clamp(e.v / 90, 3, 14)), 110, 0.45, 5, '#f2e8d8', 0, 5);
-        if (e.v > 420) fx.add(PK.Ring, b.x, b.y + b.h / 2 - 1, 0, 0, 0.28, 13 + clamp((e.v - 420) / 40, 0, 15), '#fffaf0');
         const kick = clamp((e.d - LAND_KICK_DROP) / (LAND_KICK_FULL - LAND_KICK_DROP), 0, 1);
         if (kick > 0 && b.local) this.cam.shake(0.8 + kick * 2.2);
         break;

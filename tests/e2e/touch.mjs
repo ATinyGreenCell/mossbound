@@ -61,7 +61,7 @@ await touch('touchEnd', []);
 const em = await waitFor(async () => (await bird()).emote === 'heart', 2000, 'heart');
 t.check('♥ sends a heart', em);
 // TUG: put the partner a few tiles away first (seat 1 takes every input, so the keyboard would move both)
-await page.evaluate(() => { const s = window.__fbSession; const a = s.birds[0]; s.birds[1].place({ x: a.x + 150, y: a.y - 2 }); s.tether.reset(s.birds[0], s.birds[1]); });
+await page.evaluate(() => { const s = window.__fbSession; const a = s.birds[0]; s.birds[1].place({ x: a.x + 150, y: a.y - 2 }); s.tether.tie(s.birds[0], s.birds[1]); });
 await sleep(400);
 const tug = await center('.tc-tug');
 await touch('touchStart', [[tug.x, tug.y, 5]]);
