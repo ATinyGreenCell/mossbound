@@ -163,23 +163,47 @@ await scenario('clocks', async () => {
   const him = await device(OPEN);
   const code = (page) => page.evaluate(`(async () => (${saveModule}).exportCode())()`);
   const take = (page, c) => page.evaluate(`(async () => (${saveModule}).importCode(${JSON.stringify(c)}))()`);
+  /**
+   * A run is only worth exporting once the save actually holds it.
+   *
+   * Leaving a level is what writes the run down, and on a machine drawing a few frames a second that
+   * has not necessarily happened by the time the next line asks for a save code — so the code went
+   * out carrying the state from before the lantern, and the exchange below then had the two devices
+   * arguing about the wrong pair of runs. It failed in whichever direction the timing fell, which is
+   * what made it look like a verdict about clocks rather than a race.
+   *
+   * (The clocks here are inert, incidentally: the save orders copies by a logical count of its own,
+   * and `Date.now` appears nowhere in src. A device whose wall clock is ten minutes out cannot bring
+   * back an older anything, by construction. What this scenario still earns its keep for is the
+   * convergence — two devices swapping codes both ways end up agreeing, whoever merges first.)
+   */
+  const held = (page, cp) => waitFor(
+    () => page.evaluate(`(async () => { const r = (${saveModule}).save.runs.garden; return !!r && !!r.run && r.run.cp === ${cp}; })()`),
+    6000,
+    `lantern ${cp + 1} written down`,
+  );
   await play(her, 0);
   await her.evaluate(() => window.__fbSession.light(0, true));
   await sleep(1500);
   await levels(her);
+  await held(her, 0);
   await take(him, await code(her));
   await levels(him);
   await pick(him, 'continue', 0);
   await him.evaluate(() => window.__fbSession.light(1, true));
   await sleep(1500);
   await levels(him);
+  await held(him, 1);
   await take(her, await code(him));
   await take(him, await code(her));
   await levels(her);
   await levels(him);
   const hers = await text(her, '[data-act="continue"]');
   const his = await text(him, '[data-act="continue"]');
-  t.check(`a device whose clock is off can't bring back an older lantern (hers: “${hers}”, his: “${his}”)`, /lantern 2/.test(hers) && /lantern 2/.test(his), { hers, his });
+  // what each of them is actually holding, so a disagreement says which copy won and why
+  const held2 = (page) => page.evaluate(`(async () => { const s = (${saveModule}).save; return { clock: s.clock, runs: Object.fromEntries(Object.entries(s.runs).map(([k, v]) => [k, { gen: v.gen, at: v.at, cp: v.run ? v.run.cp : null }])) }; })()`);
+  const saves = { her: await held2(her), him: await held2(him) };
+  t.check(`a device whose clock is off can't bring back an older lantern (hers: “${hers}”, his: “${his}”)`, /lantern 2/.test(hers) && /lantern 2/.test(his), { hers, his, saves });
   errors.push(...her.errors, ...him.errors);
 });
 
@@ -238,7 +262,12 @@ await scenario('save codes', async () => {
   t.check('a save code pasted with line breaks and invisible characters still loads', ok === true, ok);
   await page.evaluate(() => { navigator.clipboard.writeText = () => Promise.reject(new Error('not allowed')); });
   await page.evaluate(() => window.__fb.flow.title());
-  await sleep(450);
+  // Wait until there is exactly one title on screen. A screen change is queued and taken up at the
+  // start of the NEXT frame, so until then the screen being left is still in the document — with a
+  // settings button of its own, which a click finds first and which is disposed a moment later
+  // ("Node is detached from document"). Half a second covers that on a screen and is less than one
+  // frame on a runner with no GPU, which is the whole of why this came and went.
+  await waitFor(() => page.evaluate(() => document.querySelectorAll('.title-screen').length === 1 && window.__fb.app.current?.constructor.name === 'TitleScreen'), 6000, 'one title on screen');
   await page.click('[data-act="settings"]');
   await waitFor(() => page.evaluate(() => !!document.querySelector('[data-act="copysave"]')), 3000, 'settings');
   await page.evaluate(() => { for (const d of document.querySelectorAll('details.advanced')) d.open = true; });

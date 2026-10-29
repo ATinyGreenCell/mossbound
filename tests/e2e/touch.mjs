@@ -45,14 +45,18 @@ const up = await waitFor(async () => { const b = await bird(); return b.vy < -20
 await touch('touchEnd', [[jx + 50, jy, 1]]);
 t.check('JUMP jumps while the other thumb steers', !!up, up);
 await touch('touchEnd', []);
-await sleep(700);
-// HOLD anchors (while grounded)
+// HOLD anchors, and anchoring wants feet on the ground. The jump above takes about six tenths of a
+// second of GAME time to come back down, which is six frames where a frame is a tenth of one — so
+// sleeping 700 ms of wall time was not that wait at all, and this went on to hold a button while the
+// sprout was still in the air. Wait for the ground instead of guessing at how long it takes.
+await waitFor(async () => (await bird()).g, 8000, 'back on the ground');
 const hold = await center('.tc-anchor');
 await touch('touchStart', [[hold.x, hold.y, 3]]);
 const anchored = await waitFor(async () => (await bird()).anchored, 2000, 'anchor');
 await touch('touchEnd', []);
-await sleep(200);
-const released = !(await bird()).anchored;
+// and letting go is polled for, not slept through: two hundred milliseconds is less than one frame
+// at the same rate, so the release had not been read yet and the feet still looked planted
+const released = await waitFor(async () => !(await bird()).anchored, 4000, 'let go').catch(() => false);
 t.check('HOLD plants your feet, letting go releases', anchored && released);
 // ♥
 const heart = await center('.tc-heart');
@@ -68,14 +72,25 @@ await touch('touchStart', [[tug.x, tug.y, 5]]);
 await touch('touchEnd', []);
 const twang = await waitFor(() => page.evaluate(() => window.__fbSession.tether.twang > 0.2 || window.__fbSession.birds[1].tuggedT > 0), 2000, 'tug');
 t.check('TUG yanks the string', twang);
-// VINE: the shot goes off (there's no ring in the garden's first stretch, so it's the cooldown that
-// shows the button was heard — the shot itself is played in physics.mjs and levels.mjs)
+// VINE: beside your partner it ties the vine between you, and being tied is a state that stays put.
+// This used to watch the shot cooldown instead, which is three tenths of a second at most and half
+// that for a link — one or two frames where a frame is a tenth of a second — and it had to be caught
+// between two round trips to the browser. It was the gate's most-retried check for exactly that
+// reason. A phone player needs to be able to tie up at all, so that is the better thing to ask.
+// (Shooting at a ring is played out in physics.mjs and levels.mjs.)
 const vine = await center('.tc-shoot');
-await page.evaluate(() => { window.__fbSession.birds[0].shotCd = 0; });
+await page.evaluate(() => {
+  const s = window.__fbSession;
+  const a = s.birds[0];
+  s.birds[1].place({ x: a.x + 40, y: a.y - 2 }); // within LINK_REACH of each other
+  s.tether.untie();
+  a.shotCd = 0;
+});
+await sleep(400);
 await touch('touchStart', [[vine.x, vine.y, 9]]);
 await touch('touchEnd', []);
-const shot = await waitFor(() => page.evaluate(() => window.__fbSession.birds[0].shotCd > 0), 2000, 'vine shot');
-t.check('VINE shoots the vine', shot);
+const shot = await waitFor(() => page.evaluate(() => window.__fbSession.tether.tied), 2000, 'the vine tied');
+t.check('VINE ties the vine to your partner', shot);
 // pause ❚❚, then RESUME by tapping it
 const pause = await center('.tc-pause');
 await touch('touchStart', [[pause.x, pause.y, 6]]);
