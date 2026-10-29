@@ -2,7 +2,7 @@ import { audio } from './audio/audio';
 import type { App } from './app';
 import { clamp } from './core/math';
 import type { DeviceId } from './core/input';
-import { freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
+import { flushSave, freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
 import { saveSettings, settings } from './core/settings';
 import { LEVELS } from './game/levels';
 import { Session } from './game/session';
@@ -80,6 +80,15 @@ export class Flow {
 
   title() {
     this.dropLink();
+    // Whatever we are leaving writes its progress down first.
+    //
+    // A screen is CONSTRUCTED here and swapped in at the start of the next frame — and the next
+    // frame is also when the screen being left is disposed, which is when a level flushes the run it
+    // has been playing. So the title and the level select were both built from the save as it stood
+    // before the last thing you did in the level, and CONTINUE offered the lantern before the one
+    // you had just lit. flushSave asks anything with unsaved progress for it (see onFlush), which is
+    // exactly what this needs and what `persist` on its own does not do.
+    flushSave();
     this.app.setScreen(new TitleScreen(this.app, this));
   }
 
@@ -258,6 +267,8 @@ export class Flow {
       if (this.role === 'host') this.command({ t: 'lobby', c: ++this.cmd });
     }
     window.clearInterval(this.loadRetry);
+    // the cards show what has been played, so it has to be written down first (see title)
+    flushSave();
     this.app.setScreen(new LevelSelect(this.app, this));
   }
 

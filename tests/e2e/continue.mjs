@@ -37,8 +37,12 @@ async function play(page, i) {
 /** The level select, past its click guard. */
 async function levels(page) {
   await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.levels(); });
-  await waitFor(async () => (await now(page)) === 'LevelSelect', 5000, 'level select');
-  await sleep(450);
+  // Wait for there to be exactly one level select. A screen change is taken up at the start of the
+  // NEXT frame, so until then the one being left is still in the document — and if that was also a
+  // level select, a querySelector finds ITS cards, built before whatever just happened. Asking
+  // `app.current` is no help either: it is still the outgoing screen until the swap. Half a second
+  // covered the gap on a screen and is less than one frame on a runner without a GPU.
+  await waitFor(() => page.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 8000, 'one level select on screen');
 }
 const text = (page, sel) => page.evaluate((sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim() ?? '', sel);
 /** Click a card on the level select and wait to be in that level. */
