@@ -1,7 +1,7 @@
 // Two players on one screen with two (emulated) Xbox controllers: claim seats, pick a level, both
 // birds move independently, pause/resume, tug, controllers dropping out and coming back (in each
 // other's slots, too), level clear.
-import { frames, launch, open, padAxis, padPress, reporter, screenName, sleep, waitFor, canTimePhysics } from './harness.mjs';
+import { frames, gameTime, launch, open, padAxis, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const page = await open(browser, { pads: 2 });
@@ -40,17 +40,15 @@ const s0 = await page.evaluate(() => window.__fbSession.birds.map((b) => ({ x: b
 // pad 0 walks right, pad 1 jumps
 await padAxis(page, 0, 1, 0);
 await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: true, touched: true, value: 1 }; });
-await frames(page, 12);
+// 0.2 s of the game's own clock, not twelve frames: a frame is 16 ms of game time on one machine
+// and 100 ms on another, and at the latter the jump has peaked and landed again by frame twelve
+await gameTime(page, 0.2);
 const mid = await page.evaluate(() => window.__fbSession.birds.map((b) => ({ x: b.x, y: b.y, vy: b.vy })));
 await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: false, touched: false, value: 0 }; });
 await padAxis(page, 0, 0, 0);
-await sleep(600);
+await gameTime(page, 0.6);
 const s1 = await page.evaluate(() => window.__fbSession.birds.map((b) => ({ x: b.x, y: b.y })));
-// how far a held stick carries a sprout, and how high a jump is at its peak, both inside a fixed
-// number of frames: rates, so they need a machine that keeps real time (see canTimePhysics)
-const slowPads = await canTimePhysics(page);
-if (slowPads) t.skip('pad 1 moves bird 1, pad 2 makes bird 2 jump', `${slowPads} — got ${JSON.stringify({ s0, mid, s1 })}`);
-else t.check('pad 1 moves bird 1, pad 2 makes bird 2 jump', s1[0].x > s0[0].x + 20 && mid[1].y < s0[1].y - 10 && Math.abs(s1[1].x - s0[1].x) < 30, { s0, mid, s1 });
+t.check('pad 1 moves bird 1, pad 2 makes bird 2 jump', s1[0].x > s0[0].x + 20 && mid[1].y < s0[1].y - 10 && Math.abs(s1[1].x - s0[1].x) < 30, { s0, mid, s1 });
 // pause from either pad, resume with A
 await padPress(page, 1, START);
 const paused = await waitFor(() => page.evaluate(() => window.__fbSession.paused && !!document.querySelector('.overlay')), 3000, 'pause');
@@ -60,16 +58,14 @@ const resumed = await waitFor(() => page.evaluate(() => !window.__fbSession.paus
 t.check('START pauses, A resumes', paused && resumed);
 // tug: pad 2 walks away to stretch the string, then B yanks bird 1 over
 await padAxis(page, 1, 1, 0);
-await sleep(1300);
+await gameTime(page, 1.3);
 await padAxis(page, 1, 0, 0);
-await sleep(300);
+await gameTime(page, 0.3);
 const before = await page.evaluate(() => ({ x0: window.__fbSession.birds[0].x, len: window.__fbSession.tether.length }));
 await padPress(page, 1, B);
-await sleep(700);
+await gameTime(page, 0.7);
 const after = await page.evaluate(() => ({ x0: window.__fbSession.birds[0].x, twang: window.__fbSession.tether.twang }));
-const slowTug = await canTimePhysics(page);
-if (slowTug) t.skip('B tugs the partner along the string', `${slowTug} — partner went from ${before.x0.toFixed(0)} to ${after.x0.toFixed(0)}`);
-else t.check('B tugs the partner along the string', after.x0 > before.x0 + 32, { before, after });
+t.check('B tugs the partner along the string', after.x0 > before.x0 + 32, { before, after });
 // a controller drops out: notice. It comes back, and its Ⓐ takes the bird back (a pad that reconnects
 // can turn up in another player's slot, so it's never handed back by slot number alone)
 const noticeUp = () => page.evaluate(() => !!document.querySelector('.hud-notice:not(.hidden)'));

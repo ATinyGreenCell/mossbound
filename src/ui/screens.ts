@@ -525,7 +525,21 @@ export class LocalScreen implements Screen {
         <div class="btn small" data-act="back">BACK</div>
       </div>
       ${IS_XBOX ? `<div class="xbox-hint">${XBOX_HINT}</div>` : ''}`;
-    this.el.querySelector('[data-act="back"]')!.addEventListener('click', () => this.flow.title());
+    this.el.querySelector('[data-act="back"]')!.addEventListener('click', () => this.leave());
+  }
+
+  /**
+   * Go back to the title, and stop the countdown on the way out.
+   *
+   * `dispose()` stops it too, but a screen is swapped in at the start of the NEXT frame, and the
+   * countdown is a wall-clock timer — 450 ms, and 90 under ?fast. Where a frame lasts longer than
+   * that the timer fires first and the game starts behind the player who just asked to leave, which
+   * is the one thing this screen must not do. Nothing here can be left for the next frame to undo.
+   */
+  private leave() {
+    window.clearTimeout(this.startTimer);
+    this.startTimer = 0;
+    this.flow.title();
   }
 
   private nudge() {
@@ -552,7 +566,7 @@ export class LocalScreen implements Screen {
     }
     if (input.menu.back && !this.seats[0] && !this.seats[1]) {
       audio.play('uiBack');
-      this.flow.title();
+      this.leave();
       return;
     }
     const devs = input.devices();

@@ -113,6 +113,35 @@ export async function waitFor(fn, ms, label) {
 }
 
 /**
+ * Wait for `seconds` of GAME time — the clock the game itself runs on (App.time, which advances by
+ * each frame's dt), not the wall clock and not a count of frames.
+ *
+ * This is the honest unit for anything that asks how far something got. A sprout flung by a tug
+ * travels a distance in game seconds; sleeping 700 ms and looking measures that only on a machine
+ * where game time and wall time happen to agree. They do not agree here: dt is capped at 0.1 a
+ * frame, so three frames a second buys 0.3 s of game time per wall second, and 700 ms of sleeping
+ * measured a fifth of the throw and called it short.
+ *
+ * Counting frames is no better and is wrong in the other direction — a frame is 16 ms of game time
+ * on one machine and 100 ms on another. The game's own clock is the only thing that means the same
+ * on both, so wait on that and the measurement is exact everywhere.
+ */
+export const gameTime = (page, seconds) => page.evaluate((s) => new Promise((done) => {
+  const a = window.__fb.app;
+  const t0 = a.time;
+  const step = () => (a.time - t0 >= s ? done(a.time - t0) : requestAnimationFrame(step));
+  requestAnimationFrame(step);
+}), seconds);
+
+/** The same, for use inside a page.evaluate that is already in the browser. */
+export const GAME_TIME_FN = `(s) => new Promise((done) => {
+  const a = window.__fb.app;
+  const t0 = a.time;
+  const step = () => (a.time - t0 >= s ? done(a.time - t0) : requestAnimationFrame(step));
+  requestAnimationFrame(step);
+})`;
+
+/**
  * Frames a second, measured. Not guessed from an env flag — the point is to know.
  */
 export const framerate = (page) => page.evaluate(() => new Promise((done) => {
@@ -122,23 +151,31 @@ export const framerate = (page) => page.evaluate(() => new Promise((done) => {
   requestAnimationFrame(step);
 }));
 
+
 /**
- * Can this machine be trusted to measure something in real time?
+ * Make every frame take at least `ms`, and hand back a function that stops it.
  *
- * Some checks are not about a value but about a rate: how far a tug throws a sprout in the next
- * 700 ms, whether a jump leaves the ground in the next two frames. Those are measured by letting
- * the real loop run and looking afterwards, and the loop caps dt at 0.1 s a frame — so on a machine
- * drawing three frames a second, 700 ms of waiting buys 0.2 s of game time, and the physics runs at
- * a coarser step besides. The number that comes back is not the number the check is about.
+ * Some things are only wrong when a frame is long. A menu that ignores the press already under way
+ * does it by the clock, and a frame longer than that clock defeats it (see ButtonList's arm guards);
+ * a press is reported by the poll that follows it, so on a slow machine it arrives up to a frame
+ * after it was made. Waiting to be given a slow machine is not a test — the runner is slow on
+ * Tuesday and quick on Wednesday, and the check that matters is skipped on one and vacuous on the
+ * other. This makes the frame long on purpose, on any machine, so the question gets asked every time.
  *
- * Returns null when the machine is quick enough, or a sentence saying what it managed when it is
- * not. A check given that sentence should skip, not fail: it has learned nothing either way, and
- * saying so is the only honest ending. On any machine with a GPU this returns null and every one
- * of those checks runs exactly as before.
+ * It holds the main thread, so keep it on for the moment under test and no longer.
  */
-export async function canTimePhysics(page) {
-  const fps = await framerate(page);
-  return fps >= 20 ? null : `this machine draws ${fps} frames a second, and the loop caps dt at 0.1 s — real-time physics cannot be measured at that rate`;
+export async function slowFrames(page, ms = 260) {
+  await page.evaluate((ms) => {
+    window.__brake = true;
+    const hog = () => {
+      if (!window.__brake) return;
+      const end = performance.now() + ms;
+      while (performance.now() < end);
+      requestAnimationFrame(hog);
+    };
+    requestAnimationFrame(hog);
+  }, ms);
+  return () => page.evaluate(() => { window.__brake = false; });
 }
 
 /** Resolve after `n` animation frames (gamepads are polled once a frame). */

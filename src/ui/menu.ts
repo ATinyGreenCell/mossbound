@@ -16,6 +16,22 @@ const CLICK_GUARD_MS = 350;
 const UNASKED_ARM_MS = 900;
 
 /**
+ * How many polls an unasked menu ignores confirm for, whatever the clock says.
+ *
+ * `confirm` is an edge, produced by the poll that follows the button going down, so when a press
+ * reaches a menu says little about when it was made: on a machine drawing one frame a second it is
+ * reported up to a second late, and no window shorter than a frame can tell a tap already under way
+ * from a considered answer. Polls can, because they are the same unit the press arrives in. Three of
+ * them: the frame the menu was built in, in which nothing was drawn yet; the frame it first appears
+ * in; and the frame the player has to react during. A press reported before the third cannot be an
+ * answer to this menu — it had not been seen, or there had been no frame in which to respond.
+ *
+ * Where frames are short this is fifty milliseconds and UNASKED_ARM_MS is what the player feels.
+ * Where they are long it is the only one of the two that still means anything.
+ */
+const UNASKED_ARM_POLLS = 3;
+
+/**
  * A column (or row) of DOM buttons that keyboard, controller and touch can all drive: arrows / d-pad /
  * stick move the highlight, A / Enter / Space presses it, B / Esc backs out, and a tap or click
  * presses the button under it. Elements with `data-act` are the buttons; `.off` ones are skipped.
@@ -26,6 +42,8 @@ export class ButtonList {
   private born = performance.now();
   /** confirm / back (and taps) are ignored this long after `born` — see arm() */
   private armMs = 0;
+  /** polls left before confirm counts, counted down in update() — see UNASKED_ARM_POLLS */
+  private armPolls = 0;
   private readonly onClick: (e: Event) => void;
   private readonly onMove: (e: PointerEvent) => void;
 
@@ -77,7 +95,7 @@ export class ButtonList {
    */
   refresh(keepSel = true, rearm = !keepSel) {
     if (!keepSel) this.sel = 0;
-    if (rearm) this.born = performance.now();
+    if (rearm) { this.born = performance.now(); this.armPolls = this.armMs ? UNASKED_ARM_POLLS : 0; }
     this.highlight();
   }
 
@@ -97,6 +115,7 @@ export class ButtonList {
   arm(ms = UNASKED_ARM_MS) {
     this.armMs = ms / ceremony(1);
     this.born = performance.now();
+    this.armPolls = UNASKED_ARM_POLLS;
     return this;
   }
 
@@ -118,8 +137,13 @@ export class ButtonList {
 
   update(m: MenuInput) {
     const items = this.items();
-    // a menu nobody asked for ignores the press already under way (arm); moving the highlight is fine
-    const armed = performance.now() - this.born >= this.armMs;
+    // A menu nobody asked for ignores the press already under way (arm); moving the highlight is fine.
+    // Two guards, because each is blind where the other sees: the clock is the ceremony a player
+    // feels, and the poll count is the one that survives a frame longer than that clock (see
+    // UNASKED_ARM_POLLS). A menu the player opened themselves arms neither — the press that opened it
+    // was spent on the screen they left, so there is nothing of it left to arrive here.
+    if (this.armPolls > 0) this.armPolls--;
+    const armed = !this.armPolls && performance.now() - this.born >= this.armMs;
     if (!items.length) {
       if (armed && m.back && this.back) this.back();
       return;

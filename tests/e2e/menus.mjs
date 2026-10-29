@@ -1,7 +1,7 @@
 // Menus with every kind of input: keyboard through the title and settings (which persist), a
 // controller through the controls card and out of the room-code and name boxes, phone layout, Xbox,
 // the level select's CONTINUE, a fresh room code over an old one, and guards against a stray Ⓐ.
-import { XBOX_UA, frames, launch, open, padPress, reporter, screenName, sleep, waitFor, canTimePhysics } from './harness.mjs';
+import { XBOX_UA, frames, launch, open, padPress, reporter, screenName, slowFrames, sleep, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -10,8 +10,8 @@ const sel = (page) => page.evaluate(() => document.querySelector('.sel')?.textCo
 /**
  * Installs window.__tapWhen(ready, button): presses that fake pad button on the very frame `ready()`
  * first says yes and lets go three frames later — the press a player is already making when a menu
- * arrives under them (a tap in the nest, a tug mid-level). Counted in frames, so a busy machine can't
- * turn it into a press that lands late.
+ * arrives under them (a tap in the nest, a tug mid-level). Counted in frames, so a busy machine
+ * can't turn it into a press that lands late.
  */
 const installTap = (page) => page.evaluate(() => {
   window.__tapWhen = (ready, b = 0) => new Promise((done) => {
@@ -146,7 +146,6 @@ const guestRoom = (page) => page.evaluate(() => {
   // (first the scenery for the step above settles and paints — that one isn't part of the scroll)
   await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'scenery settled');
   await frames(page, 3);
-  let paints = 0;
   await page.evaluate(() => {
     const get = HTMLCanvasElement.prototype.getContext;
     window.__paints = 0;
@@ -155,12 +154,13 @@ const guestRoom = (page) => page.evaluate(() => {
   // (one frame between presses — quick scrolling: a frame is at most 0.1 s of game time, inside the
   // highlight's 0.15 s settle, however slow a busy machine makes the frames)
   const from = await act();
-  // One frame between presses, driven from inside the page. It used to be page.keyboard.press in a
-  // loop out here, and every one of those is a round trip to the browser — nothing on a machine
-  // drawing sixty frames a second, but a whole frame of game time on one drawing three, which let
-  // the highlight's 0.15 s settle elapse between steps and repaint the scenery at each. The point
-  // of the check is that a QUICK scroll paints once, so the scroll has to actually be quick, and
-  // the only way to guarantee that is to stop leaving the page between presses.
+  // Quick: four steps in four frames, driven from inside the page. It used to be page.keyboard.press
+  // in a loop out here, and each of those is a round trip to the browser — nothing on a machine
+  // drawing sixty frames a second, but a whole frame of game time on one drawing three, which let the
+  // highlight's 0.15 s settle elapse between steps and repaint the scenery at every one. The point of
+  // the check is that a QUICK scroll paints once, so the scroll has to actually be quick, and the only
+  // way to guarantee that is to stop leaving the page between presses.
+  await page.evaluate(() => { window.__paints = 0; });
   await page.evaluate(() => new Promise((done) => {
     let n = 0;
     const press = () => {
@@ -171,9 +171,22 @@ const guestRoom = (page) => page.evaluate(() => {
     requestAnimationFrame(press);
   }));
   const to = await act();
-  await sleep(600);
-  paints = await page.evaluate(() => window.__paints);
-  t.check('scrolling the levels paints one backdrop, not one per step', paints <= 10 && to !== from, { paints, from, to });
+  await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'the scenery settles once').catch(() => undefined);
+  await frames(page, 3);
+  const quick = await page.evaluate(() => window.__paints);
+  // Slow: the same four steps back, each one allowed to settle before the next. That is what "a
+  // backdrop per step" costs, measured on the machine that is actually running — so what the check
+  // compares is one paint against four, not a number against a ceiling. The ceiling was 10, fitted
+  // to one renderer on one machine: it says nothing about the behaviour either way, and it fails the
+  // day a theme gains a layer. (It was reading 12 and 19 on a runner drawing software frames.)
+  await page.evaluate(() => { window.__paints = 0; });
+  for (let i = 0; i < 4; i++) {
+    await key(page, 'ArrowLeft');
+    await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, `step ${i + 1} settles`).catch(() => undefined);
+    await frames(page, 3);
+  }
+  const slow = await page.evaluate(() => window.__paints);
+  t.check('a quick scroll paints one backdrop where a slow one paints at every step', quick * 2 <= slow && to !== from, { quick, slow, from, to });
   t.check('no errors (level select)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -244,31 +257,30 @@ const guestRoom = (page) => page.evaluate(() => {
   await waitFor(async () => (await screenName(page)) === 'Session', 6000, 'last level');
   await sleep(400);
   await installTap(page);
+  // Deliberately slow frames for this one. The card holds off the tap already under way, and the
+  // press reaches it on the poll AFTER the button went down — so a frame longer than the hold-off is
+  // the whole failure, and a machine quick enough never asks the question. 260 ms a frame is past
+  // the 180 ms this arms for under ?fast, and the card has to survive the tap anyway.
+  const quick = await slowFrames(page);
   // both sprouts in the nest: the level clears and the card comes up on its own
   await page.evaluate(() => { const s = window.__fbSession; const n = s.L.nest; s.devTeleport(n.x - 12, n.y - 4, 0); s.devTeleport(n.x + 12, n.y - 4, 1); return window.__tapWhen(() => !!document.querySelector('.overlay.clear [data-act="ending"]')); });
   const cardUp = await page.evaluate(() => !!document.querySelector('.overlay.clear .ov-stats'));
+  await quick();
   await sleep(500);
   await padPress(page, 0, 0);
-  const toEnding = await waitFor(async () => (await screenName(page)) === 'EndingScreen', 3000, 'the ending').catch(() => false);
-// Held across a screen change, and the hold is counted in FRAMES (installTap holds for three).
-// Three frames is fifty milliseconds on a machine with a GPU and a full second on one without, so
-// what gets tested there is not "a button still down as the card appears" but "a button held for a
-// second" — a different question with a different right answer. Frame-coupled by construction, so
-// it needs a machine whose frames are short (see canTimePhysics).
-  const slowClear = await canTimePhysics(page);
-  if (slowClear) t.skip('the level-clear card isn’t pressed by the Ⓐ already being tapped in the nest', `${slowClear} — saw ${JSON.stringify({ cardUp, toEnding: !!toEnding })}`);
-  else t.check('the level-clear card isn’t pressed by the Ⓐ already being tapped in the nest', cardUp && !!toEnding, { cardUp, toEnding: !!toEnding });
+  const toEnding = await waitFor(async () => (await screenName(page)) === 'EndingScreen', 5000, 'the ending').catch(() => false);
+  t.check('the level-clear card isn’t pressed by the Ⓐ already being tapped in the nest (at 4 frames a second)', cardUp && !!toEnding, { cardUp, toEnding: !!toEnding });
   // and the ending itself: the same tap mustn't carry straight past it to the title
   await page.evaluate(() => window.__fb.flow.title());
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 4000, 'title');
+  const slowEnd = await slowFrames(page);
   await page.evaluate(() => { window.__fb.flow.ending(); return window.__tapWhen(() => !!document.querySelector('.ending-screen [data-act="title"]')); });
   const stillEnding = (await screenName(page)) === 'EndingScreen';
+  await slowEnd();
   await sleep(500);
   await padPress(page, 0, 0);
-  const toTitle = await waitFor(async () => (await screenName(page)) === 'TitleScreen', 3000, 'title again').catch(() => false);
-  const slowEnd = await canTimePhysics(page);
-  if (slowEnd) t.skip('the ending stays up for the Ⓐ still being tapped, and leaves on the next one', `${slowEnd} — saw ${JSON.stringify({ stillEnding, toTitle: !!toTitle })}`);
-  else t.check('the ending stays up for the Ⓐ still being tapped, and leaves on the next one', stillEnding && !!toTitle, { stillEnding, toTitle: !!toTitle });
+  const toTitle = await waitFor(async () => (await screenName(page)) === 'TitleScreen', 5000, 'title again').catch(() => false);
+  t.check('the ending stays up for the Ⓐ still being tapped, and leaves on the next one (at 4 frames a second)', stillEnding && !!toTitle, { stillEnding, toTitle: !!toTitle });
   t.check('no errors (clear card and ending)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -391,27 +403,39 @@ const guestRoom = (page) => page.evaluate(() => {
   await waitFor(async () => (await screenName(page)) === 'LocalScreen', 4000, 'the lobby');
   await sleep(400);
   await padPress(page, 0, 0); // player 1 sits down
-  // player 2 sits too, and one of them changes their mind before the level select arrives
-  await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: true, touched: true, value: 1 }; });
-  await frames(page, 2);
-  // The window being aimed at is "both seats taken, level select not here yet", and it is two
-  // animation frames wide — thirty milliseconds on a screen, most of a second on a runner drawing
-  // three frames a second, by which time the lobby has already handed over. This used to be
-  // `querySelector(...).click()`, which dereferenced null and took the whole of menus.mjs down with
-  // it, so every check after this one never ran. Ask whether the button is still there instead.
-  const hitTheWindow = await page.evaluate(() => {
-    const b = document.querySelector('.local-screen [data-act="back"]');
-    b?.click();
-    return !!b;
-  });
+  // Player 2 sits too, and one of them changes their mind before the level select arrives.
+  //
+  // The window being aimed at is "both seats taken, level select not here yet". A screen change is
+  // queued and taken up at the start of the NEXT frame, so the window is the rest of the frame the
+  // second seat was claimed in: one frame wide at any frame rate, which is plenty — but only from
+  // inside the page, and only if the watch is already running when the seat is claimed. Pressing
+  // out here and then looking costs two round trips, by which time the lobby has handed over and
+  // there is nothing left to click. So the press and the watch go in together: arm, press, and take
+  // the first frame that shows both seats with the lobby still up.
+  //
+  // (This used to be a bare `querySelector(...).click()` on the hope of being early enough, which
+  // dereferenced null when it wasn't and took the whole of menus.mjs down with it — every check
+  // after this one never ran, which is what an empty errors block under a FAIL looks like.)
+  const hitTheWindow = await page.evaluate(() => new Promise((done) => {
+    const deadline = performance.now() + 4000;
+    const f = () => {
+      const seated = window.__fb.flow.seats.filter(Boolean).length;
+      if (seated >= 2) {
+        const b = document.querySelector('.local-screen [data-act="back"]');
+        b?.click();
+        return done(!!b);
+      }
+      if (window.__fb.app.current?.constructor.name !== 'LocalScreen') return done(false);
+      return performance.now() > deadline ? done(false) : requestAnimationFrame(f);
+    };
+    window.__pads[1].buttons[0] = { pressed: true, touched: true, value: 1 };
+    requestAnimationFrame(f);
+  }));
   const atOnce = await page.evaluate(() => window.__fb.app.next?.constructor.name);
   await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: false, touched: false, value: 0 }; });
   await sleep(700);
   const later = await screenName(page);
-  const slowBack = await canTimePhysics(page);
-  if (!hitTheWindow) t.skip('BACK with both seats taken stays on the title', 'the lobby had already handed over to the level select — this machine draws too few frames to land inside that window');
-  else if (slowBack) t.skip('BACK with both seats taken stays on the title', `${slowBack} — saw ${JSON.stringify({ atOnce, later })}`);
-  else t.check('BACK with both seats taken stays on the title', atOnce === 'TitleScreen' && later === 'TitleScreen', { atOnce, later });
+  t.check('BACK with both seats taken stays on the title', hitTheWindow && atOnce === 'TitleScreen' && later === 'TitleScreen', { hitTheWindow, atOnce, later });
   t.check('no errors (lobby back)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -512,11 +536,11 @@ const guestRoom = (page) => page.evaluate(() => {
   await installTap(page);
   await guestRoom(page);
   // the guest is mid-level tugging with Ⓑ; the host picks BACK TO LEVELS and the list appears under them
+  const slowTug = await slowFrames(page);
   await page.evaluate(() => { window.__fb.flow.levels(); return window.__tapWhen(() => window.__fb.app.current?.constructor.name === 'LevelSelect', 1); });
   const after = await page.evaluate(() => ({ screen: window.__fb.app.current?.constructor.name, closed: window.__link.closed, link: !!window.__fb.flow.link }));
-  const slowTugRoom = await canTimePhysics(page);
-  if (slowTugRoom) t.skip('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room', `${slowTugRoom} — saw ${JSON.stringify(after)}`);
-  else t.check('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room', after.screen === 'LevelSelect' && !after.closed && after.link, after);
+  await slowTug();
+  t.check('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room (at 4 frames a second)', after.screen === 'LevelSelect' && !after.closed && after.link, after);
   // ...and once they've had a moment to see where they are, LEAVE ROOM works
   await sleep(500);
   await padPress(page, 0, 1);
