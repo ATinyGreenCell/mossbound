@@ -3,7 +3,7 @@
 // pickup), whichever device's clock is off, with two tabs open, or a save this build can't fully read.
 // Each check goes through the game itself (its menus, its own save and reload), so it holds for any
 // save format: seeded saves are written in 1.0.0's format, which every build reads.
-import { launch, open, reporter, sleep, url, waitFor } from './harness.mjs';
+import { launch, open, reporter, sleep, url, waitFor, canTimePhysics } from './harness.mjs';
 
 const t = reporter();
 const errors = [];
@@ -119,7 +119,11 @@ await scenario('quit', async () => {
   await levels(page);
   await pick(page, 'continue', 0);
   const back = await where(page);
-  t.check(`the clock carries on from where we quit (${back.time} s of ${played.toFixed(2)} s)`, back.time >= played - 0.5, { back, played });
+  // the run clock counts game time, and on a machine capping dt at 0.1 a frame that bears no
+  // relation to the wall time this test spent playing — so what it quit with is not comparable
+  const slowClock = await canTimePhysics(page);
+  if (slowClock) t.skip('the clock carries on from where we quit', `${slowClock} — came back with ${back.time} s after ${played.toFixed(2)} s of play`);
+  else t.check(`the clock carries on from where we quit (${back.time} s of ${played.toFixed(2)} s)`, back.time >= played - 0.5, { back, played });
   await page.evaluate(() => window.__fbSession.takeSeed(1, true));
   await sleep(250);
   await page.evaluate(() => window.__fbSession.takeSeed(2, true));

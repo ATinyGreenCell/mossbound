@@ -43,8 +43,13 @@ for (const [w, h, dpr] of SIZES) {
 }
 // rapid fire
 for (let i = 0; i < 30; i++) await page.setViewport({ width: 400 + ((i * 137) % 1500), height: 300 + ((i * 89) % 800), deviceScaleFactor: 1 + (i % 3) * 0.5 });
-await sleep(500);
-const last = await page.evaluate(() => { const rr = window.__fb.app.renderer; return { w: rr.width, cssW: rr.cssW, inner: innerWidth, gen: rr.generation }; });
+// "Settles" is the claim, so wait for it to settle rather than sleeping half a second and
+// pronouncing: a resize is applied on the next frame, and half a second is a frame and a half on a
+// machine drawing three a second — not enough for thirty of them to drain. If it never settles the
+// check still fails, it just takes longer to say so.
+const read = () => page.evaluate(() => { const rr = window.__fb.app.renderer; return { w: rr.width, cssW: rr.cssW, inner: innerWidth, gen: rr.generation }; });
+await waitFor(async () => (await read()).cssW === (await read()).inner, 3000, 'the canvas to settle').catch(() => undefined);
+const last = await read();
 t.check('rapid resizing settles on the final size', last.cssW === last.inner, last);
 // ---- a touch-screen laptop in a window taller than wide: "turn your phone sideways" is for phones,
 // and must never take the game away from a laptop someone happened to touch

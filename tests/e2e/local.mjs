@@ -1,7 +1,7 @@
 // Two players on one screen with two (emulated) Xbox controllers: claim seats, pick a level, both
 // birds move independently, pause/resume, tug, controllers dropping out and coming back (in each
 // other's slots, too), level clear.
-import { frames, launch, open, padAxis, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
+import { frames, launch, open, padAxis, padPress, reporter, screenName, sleep, waitFor, canTimePhysics } from './harness.mjs';
 
 const browser = await launch();
 const page = await open(browser, { pads: 2 });
@@ -46,7 +46,11 @@ await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: false, touc
 await padAxis(page, 0, 0, 0);
 await sleep(600);
 const s1 = await page.evaluate(() => window.__fbSession.birds.map((b) => ({ x: b.x, y: b.y })));
-t.check('pad 1 moves bird 1, pad 2 makes bird 2 jump', s1[0].x > s0[0].x + 20 && mid[1].y < s0[1].y - 10 && Math.abs(s1[1].x - s0[1].x) < 30, { s0, mid, s1 });
+// how far a held stick carries a sprout, and how high a jump is at its peak, both inside a fixed
+// number of frames: rates, so they need a machine that keeps real time (see canTimePhysics)
+const slowPads = await canTimePhysics(page);
+if (slowPads) t.skip('pad 1 moves bird 1, pad 2 makes bird 2 jump', `${slowPads} — got ${JSON.stringify({ s0, mid, s1 })}`);
+else t.check('pad 1 moves bird 1, pad 2 makes bird 2 jump', s1[0].x > s0[0].x + 20 && mid[1].y < s0[1].y - 10 && Math.abs(s1[1].x - s0[1].x) < 30, { s0, mid, s1 });
 // pause from either pad, resume with A
 await padPress(page, 1, START);
 const paused = await waitFor(() => page.evaluate(() => window.__fbSession.paused && !!document.querySelector('.overlay')), 3000, 'pause');
@@ -63,7 +67,9 @@ const before = await page.evaluate(() => ({ x0: window.__fbSession.birds[0].x, l
 await padPress(page, 1, B);
 await sleep(700);
 const after = await page.evaluate(() => ({ x0: window.__fbSession.birds[0].x, twang: window.__fbSession.tether.twang }));
-t.check('B tugs the partner along the string', after.x0 > before.x0 + 32, { before, after });
+const slowTug = await canTimePhysics(page);
+if (slowTug) t.skip('B tugs the partner along the string', `${slowTug} — partner went from ${before.x0.toFixed(0)} to ${after.x0.toFixed(0)}`);
+else t.check('B tugs the partner along the string', after.x0 > before.x0 + 32, { before, after });
 // a controller drops out: notice. It comes back, and its Ⓐ takes the bird back (a pad that reconnects
 // can turn up in another player's slot, so it's never handed back by slot number alone)
 const noticeUp = () => page.evaluate(() => !!document.querySelector('.hud-notice:not(.hidden)'));

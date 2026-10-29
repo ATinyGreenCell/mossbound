@@ -2,7 +2,7 @@
 // small one, its tug flings it, the small one's barely budges it); the small one jumps higher, climbs
 // walls (and jumps off them), and dashes once per jump. Two sprouts alike get one body with every move.
 // Who's which swaps at the level select — online, the host's word holds for both screens.
-import { installRig, launch, open, reporter, sleep, waitFor } from './harness.mjs';
+import { installRig, launch, open, reporter, sleep, waitFor, canTimePhysics } from './harness.mjs';
 
 const browser = await launch();
 const page = await open(browser);
@@ -255,7 +255,11 @@ await page.reload({ waitUntil: 'networkidle0' });
 await waitFor(() => page.evaluate(() => !!window.__fb?.app?.current), 20000, 'boot');
 const strong = await tug(0);
 const weak = await tug(1);
-t.check(`the tall sprout’s tug flings the small one (${strong.moved} tiles), the small one’s barely budges the tall one (${weak.moved})`, strong.kinds === 'tall/small' && strong.moved > 3 && weak.moved < 1.2, { strong, weak });
+// how far a tug throws someone in the next 700 ms: a rate, so only measurable on a machine that
+// can keep real time (see canTimePhysics)
+const slowTug = await canTimePhysics(page);
+if (slowTug) t.skip('the tall sprout’s tug flings the small one, the small one’s barely budges the tall one', `${slowTug} — measured ${strong.moved} and ${weak.moved} tiles, which means nothing here`);
+else t.check(`the tall sprout’s tug flings the small one (${strong.moved} tiles), the small one’s barely budges the tall one (${weak.moved})`, strong.kinds === 'tall/small' && strong.moved > 3 && weak.moved < 1.2, { strong, weak });
 
 // ---- who's which: SWAP at the level select trades; "alike" (Settings) makes both the same
 const kindsNow = () => page.evaluate(() => window.__fb.flow.kinds().join('/'));

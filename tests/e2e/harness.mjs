@@ -112,6 +112,35 @@ export async function waitFor(fn, ms, label) {
   throw new Error(`timed out waiting for ${label} (${limit} ms${SLOW > 1 ? `, ${ms} × ${SLOW}` : ''})`);
 }
 
+/**
+ * Frames a second, measured. Not guessed from an env flag — the point is to know.
+ */
+export const framerate = (page) => page.evaluate(() => new Promise((done) => {
+  let n = 0;
+  const t0 = performance.now();
+  const step = () => (performance.now() - t0 < 1000 ? (n++, requestAnimationFrame(step)) : done(Math.round((n * 1000) / (performance.now() - t0))));
+  requestAnimationFrame(step);
+}));
+
+/**
+ * Can this machine be trusted to measure something in real time?
+ *
+ * Some checks are not about a value but about a rate: how far a tug throws a sprout in the next
+ * 700 ms, whether a jump leaves the ground in the next two frames. Those are measured by letting
+ * the real loop run and looking afterwards, and the loop caps dt at 0.1 s a frame — so on a machine
+ * drawing three frames a second, 700 ms of waiting buys 0.2 s of game time, and the physics runs at
+ * a coarser step besides. The number that comes back is not the number the check is about.
+ *
+ * Returns null when the machine is quick enough, or a sentence saying what it managed when it is
+ * not. A check given that sentence should skip, not fail: it has learned nothing either way, and
+ * saying so is the only honest ending. On any machine with a GPU this returns null and every one
+ * of those checks runs exactly as before.
+ */
+export async function canTimePhysics(page) {
+  const fps = await framerate(page);
+  return fps >= 20 ? null : `this machine draws ${fps} frames a second, and the loop caps dt at 0.1 s — real-time physics cannot be measured at that rate`;
+}
+
 /** Resolve after `n` animation frames (gamepads are polled once a frame). */
 export const frames = (page, n) => page.evaluate((n) => new Promise((done) => { const step = (k) => (k ? requestAnimationFrame(() => step(k - 1)) : done()); step(n); }), n);
 
