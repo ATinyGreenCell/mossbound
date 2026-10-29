@@ -68,6 +68,20 @@ jobs:
           failed=$(sed -n 's/^FAIL  *\([A-Za-z0-9-]*\).*/\1/p' /tmp/e2e.log | sort -u | paste -sd, -)
           if [ -z "$failed" ]; then echo "::error::the shard failed before any test ran"; exit 1; fi
           echo "::warning::retrying once: $failed"
+          # Say WHY, here, before the retry overwrites the logs — and whether or not the retry then
+          # passes. "Why it failed" below only runs when the shard ends red, so a group that flaked
+          # and then went green took its reason with it, and all that was left was the name of
+          # something that had been flaking for weeks. A flake nobody can read is a flake nobody
+          # fixes. Warnings rather than errors: the shard may yet be fine, and this is not what
+          # decides that.
+          for n in $(echo "$failed" | tr ',' ' '); do
+            f="tests/e2e/.out/logs/$n.log"
+            [ -f "$f" ] || continue
+            said=$( { grep -E '^FAIL' "$f" | head -n 8
+                      sed -n '/^--- errors ---/,$p' "$f" | grep -vx 'none' | head -n 8; } )
+            [ -n "$said" ] || said=$(tail -n 6 "$f")
+            echo "::warning title=$n flaked::$(printf '%s' "$said" | sed 's/%/%25/g; s/\r/%0D/g' | awk '{printf "%s%%0A", $0}')"
+          done
           npm run test:e2e -- --only "$failed" 2>&1 | tee /tmp/e2e-retry.log
       # Why a run failed has to be readable from wherever the next change is being written, and a
       # sandbox can reach api.github.com but not the Actions web pages or the blob store the logs
