@@ -1,5 +1,6 @@
 import { audio } from './audio/audio';
 import type { App } from './app';
+import { clamp } from './core/math';
 import type { DeviceId } from './core/input';
 import { freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
 import { saveSettings, settings } from './core/settings';
@@ -278,6 +279,27 @@ export class Flow {
         // the next time the two of you play together
         kinds: kindsFor(settings.even, swapped),
         practice: true,
+      }),
+    );
+  }
+
+  /**
+   * The debug ground: any level of LEVELS, played on the practice rules — one player, the game
+   * walking the other sprout, and nothing written to the journal — with the toolbox over it. Like
+   * the practice ground it is always local and always from the start, so it needs none of
+   * playLevel's run bookkeeping, and (unlike it) it is only reachable from #debug.
+   */
+  debug(level = 0, swapped = settings.swap) {
+    this.mode = 'local';
+    this.app.setScreen(
+      new Session(this.app, this, {
+        level: clamp(Math.round(level), 0, LEVELS.length - 1),
+        mode: 'local',
+        me: 0,
+        seats: ['keys', 'keysR'],
+        profiles: this.profiles(),
+        kinds: kindsFor(settings.even, swapped),
+        debug: true,
       }),
     );
   }

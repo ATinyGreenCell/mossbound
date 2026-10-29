@@ -1,7 +1,17 @@
 import type { Save } from '../core/save';
 
-/** Bump whenever messages change shape; peers with different versions refuse to play. */
-export const PROTOCOL = 4;
+/**
+ * Bump whenever messages change shape — and whenever the shared world changes, which is the same
+ * contract by another route. Each screen builds the level from its own copy of the level data and
+ * keeps it in step with the other by the clock alone; nothing about the world travels on the wire.
+ * So two builds with different levels would pair happily and then disagree about everything in
+ * them: a creature biting one player and not the other, a platform in two places at once. Peers
+ * with different versions refuse to play, which is the only thing standing between a player whose
+ * page is still open on the old build and a level that no longer exists.
+ *
+ * 5: creatures (beetles and snaptraps), and the five levels rebuilt around them.
+ */
+export const PROTOCOL = 5;
 export const APP_ID = 'mossbound/coop/v1';
 
 export type Role = 'host' | 'guest';

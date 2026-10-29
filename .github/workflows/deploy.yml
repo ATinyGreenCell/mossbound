@@ -15,7 +15,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The e2e suite drives a real Chrome, and the online groups need live Nostr relays and MQTT
+  # brokers. A phone can't run that and neither can the sandbox the builds come from, so this is
+  # the only place it runs — and it has to run before anything is published, not after.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # ubuntu-latest ships Chrome; fail loudly rather than silently skipping the suite
+      - name: Find Chrome
+        run: |
+          for c in /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium-browser /usr/bin/chromium; do
+            if [ -x "$c" ]; then echo "CHROME_PATH=$c" >> "$GITHUB_ENV"; echo "using $c"; exit 0; fi
+          done
+          echo "::error::no Chrome on the runner — the e2e suite cannot run"; exit 1
+      # The runner has no GPU, which the harness already has a path for (SwiftShader: slower, same
+      # results). A failure is retried once, and only for the groups that failed — the online ones
+      # pair through public relays, so a broker having a bad minute is not a reason to block a
+      # publish. Anything that fails twice does block it.
+      - name: End-to-end suite
+        env:
+          E2E_SWIFTSHADER: '1'
+        run: |
+          set -o pipefail
+          if npm run test:e2e 2>&1 | tee /tmp/e2e.log; then exit 0; fi
+          failed=$(sed -n 's/^FAIL  *\([A-Za-z0-9-]*\).*/\1/p' /tmp/e2e.log | sort -u | paste -sd, -)
+          if [ -z "$failed" ]; then echo "::error::the suite failed before any test ran"; exit 1; fi
+          echo "::warning::retrying once: $failed"
+          npm run test:e2e -- --only "$failed"
+      - name: Test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-output
+          path: tests/e2e/.out/
+          if-no-files-found: ignore
+          retention-days: 7
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

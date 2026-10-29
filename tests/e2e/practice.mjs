@@ -23,7 +23,7 @@ const lint = await page.evaluate(async () => {
   const solid = (p) => '#XU,'.includes(PRACTICE.map[Math.floor(p.y / T)]?.[Math.floor(p.x / T)] ?? ' ');
   for (const p of [...L.spawns, L.nest, ...L.checkpoints]) if (solid(p)) issues.push(`point in wall at ${p.x / T},${p.y / T}`);
   // every move it means to teach has something there to teach it with
-  const has = { soil: L.soils.length, rings: L.pegs.length, springs: L.springs.length, vents: L.vents.length, plates: L.plates.length, crumbles: L.crumbles.length, movers: L.movers.length, spikes: PRACTICE.map.join('').includes('^') };
+  const has = { soil: L.soils.length, rings: L.pegs.length, springs: L.springs.length, vents: L.vents.length, plates: L.plates.length, crumbles: L.crumbles.length, movers: L.movers.length, spikes: PRACTICE.map.join('').includes('^'), beetles: L.creatures.filter((c) => c.kind === 0).length, traps: L.creatures.filter((c) => c.kind === 1).length };
   for (const [k, v] of Object.entries(has)) if (!v) issues.push(`nothing for ${k}`);
   // and nothing sitting where a plant's leaves will unfurl (levels.mjs lints the five real ones)
   for (const so of L.soils) {

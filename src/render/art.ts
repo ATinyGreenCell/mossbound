@@ -767,6 +767,146 @@ const labelCache = new Map<string, HTMLCanvasElement>();
 let labelEpoch = 0;
 
 /** A rounded name tag, rendered once per (name, color, size). */
+/**
+ * The two creatures keep one look across all five themes — a beetle in the mill is the same beetle
+ * as in the garden. Danger is the one thing in this game that should never need reading twice, and
+ * a plum-and-bristle shape that means "don't touch" everywhere is worth more than five pretty
+ * variants. Only the outline follows the theme, so they still sit in its line.
+ */
+const SHELL = '#53324e';
+const SHELL_LIT = '#7a4a6e';
+const BRISTLE = '#ffd9a0';
+const MAW = '#8d3550';
+const TOOTH = '#fff1dc';
+
+/** A bristly beetle, trundling. Its legs cycle with the ground it covers, not with the clock, so it
+ * never moonwalks at the ends of its ledge where it stops to turn. */
+export function drawBeetle(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, face: number, th: Theme) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(face, 1);
+  const hw = w / 2;
+  const hh = h / 2;
+  // legs: three a side, stepping on how far it has walked
+  const gait = x * 0.22;
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const lx = -hw + 5 + i * (w - 10) / 2;
+    const swing = Math.sin(gait + i * 2.1) * 3;
+    ctx.moveTo(lx, hh - 3);
+    ctx.lineTo(lx + swing, hh + 3);
+  }
+  ctx.stroke();
+  // body
+  ctx.fillStyle = SHELL;
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, hw, hh, 0, 0, TAU);
+  ctx.fill();
+  ctx.stroke();
+  // a lit band along the top of the shell, so it reads against a dark tower as well as a bright lawn
+  ctx.fillStyle = SHELL_LIT;
+  ctx.beginPath();
+  ctx.ellipse(-1, -hh * 0.3, hw * 0.72, hh * 0.38, 0, 0, TAU);
+  ctx.fill();
+  // bristles: the part that hurts, and the part you see first
+  ctx.strokeStyle = BRISTLE;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const u = -0.72 + i * 0.36;
+    const bx = u * hw;
+    const by = -Math.sqrt(Math.max(0, 1 - u * u)) * hh;
+    ctx.moveTo(bx, by + 1);
+    ctx.lineTo(bx * 1.12, by - 5.5);
+  }
+  ctx.stroke();
+  // head end: a blunt snout and one beady eye, pointing the way it goes
+  ctx.fillStyle = SHELL;
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.ellipse(hw - 2, 1, 5, hh * 0.62, 0, 0, TAU);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = BRISTLE;
+  ctx.beginPath();
+  ctx.arc(hw - 1, 0, 1.6, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * A snaptrap. `open` runs 0 (shut and dormant) to 1 (gaping), and `bite` is true for the few frames
+ * the jaws are actually closing on something — the only time it can hurt. The rear-up is drawn big
+ * and slow on purpose: it is the whole of the warning a player gets.
+ */
+export function drawSnaptrap(ctx: CanvasRenderingContext2D, x: number, foot: number, open: number, bite: boolean, t: number, th: Theme) {
+  ctx.save();
+  ctx.translate(x, foot);
+  const sway = Math.sin(t * 1.7 + x * 0.05) * (1 - open) * 2;
+  const rise = 6 + open * 20;
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.8;
+  ctx.lineCap = 'round';
+  // the root collar it grows out of
+  ctx.fillStyle = '#3f5a33';
+  ctx.beginPath();
+  ctx.ellipse(0, -2, 11, 4.5, 0, 0, TAU);
+  ctx.fill();
+  ctx.stroke();
+  // stem
+  ctx.strokeStyle = '#4e7a3e';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(0, -2);
+  ctx.quadraticCurveTo(sway * 0.5, -rise * 0.6, sway, -rise);
+  ctx.stroke();
+  ctx.translate(sway, -rise);
+  // the jaws: two halves hinged at the back, gaping by `open`
+  const gape = (bite ? 0.12 : open) * 1.05;
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.7;
+  for (const s of [-1, 1]) {
+    ctx.save();
+    ctx.rotate(s * gape * 0.85);
+    ctx.fillStyle = s < 0 ? MAW : '#a04565';
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(13, s * 2, 15, s * 9);
+    ctx.quadraticCurveTo(6, s * 13, -2, s * 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // teeth along the rim
+    ctx.strokeStyle = TOOTH;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const u = 0.1 + i * 0.26;
+      const tx = 15 * u + 2;
+      const ty = s * (9 * u + 1.5);
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(tx + 1.5, ty + s * 4.5);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = th.ink;
+    ctx.restore();
+  }
+  // a bead of nectar at the hinge while it waits — the lure
+  if (open < 0.3) {
+    ctx.fillStyle = '#ffe9a0';
+    ctx.beginPath();
+    ctx.arc(2, 0, 2.2 + Math.sin(t * 3) * 0.3, 0, TAU);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 export function nameLabel(name: string, color: string, px: number) {
   if (labelEpoch !== canvasEpoch) {
     labelCache.clear();

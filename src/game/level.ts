@@ -1,4 +1,4 @@
-import { T, VENT_HEIGHT } from './tuning';
+import { BEETLE_H, BEETLE_REACH, BEETLE_SPEED, BEETLE_TURN, BEETLE_W, T, TRAP_H, TRAP_W, VENT_HEIGHT } from './tuning';
 
 export type ThemeId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower';
 export type SongId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'title';
@@ -29,6 +29,8 @@ export interface MoverDef {
  *   p q r  pressure plates — holding any plate of a letter opens its doors P Q R
  *   W Y Z  heavy plates for those same doors: only the tall sprout's weight holds one down
  *   ,  a patch of soil — the small sprout grows a leaf platform out of it, two rows above
+ *   b  a beetle — trundles along whatever ledge you put it on, turning at each end
+ *   t  a snaptrap — rooted; rears up when a sprout comes near, then bites
  *   *  seed            F  firefly (3 per level)          C  checkpoint (lantern)
  *   N  the nest (both birds in it = level clear)       1 2  where the birds start
  *   i  a sign — its text is the next entry of `signs`, signs taken left to right
@@ -102,6 +104,34 @@ export interface SignPost {
   text: string;
 }
 
+export const enum Creature {
+  Beetle = 0,
+  Snaptrap = 1,
+}
+
+/**
+ * A creature, as the map placed it. A beetle's whole journey is settled here, at parse time: the
+ * ledge it stands on is measured once and never looked at again, so its position is a function of
+ * the shared clock and nothing else, and two screens cannot disagree about where it is. A beetle
+ * with no ledge to walk (`span` 0) simply stays put.
+ */
+export interface CreatureSpec {
+  kind: Creature;
+  /** where it sits: the middle of its body, world px */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** beetle: the left end of its walk, and how far it goes (world px) */
+  x0: number;
+  span: number;
+  /** beetle: seconds for one full there-and-back trip, including the pauses at each end */
+  period: number;
+  /** beetle: where in that trip it starts, 0..1 — from its own position, so two on one ledge
+   * don't march in step, and both screens work out the same thing */
+  phase: number;
+}
+
 export interface MoverPath {
   def: MoverDef;
   /** world px: platform left/top at path start */
@@ -147,6 +177,7 @@ export interface LevelData {
   soils: Soil[];
   signs: SignPost[];
   movers: MoverPath[];
+  creatures: CreatureSpec[];
 }
 
 const DOOR_LETTERS = 'PQR';
@@ -175,6 +206,7 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
   const crumbles: { tx: number; ty: number }[] = [];
   const soilTiles: { tx: number; ty: number }[] = [];
   const signPts: Pt[] = [];
+  const creatureTiles: { tx: number; ty: number; kind: Creature }[] = [];
   let spawn1: Pt | null = null;
   let spawn2: Pt | null = null;
   let nest: Pt | null = null;
@@ -242,6 +274,12 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
           break;
         case 'i':
           signPts.push(center(tx, ty));
+          break;
+        case 'b':
+          creatureTiles.push({ tx, ty, kind: Creature.Beetle });
+          break;
+        case 't':
+          creatureTiles.push({ tx, ty, kind: Creature.Snaptrap });
           break;
         default: {
           const d = DOOR_LETTERS.indexOf(c);
@@ -319,6 +357,37 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
     return { x0: tx * T - 3, x1: tx * T + T + 3, top: top * T, bottom: ty * T };
   });
 
+  // Anything a sprout could stand on holds a beetle up too — which includes the planks the whole
+  // tower is built from. Measuring against `solid` alone would leave every beetle up there frozen
+  // on the spot, looking like a bug in the clock rather than a girder it cannot walk.
+  const footing = (tx: number, ty: number) => solid(tx, ty) || (tx >= 0 && tx < w && ty >= 0 && ty < h && tiles[ty * w + tx] === Tile.Plank);
+  // Creatures stand on the tile below the one they are drawn on, like a sprout does. A beetle's
+  // ledge is measured here, once: out from its own tile while the footing holds and the way is
+  // clear, stopping at a wall or a drop. After this nothing about a beetle depends on the level.
+  const creatures: CreatureSpec[] = creatureTiles.map(({ tx, ty, kind }) => {
+    const floor = ty + 1;
+    if (kind === Creature.Snaptrap) {
+      return { kind, x: tx * T + T / 2, y: floor * T - TRAP_H / 2, w: TRAP_W, h: TRAP_H, x0: 0, span: 0, period: 1, phase: 0 };
+    }
+    let left = tx;
+    let right = tx;
+    while (left - 1 >= 0 && tx - left < BEETLE_REACH && footing(left - 1, floor) && !solid(left - 1, ty)) left--;
+    while (right + 1 < w && right - tx < BEETLE_REACH && footing(right + 1, floor) && !solid(right + 1, ty)) right++;
+    const x0 = left * T + BEETLE_W / 2;
+    const span = Math.max(0, (right + 1) * T - BEETLE_W / 2 - x0);
+    return {
+      kind,
+      x: tx * T + T / 2,
+      y: floor * T - BEETLE_H / 2,
+      w: BEETLE_W,
+      h: BEETLE_H,
+      x0,
+      span,
+      period: (2 * span) / BEETLE_SPEED + 2 * BEETLE_TURN,
+      phase: (((tx * 7 + ty * 13) % 10) / 10 + 0.05) % 1,
+    };
+  });
+
   const byProgress = (a: Pt, b: Pt) => (def.vertical ? b.y - a.y : a.x - b.x || a.y - b.y);
   checkpoints.sort(byProgress);
   feathers.sort(byProgress);
@@ -365,7 +434,23 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
     soils,
     signs,
     movers,
+    creatures,
   };
+}
+
+/**
+ * Where a beetle's middle is at shared time `t`. There and back along its ledge, with a pause at
+ * each end to turn round. Like moverPos this is worked out from the clock alone — never stepped —
+ * so it is identical on both screens however differently their frames fall.
+ */
+export function beetlePos(c: CreatureSpec, t: number): { x: number; face: number } {
+  if (c.span <= 0) return { x: c.x, face: 1 };
+  const walk = c.span / BEETLE_SPEED;
+  const u = ((((t / c.period + c.phase) % 1) + 1) % 1) * c.period;
+  if (u < walk) return { x: c.x0 + BEETLE_SPEED * u, face: 1 };
+  if (u < walk + BEETLE_TURN) return { x: c.x0 + c.span, face: 1 };
+  if (u < 2 * walk + BEETLE_TURN) return { x: c.x0 + c.span - BEETLE_SPEED * (u - walk - BEETLE_TURN), face: -1 };
+  return { x: c.x0, face: -1 };
 }
 
 const smooth = (u: number) => u * u * (3 - 2 * u);

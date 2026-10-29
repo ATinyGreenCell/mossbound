@@ -1,6 +1,7 @@
 import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
 import { deviceLabel, isTyping, type Device, type DeviceId } from '../core/input';
+import { debugOn } from '../core/debug';
 import { canSave, exportCode, importCode, latestRun, levelRecord, runSlot, save } from '../core/save';
 import { saveSettings, settings, type PerfMode } from '../core/settings';
 import { ceremony } from '../core/testmode';
@@ -251,6 +252,7 @@ export class TitleScreen implements Screen {
         <div class="btn small" data-act="practice">PRACTICE ON YOUR OWN</div>
         <div class="btn small" data-act="controls">HOW TO PLAY</div>
         <div class="btn small" data-act="settings">SETTINGS</div>
+        ${debugOn() ? '<div class="btn small" data-act="debug">DEBUG GROUND</div>' : ''}
       </div>
       ${IS_XBOX ? `<div class="xbox-hint">${XBOX_HINT}</div>` : iosHint}`;
     this.list?.dispose();
@@ -267,6 +269,9 @@ export class TitleScreen implements Screen {
         break;
       case 'practice':
         this.flow.practice();
+        break;
+      case 'debug':
+        this.flow.debug();
         break;
       case 'controls':
         this.flow.showControls();

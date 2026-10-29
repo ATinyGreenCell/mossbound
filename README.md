@@ -22,6 +22,17 @@ sprout gets anywhere alone.
 Both of them can **kick off a wall** they brush in mid-air. Take two parallel walls in turns and you
 can climb the shaft between them; the same wall twice running won't have you.
 
+## What lives there
+
+- **Bristle beetles** pace a patch of ledge and nothing else — they never come after you. Walk
+  round one, hop over it, or swing past on the vine. The bristles are the part that smarts.
+- **Snaptraps** are rooted. Come close and one rears up, which is your warning and about as long as
+  a breath; then it bites, and then it has to rest before it can do it again. One of you can lure
+  it while the other crosses.
+
+Neither can really hurt you. Whoever is caught drifts back to their partner as a seed, the same as
+a fall, and the last lantern is where you both carry on from.
+
 Both run at the same speed. Whoever made the room (or holds the first controller) starts as the tall
 one; either of you can **swap** at the level select. *Settings → sprouts → alike* gives both of you
 the same body with every move, if you'd rather not have different powers. Online, the host's choice
@@ -113,17 +124,67 @@ npm run test:e2e   # end-to-end suite in headless Chrome (online tests need inte
 The e2e suite (`tests/e2e/`) drives the real game: physics and swing-energy checks, a scripted run
 through every level, a fuzzed input soak, two-browser online play over both paths, outages and
 reloads, packet loss and jitter, local multiplayer, two controllers on an (emulated) Xbox, touch, menus, resizing, rendering (tile cache,
-GPU resets, the quality governor), saves, and quitting and coming back. It runs with
+GPU resets, the quality governor), saves, the debug ground, and quitting and coming back. Creature behaviour is checked separately in
+`tests/e2e/creatures.mjs`, which is pure logic bundled through Vite and so needs no browser at all:
+it asserts the two properties that keep two screens showing the same world — a beetle is a function
+of the shared clock and never integrated, and a snaptrap's round always comes back to dormant — and
+lints every creature placed in every level for footing, walls, a ledge to walk, and distance from
+every spawn and lantern. It runs with
 `node tests/e2e/run.mjs [--only online,physics] [-j 6]`. Chrome comes from `/usr/bin/google-chrome`,
 or set `CHROME_PATH`.
 
 Development-only URL switches (stripped from production builds): `?fast`, `?noaudio`, `?grace=N`,
 `?relay`, `?p2p`, `?brokers=url,url`, `?norender`.
 
+### The debug ground
+
+`…/mossbound/#debug` puts a **DEBUG GROUND** button on the title screen, and `#debug=3` drops
+straight into that level. Unlike the switches above it is **not** stripped from production, on
+purpose: the build worth poking at is the one that is live, on a phone, which is where a mechanic
+that only misbehaves on a touch screen will misbehave. It is remembered for the tab and invisible
+to anyone who does not type it.
+
+It plays on the practice rules — you alone, the game walking the other sprout so the vine still
+works, nothing written to the journal — but on any level rather than the practice ground. The panel
+gives: the level picker, lantern ◀▶, UNHURTABLE, NOCLIP, BOXES, TAP TO GO, 1× / ½× / ¼×, FREEZE and
+STEP, swap sprout, respawn. BOXES draws the real collision boxes, a snaptrap's reach, a beetle's
+whole measured ledge, and the vine bend by bend. The readout underneath carries fps, position,
+velocity, state flags, vine length and tautness, the shared clock, and what the nearest creature is
+doing with its timer.
+
 ## Deploy
 
-Every push to `main` builds and publishes to GitHub Pages
-(`.github/workflows/deploy.yml`; repository *Settings → Pages → Source: GitHub Actions*).
+Every push to `main` runs the e2e suite, then builds and publishes to GitHub Pages
+(`.github/workflows/deploy.yml`; repository *Settings → Pages → Source: GitHub Actions*). **A failing
+test stops the publish.** The suite runs there and nowhere else: it drives a real Chrome and its
+online groups need live relays, which neither a phone nor a sandbox can provide. A failed group is
+retried once — a public broker having a bad minute shouldn't block a release — and anything that
+fails twice blocks it. The built site serves `version.json`, so what's live can always be checked.
+
+## The `mb` command
+
+`mb` is the dev loop from a phone: Termux, a clone of this repo, and a build archive dropped in
+Downloads. It lives in the repo so it is never lost, and updates itself whenever you sync or pull.
+
+```sh
+git clone https://github.com/ATinyGreenCell/mossbound ~/mossbound
+ln -s ~/mossbound/mb ~/../usr/bin/mb      # or: cp ~/mossbound/mb $PREFIX/bin/mb
+
+mb status                 # repo / newest download / git, and what the live site serves
+mb sync                   # newest build in Downloads -> merged into the repo
+mb check                  # type-check and build
+mb ship "what changed"    # commit and push
+mb release 1.4.0 "what changed"
+```
+
+`mb sync` takes the newest *complete* build by the version inside it, never by filename, and brings
+it in as a git commit on top of the commit it was made from. Git does the merge, so work done on the
+phone survives, and a genuine clash stops the sync before a single file is touched. It refuses a
+build older than the repo, one that is only half-downloaded, and one carrying paths this project
+doesn't own. `MB_FORCE=1` overrides the first two deliberately.
+
+`mb check` is a type-check and a build — the whole of what a phone can do. The tests are the CI gate
+above, which is why `mb ship` says to watch `mb status` rather than claiming anything passed.
 
 ## Credits
 

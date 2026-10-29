@@ -33,8 +33,12 @@ const TESTS = [
   { name: 'continue', file: 'continue.mjs', est: 90, pass: passed('continue') },
   { name: 'sprouts', file: 'sprouts.mjs', est: 30, pass: passed('sprouts') },
   { name: 'practice', file: 'practice.mjs', est: 25, pass: passed('practice') },
+  { name: 'debug', file: 'debug.mjs', est: 30, pass: passed('debug') },
   { name: 'xbox', file: 'xbox.mjs', est: 25, pass: passed('xbox') },
   { name: 'units', file: 'units.mjs', est: 20, pass: passed('units') },
+  // no browser: pure logic, bundled through Vite. It runs anywhere node does, including a sandbox
+  // with no Chrome, which is where creature changes get written.
+  { name: 'creatures', file: 'creatures.mjs', est: 10, pass: passed('creatures') },
   { name: 'render', file: 'render.mjs', est: 25, pass: passed('render') },
   { name: 'pads', file: 'pads.mjs', est: 45, pass: passed('pads') },
   { name: 'frames', file: 'frames.mjs', est: 25, pass: passed('frames') },

@@ -7,12 +7,15 @@ import { App } from './app';
 import { audio } from './audio/audio';
 import { IS_XBOX } from './core/platform';
 import { settings } from './core/settings';
+import { debugOn } from './core/debug';
 import { TouchControls } from './core/touch';
 import { Flow } from './flow';
 import { preloadNet } from './net/link';
 
 // an invite link means online play is coming: fetch the networking code while the rest boots
 const invite = /(?:^|[#&])join=([A-Za-z0-9]{4})/.exec(location.hash);
+// …#debug drops a DEBUG GROUND button on the title; …#debug=3 goes straight into that level
+const debugLevel = /(?:^|[#&])debug=(\d+)/.exec(location.hash);
 if (invite) void preloadNet().catch(() => undefined);
 
 // iOS/Safari only let an AudioContext start or resume inside the gesture handler itself, and may
@@ -72,6 +75,8 @@ async function boot() {
   if (invite) {
     history.replaceState(null, '', location.pathname + location.search);
     flow.online({ joinCode: invite[1].toUpperCase() });
+  } else if (debugLevel && debugOn()) {
+    flow.debug(Number(debugLevel[1]) - 1);
   } else {
     flow.title();
   }

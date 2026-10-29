@@ -20,6 +20,8 @@ export type Sfx =
   | 'door'
   | 'plate'
   | 'crumble'
+  | 'rear'
+  | 'snap'
   | 'heart'
   | 'hey'
   | 'nuzzle'
@@ -194,6 +196,8 @@ const LEN: Record<Sfx, number> = {
   door: 0.5,
   plate: 0.12,
   crumble: 0.45,
+  rear: 0.3,
+  snap: 0.22,
   heart: 0.32,
   hey: 0.24,
   nuzzle: 0.9,
@@ -290,6 +294,17 @@ export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
     case 'crumble':
       for (let k = 0; k < 9; k++) hiss(b, rate, { dur: 0.06, at: k * 0.04 + noise() * 0.01 + 0.01, vol: 0.4, lp: 900 + k * 60, decay: 0.02 });
       tone(b, rate, { f0: 90, f1: 50, dur: 0.3, vol: 0.3, decay: 0.1 });
+      break;
+    case 'rear':
+      // a wet, rising creak: the warning, meant to be heard before it is seen
+      tone(b, rate, { f0: 120, f1: 300, dur: 0.26, vol: 0.34, decay: 0.12, type: 'tri' });
+      hiss(b, rate, { dur: 0.22, vol: 0.2, lp: 1500, hp: 300, attack: 0.08, decay: 0.08 });
+      break;
+    case 'snap':
+      // the bite: a hard woody clap with a short tail
+      tone(b, rate, { f0: 420, f1: 90, dur: 0.06, vol: 0.75, decay: 0.02 });
+      hiss(b, rate, { dur: 0.05, vol: 0.55, lp: 5200, hp: 700, decay: 0.012 });
+      tone(b, rate, { f0: 150, f1: 70, dur: 0.16, at: 0.03, vol: 0.3, decay: 0.06 });
       break;
     case 'heart':
       chirp(b, rate, 2300, 3300, 0, 0.07, 0.4);

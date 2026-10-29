@@ -158,6 +158,10 @@ export class App {
   private fpsEl: HTMLDivElement | null = null;
   private fpsAcc = 0;
   private fpsFrames = 0;
+  /** frames a second, measured whenever anything asks for it (the meter, or the debug readout) */
+  fps = 0;
+  /** keep measuring even with the meter off: set by the debug ground */
+  fpsWanted = false;
   private wakeLock: WakeLockLike | null = null;
   private wantAwake = false;
   private wakeBusy = false;
@@ -358,13 +362,15 @@ export class App {
   }
 
   private updateFps(ms: number) {
-    if (!this.fpsEl) return;
+    // measured either way: the debug ground's readout wants it even with the meter off
+    if (!this.fpsEl && !this.fpsWanted) return;
     this.fpsAcc += ms;
     this.fpsFrames++;
     if (this.fpsAcc < 500) return;
     const fps = (this.fpsFrames * 1000) / this.fpsAcc;
+    this.fps = fps;
     const r = this.renderer;
-    this.fpsEl.textContent = `${fps.toFixed(0)} FPS · ${r.width}×${r.height} · q${r.scale.toFixed(2)}`;
+    if (this.fpsEl) this.fpsEl.textContent = `${fps.toFixed(0)} FPS · ${r.width}×${r.height} · q${r.scale.toFixed(2)}`;
     this.fpsAcc = 0;
     this.fpsFrames = 0;
   }

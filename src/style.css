@@ -1047,3 +1047,122 @@ body:not(.touch) .ctl-col:last-child {
 .card.continue .num {
   opacity: 0.8;
 }
+
+/* ---- the debug ground's panel (see core/debug.ts) --------------------------------------------
+   Pinned to the left so it never sits under the right-hand touch buttons, and narrow enough that a
+   landscape phone still shows the level beside it. Every control is a real tap target. */
+.dbg {
+  position: absolute;
+  top: calc(8px + var(--sat));
+  left: calc(8px + var(--sal));
+  z-index: 40;
+  width: min(15.5em, 46vw);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.72em;
+  color: var(--cream);
+  background: var(--card);
+  border: 1px solid rgba(255, 248, 234, 0.22);
+  border-radius: 10px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  /* .ui is pointer-events: none — the panel has to ask for taps back */
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.dbg-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35em 0.6em;
+  background: rgba(255, 123, 92, 0.3);
+  letter-spacing: 0.1em;
+}
+
+.dbg-fold {
+  padding: 0 0.5em;
+  cursor: pointer;
+  font-size: 1.2em;
+  line-height: 1;
+}
+
+.dbg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  padding: 0.45em;
+}
+
+.dbg-body.hidden {
+  display: none;
+}
+
+.dbg-row {
+  display: flex;
+  gap: 0.3em;
+}
+
+.dbg-btn {
+  flex: 1;
+  min-height: 2.5em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0.3em 0.2em;
+  border-radius: 6px;
+  background: rgba(255, 248, 234, 0.1);
+  border: 1px solid rgba(255, 248, 234, 0.18);
+  cursor: pointer;
+  line-height: 1.1;
+}
+
+.dbg-btn:active {
+  transform: scale(0.96);
+}
+
+.dbg-btn.on {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.dbg-level {
+  width: 100%;
+  min-height: 2.5em;
+  padding: 0.3em;
+  border-radius: 6px;
+  background: rgba(255, 248, 234, 0.1);
+  color: var(--cream);
+  border: 1px solid rgba(255, 248, 234, 0.18);
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.dbg-out {
+  margin: 0.2em 0 0;
+  padding: 0.4em 0.5em;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 0.95em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+/* TAP TO GO's sheet: over the level and the touch stick, under the panel itself. */
+.dbg-catch {
+  position: absolute;
+  inset: 0;
+  z-index: 39;
+  pointer-events: auto;
+  touch-action: none;
+  background: rgba(92, 184, 255, 0.07);
+}
+
+.dbg-catch.hidden {
+  display: none;
+}
