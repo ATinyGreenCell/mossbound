@@ -323,6 +323,49 @@ for (const def of [...LEVELS, PRACTICE]) {
   if (def !== PRACTICE) ok(L.creatures.length > 0, `${id}: has something that moves`);
 }
 
+// Nothing may stand where levels.mjs plays an obstacle from. Those coordinates are not arbitrary:
+// each is a spot a sprout HAS to be in to take a swing, a bounce, a lift or a gate, so a creature
+// parked on one does not merely fail the test — it has taken away the only ground the obstacle can
+// be started from. Read straight out of levels.mjs so the two cannot drift apart, in two dimensions
+// because the tower is a climb and sharing a column there means nothing.
+{
+  const src = fs.readFileSync(path.join(DIR, 'levels.mjs'), 'utf8');
+  const consts = Object.fromEntries([...src.matchAll(/const\s+([A-Z_]+)\s*=\s*(\d+)\s*;/g)].map((m) => [m[1], +m[2]]));
+  const spots = {};
+  let cur = null;
+  for (const line of src.split('\n')) {
+    for (const m of line.matchAll(/__rig\((\d+)\s*,/g)) cur = +m[1];
+    for (const m of line.matchAll(/\.place\(\s*[^,]+,\s*([A-Z_]+|-?\d+)\s*(?:[-+]\s*\d+\s*)?,\s*(-?\d+)\s*\)/g)) {
+      if (cur === null) continue;
+      const x = m[1] in consts ? consts[m[1]] : Number(m[1]);
+      if (!Number.isFinite(x)) continue;
+      (spots[cur] ??= []).push([x, +m[2]]);
+    }
+  }
+  ok(Object.keys(spots).length === LEVELS.length, `found scripted spots for every level (${Object.keys(spots).length}/${LEVELS.length})`);
+  // Two tiles: standing room and a little more. This is the cheap half of the job — it catches a
+  // creature parked ON the one patch of ground an obstacle can be started from, which is a design
+  // error, not just a failing test. Whether one a few tiles away is still reachable past is settled
+  // by levels.mjs actually playing the obstacle, which is the only honest answer to that.
+  const CLEAR = 2 * T;
+  for (const [lv, pts] of Object.entries(spots)) {
+    const L = parseLevel(LEVELS[lv], +lv);
+    for (const c of L.creatures) {
+      const isBeetle = c.kind === Creature.Beetle;
+      const l = isBeetle ? c.x0 : c.x - TRAP_RANGE;
+      const r = isBeetle ? c.x0 + c.span : c.x + TRAP_RANGE;
+      const top = c.y - (isBeetle ? c.h : TRAP_RANGE);
+      const bot = c.y + (isBeetle ? c.h : TRAP_RANGE);
+      for (const [tx, ty] of pts) {
+        const px = tx * T + T / 2;
+        const py = ty * T - T / 2;
+        const clash = px > l - CLEAR && px < r + CLEAR && py > top - CLEAR && py < bot + CLEAR;
+        ok(!clash, `${LEVELS[lv].id} ${isBeetle ? 'beetle' : 'trap'} @${Math.floor(c.x / T)},${Math.floor(c.y / T)} is clear of the obstacle played from ${tx},${ty}`);
+      }
+    }
+  }
+}
+
 // the tower was the thinnest level in the game: it should not still be the emptiest
 {
   const counts = LEVELS.map((d) => parseLevel(d, 0).creatures.length);

@@ -18,9 +18,24 @@ jobs:
   # The e2e suite drives a real Chrome, and the online groups need live Nostr relays and MQTT
   # brokers. A phone can't run that and neither can the sandbox the builds come from, so this is
   # the only place it runs — and it has to run before anything is published, not after.
+  #
+  # It runs in four shards on four runners rather than as one block. A runner has two cores and no
+  # GPU, so the whole suite in one place takes half an hour of software rendering, and half an hour
+  # between pushing and seeing the site live is long enough that the gate starts to feel like
+  # something to route around. Split, the slowest shard decides.
+  #
+  # Which tests are in which shard is worked out by run.mjs from its own list, not written out
+  # here: a hand-kept list of group names in a workflow file is a list that loses one, and a lost
+  # group is a test that quietly stops running while this still reports green. (Writing it out by
+  # hand had already dropped `sprouts` before the first run.)
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: test (${{ matrix.shard }}/4)
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -44,16 +59,16 @@ jobs:
           E2E_SWIFTSHADER: '1'
         run: |
           set -o pipefail
-          if npm run test:e2e 2>&1 | tee /tmp/e2e.log; then exit 0; fi
+          if npm run test:e2e -- --shard ${{ matrix.shard }}/4 2>&1 | tee /tmp/e2e.log; then exit 0; fi
           failed=$(sed -n 's/^FAIL  *\([A-Za-z0-9-]*\).*/\1/p' /tmp/e2e.log | sort -u | paste -sd, -)
-          if [ -z "$failed" ]; then echo "::error::the suite failed before any test ran"; exit 1; fi
+          if [ -z "$failed" ]; then echo "::error::the shard failed before any test ran"; exit 1; fi
           echo "::warning::retrying once: $failed"
           npm run test:e2e -- --only "$failed"
       - name: Test output on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-output
+          name: e2e-output-shard-${{ matrix.shard }}
           path: tests/e2e/.out/
           if-no-files-found: ignore
           retention-days: 7

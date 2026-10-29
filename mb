@@ -16,6 +16,8 @@ REPO="${MB_REPO:-$HOME/mossbound}"
 # Scan both or builds silently go missing.
 DLS="${MB_DOWNLOADS:-$HOME/downloads $HOME/storage/downloads}"
 NAME="Mossbound"
+# where it lives, for the one message that has to name it before there is a repository to ask
+SLUG="ATinyGreenCell/mossbound"
 WORKFLOW="deploy.yml"
 SYNCED="refs/mb/synced"       # the commit of the last build synced in
 FORCE="${MB_FORCE:-}"
@@ -108,6 +110,18 @@ newest_archive() {
 repo_slug() {
   [ -n "${MB_GH_REPO:-}" ] && { printf '%s\n' "$MB_GH_REPO"; return; }
   g remote get-url origin 2>/dev/null | sed -n 's#.*github\.com[:/]\([^/]*/[^/]*\)$#\1#p' | sed 's#\.git$##'
+}
+
+# Every command but `get` needs a checkout. This used to be four copies of one line, and the one
+# that tried to be helpful printed `git clone https://github.com/ ""`: repo_slug SUCCEEDS with
+# nothing to say when there is no repository to read a remote from, so its `|| fallback` never ran.
+need_repo() {
+  [ -d "$REPO/.git" ] && return 0
+  _nr_s="$(repo_slug 2>/dev/null)"
+  die "there is no $NAME repository at $REPO.
+  mb get                      clones it there
+  MB_REPO=/path/to/it mb $1    if you keep it somewhere else
+  (by hand: git clone https://github.com/${_nr_s:-$SLUG} \"$REPO\")"
 }
 
 site_url() {
@@ -208,6 +222,9 @@ install_self() {   # the mb on your PATH follows the repo's copy
 
 cmd_sync() {
   command -v git >/dev/null 2>&1 || die "needs git (pkg install git)"
+  # before the download: no repository is the more basic problem, and saying so first saves a
+  # second guess about which of the two is wrong
+  need_repo sync
   a="$(newest_archive)" || true
   [ -n "$a" ] || die "no complete $NAME build (mossbound-v*.tar.gz) in: $DLS"
   t="${a% *}"; v="${a##* }"
@@ -236,7 +253,6 @@ cmd_sync() {
   Download the current build first, or set MB_FORCE=1 to go back."
   fi
 
-  [ -d "$REPO/.git" ] || die "$REPO is not a git repository: git clone https://github.com/$(repo_slug 2>/dev/null || echo ATinyGreenCell/mossbound) \"$REPO\""
   [ -n "$tree" ] || die "the repository has no commits yet"
 
   # 1. unsaved changes are never touched: they must be shipped (or thrown away) first
@@ -339,7 +355,7 @@ stray_check() {
 }
 
 cmd_ship() {
-  [ -d "$REPO/.git" ] || die "$REPO is not a git repository"
+  need_repo ship
   [ $# -ge 1 ] || die 'usage: mb ship "what changed"'
   stray_check
   g add -A
@@ -408,7 +424,7 @@ cmd_release() {
   v="$1"; shift
   note="$*"
   valid_ver "$v" || die "version must be digits and dots, e.g. 1.4.0"
-  [ -d "$REPO/.git" ] || die "$REPO is not a git repository"
+  need_repo release
   [ -n "$(repo_slug)" ] || die "no GitHub remote in $REPO"
   # GitHub decides what has been released: ask it first, before anything is pushed
   rt="$(remote_tag "$v")" || die "GitHub can't be reached right now; nothing was changed. Try again with a connection."
@@ -472,8 +488,28 @@ cmd_web() {
   say "in a few minutes: $(site_url)"
 }
 
+cmd_get() {   # the first step on a new device: the repository itself
+  command -v git >/dev/null 2>&1 || die "needs git (pkg install git)"
+  slug="${MB_GH_REPO:-$SLUG}"
+  if [ -d "$REPO/.git" ]; then
+    say "already here: $REPO"
+    cmd_pull
+    return 0
+  fi
+  # a folder someone has already put something in is never clobbered
+  if [ -d "$REPO" ] && [ -n "$(ls -A "$REPO" 2>/dev/null)" ]; then
+    die "$REPO already holds something that is not a $NAME checkout.
+  Move it aside, or keep the checkout elsewhere: MB_REPO=/path/to/it mb get"
+  fi
+  rmdir "$REPO" 2>/dev/null || true
+  say "cloning $slug into $REPO"
+  git clone "https://github.com/$slug" "$REPO" || die "clone failed"
+  install_self
+  say "v$(repo_ver) ready. Next: mb sync"
+}
+
 cmd_pull() {
-  [ -d "$REPO/.git" ] || die "$REPO is not a git repository"
+  need_repo pull
   g pull --ff-only || die "pull failed"
   install_self
 }
@@ -534,6 +570,7 @@ usage() {
   cat <<'EOF'
 mb - Mossbound: sync builds, check, publish on GitHub Pages
 
+  mb get              first time on a device: clone the repository into ~/mossbound
   mb status           repo / newest download / git, and what the live site serves
   mb sync             newest complete build (by the version inside) -> merged into the repo
   mb check            type-check and build (needs node: pkg install nodejs-lts)
@@ -558,6 +595,7 @@ EOF
 c="${1:-}"
 [ $# -gt 0 ] && shift
 case "$c" in
+  get)     cmd_get ;;
   status)  cmd_status ;;
   sync)    cmd_sync ;;
   check)   cmd_check ;;

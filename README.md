@@ -164,17 +164,20 @@ fails twice blocks it. The built site serves `version.json`, so what's live can 
 ## The `mb` command
 
 `mb` is the dev loop from a phone: Termux, a clone of this repo, and a build archive dropped in
-Downloads. It lives in the repo so it is never lost, and updates itself whenever you sync or pull.
+Downloads. It lives in the repo so it is never lost, and updates itself whenever you sync, pull or
+get — so the copy on your PATH follows the one in the repo without being told to.
+
+On a device that has never had it, `mb` comes out of a build archive and fetches the rest itself:
 
 ```sh
-git clone https://github.com/ATinyGreenCell/mossbound ~/mossbound
-ln -s ~/mossbound/mb ~/../usr/bin/mb      # or: cp ~/mossbound/mb $PREFIX/bin/mb
+tar xzOf ~/storage/downloads/mossbound-v*.tar.gz mb > $PREFIX/bin/mb && chmod +x $PREFIX/bin/mb
+mb get                    # clones the repository into ~/mossbound
 
 mb status                 # repo / newest download / git, and what the live site serves
 mb sync                   # newest build in Downloads -> merged into the repo
 mb check                  # type-check and build
 mb ship "what changed"    # commit and push
-mb release 1.4.0 "what changed"
+mb release 1.4.1 "what changed"
 ```
 
 `mb sync` takes the newest *complete* build by the version inside it, never by filename, and brings

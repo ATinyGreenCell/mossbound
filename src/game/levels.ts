@@ -94,14 +94,14 @@ function garden(): LevelDef {
   m.seeds(82, 84, F - 6);
   m.ground(86, 98, F - 3);
   m.seeds(88, 95, F - 4);
+  // a beetle on the ledge you land on after the springboard — met once you are over, never on the
+  // run-up, which is the one strip of ground that crossing has to have
+  m.set(87, F - 4, 'i');
+  m.set(96, F - 4, 'b');
   // down to the meadow and the nest
   m.fill(99, F - 2, 101, F - 1, '#');
   m.set(103, F - 1, 'i');
   m.seeds(104, 112, F - 1, 2);
-  // the meadow's residents: a beetle first, on ground wide enough to walk right round it, and a
-  // snaptrap further on with room to watch it from
-  m.set(105, F - 1, 'i');
-  m.set(109, F - 1, 'b');
   m.set(114, F - 1, 'S');
   m.row(112, 118, F - 7, '=');
   m.set(115, F - 8, 'F');
@@ -132,8 +132,8 @@ function garden(): LevelDef {
       'Too far to jump. Leap over the ring — the vine wraps around it. Push {move} to pump the swing, {jump} to let go.',
       'A branch, too high to jump to. Point at it and {shoot} to throw your vine over it — then swing, {climb} to pull yourself up, or {shoot} again to let go.',
       'Too far again! Run and bounce off your partner’s head to sail across — then {tug} to yank them over (too heavy? hold on while they climb).',
-      'Flowers bounce. And send your partner a {heart} now and then.',
       'A bristle beetle. It only ever paces its own patch — walk round it, or hop over. Those bristles smart.',
+      'Flowers bounce. And send your partner a {heart} now and then.',
       'And a snaptrap, rooted there. Come close and it rears up — that is your moment. Lure it with one of you, cross with the other.',
       'Soil! Small sprout — stand on it and {shoot} your vine into the ground. Something will grow for you both to stand on.',
     ],
@@ -151,7 +151,8 @@ function woods(): LevelDef {
   m.set(8, F - 1, 'i');
   m.fill(12, F - 2, 13, F - 1, 'X');
   m.seeds(15, 21, F - 2, 2);
-  m.set(18, F - 1, 'b');
+  // tucked against the trunk at 12-13, so its walk ends well before the stream's launch strip
+  m.set(14, F - 1, 'b');
   // the stream: swing to the island, swing again
   m.set(23, F - 1, 'i');
   m.pit(26, 31);
@@ -186,8 +187,6 @@ function woods(): LevelDef {
   m.set(92, F - 3, 'i');
   m.set(94, F - 2, ',');
   m.seeds(93, 95, F - 8);
-  // a trap guarding the lip of the clearing: the run-up to the stumps has to be taken past it
-  m.set(99, F - 3, 't');
   // stepping stumps: take turns swinging, each a little lower
   m.set(97, F - 3, 'i');
   m.pit(101, 106);
@@ -209,7 +208,9 @@ function woods(): LevelDef {
   m.fill(134, F + 1, 136, F + 3, 'X');
   m.ground(137, 171, F - 2);
   m.seeds(139, 155, F - 3, 2);
-  m.set(148, F - 3, 'b');
+  // the canopy: a beetle, then a trap rooted in the last stretch before the nest
+  m.set(143, F - 3, 'b');
+  m.set(152, F - 3, 't');
   m.set(160, F - 3, 'N');
   return {
     id: 'woods',
@@ -238,7 +239,8 @@ function mill(): LevelDef {
   m.set(3, F - 1, '1').set(5, F - 1, '2');
   m.set(8, F - 1, 'i');
   m.seeds(10, 16, F - 2, 2);
-  m.set(14, F - 1, 'b');
+  // back from the airlocks: its walk has to end before the strip the first gate is played from
+  m.set(13, F - 1, 'b');
   // two airlocks: hold the gate for each other
   m.set(21, F - 1, 'p');
   m.fill(26, 0, 26, F - 5, 'X');
@@ -421,8 +423,9 @@ function tower(): LevelDef {
   m.set(27, 98, 'b');
   plank(2, 43, 81);
   m.set(24, 80, 'C');
-  // (well clear of the lantern at 24: a trap you respawn into would be a trap you never get past)
-  m.set(30, 80, 't');
+  // Well clear of the lantern at 24 — a trap you respawn into is a trap you never get past — and
+  // at the other end of the girder from the fan at 34, which has to be walked up to and ridden.
+  m.set(14, 80, 't');
   // stage 2: the fan shaft, a ring swing across, a crumbling ledge
   m.set(20, 80, 'i');
   m.set(34, 81, 'U');
@@ -455,7 +458,8 @@ function tower(): LevelDef {
   plank(20, 26, 20);
   m.set(25, 20, 'U');
   for (const [x, y] of [[14, 28], [21, 25], [14, 22], [22, 19]]) m.set(x, y, '*');
-  m.set(24, 19, 'b');
+  // (not the girder at 20: end to end that one is the step up, and a beetle would own all of it)
+  m.set(16, 22, 'b');
   plank(14, 31, 9);
   m.set(18, 8, 'i');
   m.set(22, 8, 'N');
