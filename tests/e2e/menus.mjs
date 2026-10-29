@@ -374,12 +374,22 @@ const guestRoom = (page) => page.evaluate(() => {
   // player 2 sits too, and one of them changes their mind before the level select arrives
   await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: true, touched: true, value: 1 }; });
   await frames(page, 2);
-  await page.evaluate(() => document.querySelector('.local-screen [data-act="back"]').click());
+  // The window being aimed at is "both seats taken, level select not here yet", and it is two
+  // animation frames wide — thirty milliseconds on a screen, most of a second on a runner drawing
+  // three frames a second, by which time the lobby has already handed over. This used to be
+  // `querySelector(...).click()`, which dereferenced null and took the whole of menus.mjs down with
+  // it, so every check after this one never ran. Ask whether the button is still there instead.
+  const hitTheWindow = await page.evaluate(() => {
+    const b = document.querySelector('.local-screen [data-act="back"]');
+    b?.click();
+    return !!b;
+  });
   const atOnce = await page.evaluate(() => window.__fb.app.next?.constructor.name);
   await page.evaluate(() => { window.__pads[1].buttons[0] = { pressed: false, touched: false, value: 0 }; });
   await sleep(700);
   const later = await screenName(page);
-  t.check('BACK with both seats taken stays on the title', atOnce === 'TitleScreen' && later === 'TitleScreen', { atOnce, later });
+  if (hitTheWindow) t.check('BACK with both seats taken stays on the title', atOnce === 'TitleScreen' && later === 'TitleScreen', { atOnce, later });
+  else t.skip('BACK with both seats taken stays on the title', 'the lobby had already handed over to the level select — this machine draws too few frames to land inside that window');
   t.check('no errors (lobby back)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }

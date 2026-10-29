@@ -57,6 +57,11 @@ jobs:
       - name: End-to-end suite
         env:
           E2E_SWIFTSHADER: '1'
+          # Every waitFor timeout × 6. The figures in the suite were written against a machine with
+          # a GPU; this runner has none and draws a few frames a second, so they were giving up on
+          # things that had not happened YET and calling it a failure. A timeout costs nothing when
+          # the condition is already true, so this slows nothing down and weakens no assertion.
+          E2E_SLOW: '6'
         run: |
           set -o pipefail
           if npm run test:e2e -- --shard ${{ matrix.shard }}/4 2>&1 | tee /tmp/e2e.log; then exit 0; fi

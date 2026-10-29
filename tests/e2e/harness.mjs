@@ -15,6 +15,22 @@ fs.mkdirSync(OUT, { recursive: true });
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * How much longer than usual this machine is allowed to take. Multiplies every waitFor timeout.
+ *
+ * A timeout is slack and nothing else: it costs no time at all when the thing being waited for has
+ * already happened, so the only thing it encodes is how slow a machine may be before the test gives
+ * up. The figures through this suite were written against a developer's machine with a GPU. On a CI
+ * runner drawing two or three frames a second they are the wrong figures, and a test that gives up
+ * early reports a bug that is not there — which is exactly what happened: `xbox` waited four
+ * seconds for a note the game itself only shows after a second of frame deltas, and `continue` gave
+ * a level three seconds to open.
+ *
+ * This does not weaken a single assertion. Whatever had to be true still has to be true; the test
+ * just stops calling a slow machine a broken one.
+ */
+export const SLOW = Math.max(1, Number(process.env.E2E_SLOW) || 1);
+
+/**
  * Online play reaches out to public Nostr relays and MQTT brokers, and one of them being down is
  * normal (pairing goes through the others) — but the browser logs every failed attempt. Not a game error.
  */
@@ -87,12 +103,13 @@ export async function open(browser, { viewport = { width: 1280, height: 720 }, u
 
 export async function waitFor(fn, ms, label) {
   const t0 = Date.now();
-  while (Date.now() - t0 < ms) {
+  const limit = ms * SLOW;
+  while (Date.now() - t0 < limit) {
     const v = await fn();
     if (v) return v;
     await sleep(60);
   }
-  throw new Error(`timed out waiting for ${label}`);
+  throw new Error(`timed out waiting for ${label} (${limit} ms${SLOW > 1 ? `, ${ms} × ${SLOW}` : ''})`);
 }
 
 /** Resolve after `n` animation frames (gamepads are polled once a frame). */

@@ -132,7 +132,11 @@ function run(t) {
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
-    const killer = setTimeout(() => killGroup(p.pid), 300_000);
+    // The killer stops a hung test eating the whole run, and five minutes was the right figure for
+    // a machine that draws sixty frames a second. On one that draws three it is the wrong figure
+    // for the same test doing the same work, so it follows E2E_SLOW — but only up to double, since
+    // past that a genuinely hung test would start eating the job's own budget instead.
+    const killer = setTimeout(() => killGroup(p.pid), 300_000 * Math.min(2, Math.max(1, Number(process.env.E2E_SLOW) || 1)));
     p.on('close', () => {
       clearTimeout(killer);
       killGroup(p.pid);
