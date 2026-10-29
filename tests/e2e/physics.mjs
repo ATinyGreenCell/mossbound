@@ -414,8 +414,16 @@ const w = await page.evaluate(() => {
     const s = __rig(def, ['tall', 'small']);
     const [tall, small] = s.birds;
     const under = 17 * T; // the overhang's underside
-    tall.placeCenter({ x: 4.55 * T, y: under + 14 + tall.h / 2 });
-    small.placeCenter({ x: 4.46 * T, y: under + 20 - small.h / 2 });
+    // Both of them placed from the bodies, not from two numbers that happened to suit a 16 px
+    // bouncer: HEAD_ROOM under the overhang for the bouncer, and its feet OVERLAP into the partner's
+    // head, which is the contact that makes the bounce. Written as fixed offsets, a bouncer that
+    // grew to 26 px started six pixels inside the overhang — and once that was corrected it sat
+    // sixteen pixels clear of the partner's head and did not bounce at all. These two lines give the
+    // same spots as before for the bodies they were written for, and the right ones for any other.
+    const HEAD_ROOM = 4;
+    const OVERLAP = 6;
+    small.placeCenter({ x: 4.46 * T, y: under + HEAD_ROOM + small.h / 2 });
+    tall.placeCenter({ x: 4.55 * T, y: under + HEAD_ROOM + small.h - OVERLAP + tall.h / 2 });
     small.vy = 60;
     small.vx = 131;
     s.reset();
@@ -508,12 +516,28 @@ const gh = await page.evaluate(() => {
   {
     const s = __rig(0, ['even', 'even']);
     const [a, b] = s.birds;
-    a.placeCenter({ x: 2272 - a.w / 2 - 1, y: 20 * T - a.h / 2 }); // gripping the chasm's far wall
+    // On the chasm's far wall — the left face of the block at column 71, which runs from row 11 to
+    // the foot of the map at 17. This read row 20, which is below an eighteen-row level altogether,
+    // so the sprout was never beside that wall and whether it reported a grip was incidental; easing
+    // the fall was merely what stopped the coincidence landing. Row 14 is wall on both sides of the
+    // body, clear of the lip at 11 that stepWall would step up onto instead.
+    a.placeCenter({ x: 2272 - a.w / 2 - 1, y: 14 * T - a.h / 2 });
     b.placeCenter({ x: 2040, y: 9 * T - b.h / 2 }); // on the near ledge
     s.reset();
+    // No vine for this one. What it is about is a ghost reforming beside a partner who is gripping a
+    // wall over a pit, and the vine is beside the point — but it is not inert: eased off, the fall
+    // is slow enough that the vine catches the sprout on its way down the chasm and it hangs there
+    // instead of ever reaching the wall, so the scenario went on to test a death loop beside a
+    // partner holding nothing. Untied is the game's own default now anyway.
+    s.tether.untie();
     s.c[0].moveX = 1; // pushing into the wall: it grips
-    s.secs(0.3);
-    const clinging = a.cling !== 0;
+    // Wait for the grip rather than allow a fixed moment for it. Three tenths of a second was long
+    // enough while the fall was quicker; eased off, the sprout had not dropped far enough down the
+    // wall to take hold by then, and the scenario went on to test a death loop beside a partner who
+    // was not holding anything. What this needs is a clinging partner, so wait until there is one.
+    // (`until` answers with the seconds it took and -1 for never, so a grip taken on the very first
+    // step comes back as 0 — `> 0` would read the promptest possible success as a failure)
+    const clinging = s.until(() => a.cling !== 0, 2) >= 0;
     s.c[1].moveX = 1; // walks off the edge into the chasm
     let deaths = 0;
     let was = b.ghost;

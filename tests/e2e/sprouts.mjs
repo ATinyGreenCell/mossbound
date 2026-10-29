@@ -280,8 +280,16 @@ await sleep(200);
 const k1 = await kindsNow();
 await page.evaluate(() => window.__fb.flow.playLevel(0));
 await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'), 5000, 'session');
-const inLevel = await page.evaluate(() => window.__fbSession.birds.map((b) => `${b.kind}:${b.w}x${b.h}`).join(' '));
-t.check(`SWAP trades sprouts (${k0} → ${k1}), and the level uses it (${inLevel})`, k0 === 'tall/small' && k1 === 'small/tall' && inLevel === 'small:16x16 tall:22x40' && /tall sprout/.test(label0), { k0, k1, inLevel, label0 });
+// What the level is given, against what the kinds say it should be — rather than against the two
+// sizes written out as a string, which is what this did until one of the bodies changed height and
+// a passing check turned into a failing one that was right about everything except the number.
+const inLevel = await page.evaluate(async () => {
+  const { TRAITS } = await import('/src/game/traits.ts');
+  const bs = window.__fbSession.birds;
+  const say = (f) => bs.map((b) => `${b.kind}:${f(b).w}x${f(b).h}`).join(' ');
+  return { got: say((b) => b), want: say((b) => TRAITS[b.kind]), order: bs.map((b) => b.kind).join('/') };
+});
+t.check(`SWAP trades sprouts (${k0} → ${k1}), and the level uses it (${inLevel.got})`, k0 === 'tall/small' && k1 === 'small/tall' && inLevel.order === 'small/tall' && inLevel.got === inLevel.want && /tall sprout/.test(label0), { k0, k1, inLevel, label0 });
 const touchDash = await page.evaluate(() => { const b = document.querySelector('.tc-dash'); return b ? b.style.display !== 'none' : null; });
 t.check('the phone’s DASH button is there for a sprout that can dash', touchDash !== false, touchDash);
 await page.evaluate(() => { const s = JSON.parse(localStorage.getItem('mossbound.settings.v1') ?? '{}'); localStorage.setItem('mossbound.settings.v1', JSON.stringify({ ...s, even: true, swap: false })); });

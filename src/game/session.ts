@@ -854,16 +854,6 @@ export class Session implements Screen {
       b.shotCd = SHOT_COOLDOWN * 0.5;
       return;
     }
-    const near = this.birds[1 - b.idx];
-    // Standing next to your partner, the vine button is about the two of you: it ties the vine
-    // between you, or lets it go again. That is the only way the two sprouts are ever roped
-    // together — walk off on your own and you are on your own, which is the point.
-    if (near.present && !near.ghost && Math.hypot(near.x - b.x, near.y - b.y) <= LINK_REACH) {
-      if (this.tether.tied) this.untieVine(b);
-      else this.tieVine(b);
-      b.shotCd = SHOT_COOLDOWN * 0.5;
-      return;
-    }
     // standing on a patch of soil, the vine goes into the ground instead of at a ring: a plant
     // grows out of it. Only the small sprout (and either of two alike) has the knack.
     if (b.traits.grow && b.grounded) {
@@ -903,9 +893,28 @@ export class Session implements Screen {
         best = p;
       }
     }
-    b.shotCd = SHOT_COOLDOWN;
     const other = this.birds[1 - b.idx];
-    const hooked = !!best && other.present && !other.ghost && this.tether.shoot(b.idx, best, b, other, b.traits.shot * T);
+    /**
+     * Beside your partner, the vine button is about the two of you: it ties the vine between you, or
+     * lets it go again. That is the only way the sprouts are ever roped together — walk off on your
+     * own and you are on your own, which is the point.
+     *
+     * But a ring you are pointing at wins, and that is not a detail. The pair arrive at the lip of
+     * the garden chasm shoulder to shoulder, which is exactly where one of them grapples the ring:
+     * a rule that read proximity first would take the press every time and there would be no way to
+     * shoot a ring from beside your partner at all. So: pointing at a ring with a vine in hand
+     * shoots it, and otherwise the button is the link. Pointing at nothing is how you let go.
+     */
+    const beside = other.present && !other.ghost && Math.hypot(other.x - b.x, other.y - b.y) <= LINK_REACH;
+    if (beside && !(best && this.tether.tied)) {
+      if (this.tether.tied) this.untieVine(b);
+      else this.tieVine(b);
+      b.shotCd = SHOT_COOLDOWN * 0.5;
+      return;
+    }
+    b.shotCd = SHOT_COOLDOWN;
+    // a ring needs a vine to hang from, and there is no vine until the two of you tie one
+    const hooked = !!best && this.tether.tied && other.present && !other.ghost && this.tether.shoot(b.idx, best, b, other, b.traits.shot * T);
     if (!hooked || !best) {
       // nothing in reach, no line to it, or no vine to spare: a puff and a moment lost
       this.fx.burst(PK.Dust, kx + ax * 14, ky + ay * 14, 4, 70, 0.3, 4, '#dfeec4', 0, 3);

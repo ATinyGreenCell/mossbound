@@ -240,18 +240,27 @@ export class TitleScreen implements Screen {
     app.ui.appendChild(this.el);
     this.list = this.buildMain();
     audio.music('title');
-    // The browser decides whether it will take an install, and it decides a moment after the page
-    // loads — usually after this screen has already been built. So rebuild when the answer arrives,
-    // or the button only ever turns up on the second visit to the title.
-    onInstallable(() => {
-      if (this.app.current !== this) return;
-      const sel = this.list.sel;
-      this.list.dispose();
-      this.list = this.buildMain();
-      this.list.sel = Math.min(Math.max(sel, 0), this.list.items().length - 1);
-      this.list.highlight();
-    });
+    // The browser decides whether it will take an install a moment after the page loads, which is
+    // usually after this screen has been built — so the button has to be able to arrive late. It is
+    // in the menu from the start and merely hidden, and showing it is one attribute.
+    //
+    // Rebuilding the menu instead was the obvious thing and it was wrong. buildMain() assigns
+    // innerHTML, which destroys every button in it: a finger already on PLAY ONLINE would have had
+    // the row taken out from under it the instant Chrome made up its mind. (A hidden button is not
+    // in `items()` either, so it is not somewhere the highlight can land before it is there.)
+    onInstallable(() => this.showInstall());
     if (import.meta.env.DEV) Object.assign(window, { __fbTitle: this });
+  }
+
+  /** Show or hide INSTALL to match what the browser will take, without disturbing anything else. */
+  private showInstall() {
+    const el = this.el.querySelector<HTMLElement>('[data-act="install"]');
+    if (!el) return;
+    const want = !IS_STANDALONE && canInstall();
+    if (el.hidden === !want) return;
+    el.hidden = !want;
+    // the highlight may have been sitting on a row that has just moved; nothing is rebuilt
+    this.list.refresh();
   }
 
   private buildMain() {
@@ -259,7 +268,7 @@ export class TitleScreen implements Screen {
     // core/install.ts); iOS never fires that event and installs from Safari's own Share menu, so it
     // gets the sentence instead. Installed already? Neither is any use, and both go.
     const iosHint = IS_IOS && !IS_STANDALONE ? '<div class="foot-hint">tip: Share → <b>Add to Home Screen</b> to play full screen</div>' : '';
-    const installBtn = !IS_STANDALONE && canInstall() ? '<div class="btn small" data-act="install">INSTALL</div>' : '';
+    const installBtn = IS_STANDALONE ? '' : `<div class="btn small" data-act="install"${canInstall() ? '' : ' hidden'}>INSTALL</div>`;
     this.el.innerHTML = `
       <div class="logo-wrap"><div class="logo">moss<span>bound</span></div><div class="logo-sub">two little sprouts · one vine · any distance</div></div>
       <div class="menu">
@@ -294,14 +303,8 @@ export class TitleScreen implements Screen {
         this.flow.showControls();
         break;
       case 'install':
-        // the browser takes it from here; either way the offer is spent, so rebuild without it
-        void install().then(() => {
-          const sel = this.list.sel;
-          this.list.dispose();
-          this.list = this.buildMain();
-          this.list.sel = Math.min(sel, this.list.items().length - 1);
-          this.list.highlight();
-        });
+        // the browser takes it from here; the offer is spent either way, so the button goes
+        void install().then(() => this.showInstall());
         break;
       case 'settings':
         this.list.dispose();

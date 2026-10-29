@@ -103,6 +103,12 @@ body {
   background: rgba(255, 248, 234, 0.82);
 }
 
+/* `hidden` is only a UA default, so any author `display` on .btn would quietly override it — and the
+   INSTALL button on the title lives in the menu hidden until the browser says it will take one. */
+.btn[hidden] {
+  display: none;
+}
+
 .btn.sel {
   background: var(--gold);
   transform: scale(1.05);

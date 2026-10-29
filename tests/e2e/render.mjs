@@ -33,26 +33,45 @@ const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {
       return get.apply(this, a);
     };
     const scales = new Set();
-    const watch = (ms) => new Promise((done) => {
+    /**
+     * Follow the camera until its zoom has settled, sampling every frame.
+     *
+     * This used to watch for two seconds of wall time and then count how many distinct scales it had
+     * seen, asking for more than ten. That is really a count of FRAMES — two seconds buys a hundred
+     * and twenty of them on a screen and four on a runner with no GPU, so the check failed for want
+     * of samples while the camera had done exactly what it should. Waiting for the zoom to settle
+     * gets the whole movement on any machine; how many frames it took along the way is not the
+     * question. What is asked below is the direction it moved, which needs no magic number.
+     */
+    const settle = (capMs) => new Promise((done) => {
       const t0 = performance.now();
+      let last = NaN;
+      let still = 0;
       const f = () => {
-        scales.add(s.cam.scale);
-        if (performance.now() - t0 < ms) requestAnimationFrame(f);
-        else done();
+        const sc = s.cam.scale;
+        scales.add(sc);
+        still = Math.abs(sc - last) < 1e-4 ? still + 1 : 0;
+        last = sc;
+        if (still < 5 && performance.now() - t0 < capMs) requestAnimationFrame(f);
+        else done(sc);
       };
       f();
     });
     const F = 14;
+    const start = await settle(15000);
     s.devTeleport(52 * 32 + 16, F * 32 - 10.01, 1);
     s.ropeOffUntil = Infinity;
-    await watch(2000);
+    const out = await settle(15000);
     s.devTeleport(22 * 32 + 16, F * 32 - 10.01, 1);
     s.ropeOffUntil = Infinity;
-    await watch(2000);
+    const back = await settle(15000);
     HTMLCanvasElement.prototype.getContext = get;
-    return { paints, zoomSteps: scales.size };
+    return { paints, zoomSteps: scales.size, start: +start.toFixed(4), out: +out.toFixed(4), back: +back.toFixed(4) };
   });
-  t.check(`zooming out and back in paints only the tiles coming into view (${zoom.paints} paints over ${zoom.zoomSteps} zoom steps)`, zoom.zoomSteps > 10 && zoom.paints <= 40, zoom);
+  // The partner going far away eases the camera OUT and coming back eases it IN — that is the
+  // movement, and it is what makes the paint budget below mean anything. Direction rather than a
+  // threshold: a zoom that did not happen fails it, and no number here needs to be guessed.
+  t.check(`zooming out and back in paints only the tiles coming into view (${zoom.paints} paints, scale ${zoom.start} → ${zoom.out} → ${zoom.back})`, zoom.out < zoom.start && zoom.back > zoom.out && zoom.paints <= 40, zoom);
 }
 
 // ---- far along the level, every chunk of tiles lands exactly on the world grid
@@ -101,6 +120,17 @@ const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {
     const px = (X, Y) => [...ctx.getImageData(Math.round(X), Math.round(Y), 1, 1).data.slice(0, 3)];
     // a pixel of ground just under the bird's feet, one of sky at the top left
     const look = () => ({ ground: px(b.x * s.cam.scale - s.cam.ox, (b.y + 22) * s.cam.scale - s.cam.oy), sky: px(2, 2) });
+    // Wait for ground to be on screen before sampling it. The renderer clears to black, so a pixel
+    // read before the chunks are composited comes back [0,0,0] — and on a machine drawing a few
+    // frames a second it still is, 800 ms in. The comparison was then "black before, grass after",
+    // which fails: the repaint the reset is supposed to produce reads as a change rather than a
+    // match. Whether the ground ever arrived at all is worth knowing, so it goes in the result.
+    let lit = false;
+    for (let k = 0; k < 600 && !lit; k++) {
+      const g = look().ground;
+      lit = g[0] + g[1] + g[2] > 30;
+      if (!lit) await after();
+    }
     const before = look();
     for (const c of s.tiles.chunks.values()) c.canvas.width = c.canvas.width;
     for (const l of s.backdrop.layers) l.canvas.width = l.canvas.width;
@@ -110,10 +140,10 @@ const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {
     r.canvas.dispatchEvent(new Event('contextrestored'));
     await after();
     await after();
-    return { before, after: look() };
+    return { lit, before, after: look() };
   });
   const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) <= 24);
-  t.check('after a GPU reset the ground and the sky are painted again', near(reset.before.ground, reset.after.ground) && near(reset.before.sky, reset.after.sky), reset);
+  t.check('after a GPU reset the ground and the sky are painted again', reset.lit && near(reset.before.ground, reset.after.ground) && near(reset.before.sky, reset.after.sky), reset);
 }
 
 // ---- resizing (a phone turning, a window edge dragged) never shows a black frame

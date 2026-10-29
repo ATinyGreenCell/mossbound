@@ -43,19 +43,43 @@ const r = await page.evaluate(async () => {
   const walkTo = (s, i, tx, secs = 6) => s.until(() => { const d = tx * T + 16 - s.birds[i].x; s.c[i].moveX = Math.abs(d) < 10 ? 0 : Math.sign(d); return Math.abs(d) < 10; }, secs);
   const feet = (s, i) => +((s.birds[i].y + s.birds[i].h / 2) / T).toFixed(2);
   /** leap from the edge holding jump, let the string take you over the ring, pump, let go toward the far side */
-  const swingAcross = (s, i, edgeX, farX, secs = 12) => {
-    s.c[i].moveX = 1; s.until(() => s.birds[i].x > (edgeX - 0.6) * T, 4); s.jump(i);
-    let hopped = false;
-    return s.until(() => {
+  /**
+   * Swing bird `i` off the lip at `edgeX`, across the gap, to land on row `land` past `farX`.
+   *
+   * Letting go of a swing is a judgement, not a position. The arc depends on the body, on how the
+   * pump went and on where the vine caught, so what makes the crossing is a WINDOW of release points
+   * rather than one — and this used to let go at a single fixed point, one and a half tiles short of
+   * the far mark. That passed for years and then stopped when the fall was slowed, because a slower
+   * fall carries you further from the same release: the fixed point fell outside the window for two
+   * of the three pairs, while every one of those crossings was still perfectly makeable by letting
+   * go a little sooner.
+   *
+   * Which is what a player does — you feel the release out over a couple of goes. So this tries the
+   * window, earliest useful release last, and takes the first that lands. Failing all of them is the
+   * thing actually worth knowing, because that is an obstacle nobody can get across, and it is the
+   * only case this reports as a failure. `tries` goes in the detail either way.
+   */
+  const swingAcross = (make, i, edgeX, farX, land, maxX = Infinity, secs = 12) => {
+    const tries = [];
+    for (const lead of [1.5, 2.5, 3.5, 4.5]) {
+      const s = make();
+      s.c[i].moveX = 1; s.until(() => s.birds[i].x > (edgeX - 0.6) * T, 4); s.jump(i);
+      let hopped = false;
+      const got = s.until(() => {
+        const b = s.birds[i];
+        s.c[i].jump = !b.hanging && !hopped;
+        s.c[i].moveX = b.hanging ? Math.sign(b.vx) || 1 : 1;
+        // (a climber that caught the far wall climbs up it)
+        s.c[i].moveY = b.cling ? 1 : 0;
+        if (b.hanging && !hopped && b.x > (farX - lead) * T && b.vx > -20) { s.jump(i); hopped = true; }
+        if (b.hanging && hopped && b.x < (farX - 3) * T) hopped = false;
+        return b.grounded && b.x > farX * T;
+      }, secs) > 0;
       const b = s.birds[i];
-      s.c[i].jump = !b.hanging && !hopped;
-      s.c[i].moveX = b.hanging ? Math.sign(b.vx) || 1 : 1;
-      // (a climber that caught the far wall climbs up it)
-      s.c[i].moveY = b.cling ? 1 : 0;
-      if (b.hanging && !hopped && b.x > (farX - 1.5) * T && b.vx > -20) { s.jump(i); hopped = true; }
-      if (b.hanging && hopped && b.x < (farX - 3) * T) hopped = false;
-      return b.grounded && b.x > farX * T;
-    }, secs) > 0;
+      tries.push({ lead, got, feet: feet(s, i), x: +(b.x / T).toFixed(2) });
+      if (got && feet(s, i) === land && b.x < maxX * T && !b.ghost) return { ok: true, lead, tries };
+    }
+    return { ok: false, tries };
   };
   const col = (s, i) => +(s.birds[i].x / T).toFixed(2);
   /** walk bird i to column `fromX`, run `runUp` seconds toward `dir`, then hold the jump to land on the ledge whose top is `toRow` */
@@ -97,8 +121,11 @@ const r = await page.evaluate(async () => {
       walkTo(s, 1, 48); s.c[1].moveX = 0; s.c[1].moveY = 1;
       g.climbAfter = s.until(() => s.birds[1].grounded && s.birds[1].y < 9 * T, 6) > 0;
       // the chasm: one holds on at the edge, the other leaps the ring and swings across
-      s = __rig(0, K); s.place(0, 64, 9); s.place(1, 60, 9); s.reset(); s.c[0].anchor = true; s.secs(0.2);
-      g.ringSwing = swingAcross(s, 1, 65, 71) && feet(s, 1) === 11;
+      {
+        const r = swingAcross(() => { const q = __rig(0, K); q.place(0, 64, 9); q.place(1, 60, 9); q.reset(); q.c[0].anchor = true; q.secs(0.2); return q; }, 1, 65, 71, 11);
+        g.ringSwing = r.ok;
+        g.ringSwingDetail = r;
+      }
       // the springboard: run and bounce off the partner at the edge, sail across, tug them over
       s = __rig(0, K); s.place(1, 80, 11); s.place(0, 74, 11); s.reset(); s.secs(0.2);
       // stand beside the partner, hop up and drift onto their head (holding jump: the full bounce),
@@ -197,11 +224,16 @@ const r = await page.evaluate(async () => {
       let s = __rig(1, K); s.place(0, 76, 18); s.place(1, 77, 18); s.reset(); s.secs(0.2);
       s.c[1].moveX = 1; s.until(() => s.birds[1].vy < -500, 3);
       w.oakBlossom = s.until(() => s.birds[1].grounded && feet(s, 1) === 12, 3) > 0;
-      s = __rig(1, K); s.place(0, 31, 14); s.place(1, 27, 14); s.reset(); s.secs(0.1);
-      s.place(0, 25, 14); s.place(1, 21, 14); s.reset(); s.c[0].anchor = true; s.secs(0.2);
-      w.streamSwing = swingAcross(s, 1, 26, 32) && feet(s, 1) === 16;
-      s = __rig(1, K); s.place(0, 100, 12); s.place(1, 96, 12); s.reset(); s.c[0].anchor = true; s.secs(0.2);
-      w.stumpSwing = swingAcross(s, 1, 101, 107) && feet(s, 1) === 14 && s.birds[1].x < 110 * T;
+      {
+        const r = swingAcross(() => { const q = __rig(1, K); q.place(0, 31, 14); q.place(1, 27, 14); q.reset(); q.secs(0.1); q.place(0, 25, 14); q.place(1, 21, 14); q.reset(); q.c[0].anchor = true; q.secs(0.2); return q; }, 1, 26, 32, 16);
+        w.streamSwing = r.ok;
+        w.streamSwingDetail = r;
+      }
+      {
+        const r = swingAcross(() => { const q = __rig(1, K); q.place(0, 100, 12); q.place(1, 96, 12); q.reset(); q.c[0].anchor = true; q.secs(0.2); return q; }, 1, 101, 107, 14, 110);
+        w.stumpSwing = r.ok;
+        w.stumpSwingDetail = r;
+      }
       // the hollow under the roots (1.2.0): one tile high, so only the small sprout gets in
       {
         const s2 = __rig(1, K);

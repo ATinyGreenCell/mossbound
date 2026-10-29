@@ -104,7 +104,11 @@ await sleep(500);
 const xs = () => page.evaluate(() => window.__fbSession.birds.map((b) => b.x));
 const w0 = await xs();
 await padAxis(page, 1, -1, 0);
-await frames(page, 20);
+// a third of a second of the game's clock, which is what twenty frames was on the machine this was
+// written on. Twenty frames where a frame is a tenth of a second is two seconds, and a sprout given
+// two seconds walks into the far wall and takes its partner along on the vine — so the check that
+// the partner stayed put failed on a sprout that had simply been allowed to walk six times as far.
+await gameTime(page, 0.33);
 await padAxis(page, 1, 0, 0);
 await sleep(300);
 const w1 = await xs();
