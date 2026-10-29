@@ -4,14 +4,17 @@
 // the online tests also need internet access (they pair through public Nostr relays / MQTT brokers).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const DIR = path.dirname(new URL(import.meta.url).pathname);
 const ROOT = path.resolve(DIR, '../..');
 const argv = process.argv.slice(2);
 const opt = (name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
-const jobs = Number(opt('-j')) || 6;
+const cpus = os.availableParallelism?.() ?? os.cpus().length ?? 4;
+const jobs = Number(opt('-j')) || Math.max(2, Math.min(6, cpus - 1));
 const only = opt('--only')?.split(',');
+const shard = opt('--shard');
 const PORT = 5199;
 
 const passed = (label) => (o) => new RegExp(`^${label} OK$`, 'm').test(o) && /--- errors ---\s*\nnone/.test(o);
@@ -41,6 +44,29 @@ const TESTS = [
   // times the sound library's build: run alone so a busy machine can't look like a hitch
   { name: 'audio', file: 'audio.mjs', est: 30, solo: true, pass: passed('audio') },
 ].filter((t) => !only || only.includes(t.name));
+
+if (shard) {
+  const [iRaw, nRaw] = shard.split('/');
+  const n = Number(nRaw);
+  const i = Number(iRaw);
+  if (!(n >= 1) || !(i >= 1) || i > n) {
+    console.error(`bad --shard ${shard} (want i/n, e.g. 2/4)`);
+    process.exit(2);
+  }
+  const bins = Array.from({ length: n }, () => ({ load: 0, names: new Set() }));
+  for (const t of [...TESTS].sort((a, b) => b.est - a.est)) {
+    const b = bins.reduce((lo, x) => (x.load < lo.load ? x : lo));
+    b.load += t.est;
+    b.names.add(t.name);
+  }
+  const mine = bins[i - 1];
+  for (let k = TESTS.length - 1; k >= 0; k--) if (!mine.names.has(TESTS[k].name)) TESTS.splice(k, 1);
+  console.log(`shard ${i}/${n}: ${TESTS.map((t) => t.name).join(' ')}`);
+}
+if (!TESTS.length) {
+  console.log('nothing to run');
+  process.exit(0);
+}
 
 async function startServer() {
   if (process.env.E2E_BASE) return { base: process.env.E2E_BASE, stop() {} };
