@@ -113,13 +113,31 @@ export const screenName = (page) => page.evaluate(() => window.__fb?.app?.curren
 /** Results reporter: `check(name, ok, detail)` prints a line; `finish(label)` prints the verdict and errors. */
 export function reporter() {
   const checks = [];
+  let skipped = 0;
   return {
     check(name, ok, detail = '') {
       checks.push(!!ok);
       console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail ? ` ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`);
     },
+    /**
+     * A check the machine could not run — not one that passed, and not one that failed.
+     *
+     * The distinction is worth a verb of its own. A check that needs something the machine does not
+     * have (a GPU that can draw thirty frames a second, a pixel ratio that can be changed) has two
+     * dishonest endings available to it: pass, which claims something was verified that was not, and
+     * fail, which blames the code for the room it is in. Both were on offer here, and failing is how
+     * the gate ended up blocking a release over a renderer.
+     *
+     * `why` must say what was missing and what was measured, because the next person to read it has
+     * to be able to tell "this machine cannot" from "I gave up".
+     */
+    skip(name, why) {
+      skipped++;
+      console.log(`SKIP ${name} — ${why}`);
+    },
     finish(label, errors = []) {
       const ok = checks.length > 0 && checks.every(Boolean);
+      if (skipped) console.log(`(${skipped} check${skipped > 1 ? 's' : ''} skipped: this machine could not run them)`);
       console.log(ok ? `${label} OK` : `${label} FAILED`);
       console.log('--- errors ---');
       console.log(errors.join('\n') || 'none');

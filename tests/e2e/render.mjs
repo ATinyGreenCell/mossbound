@@ -135,8 +135,23 @@ const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {
     await page.setViewport({ width: w, height: h });
     await sleep(200);
   }
-  const flash = await page.evaluate(() => { window.__flash.on = false; return window.__flash; });
-  t.check(`resizing never shows a black frame (${flash.black} of ${flash.samples})`, flash.samples > 30 && flash.black === 0, flash);
+  // Those six resizes take 1.2 s, which is thirty-odd frames on a screen and eleven on a software
+  // renderer with no GPU behind it. Keep watching until there is enough to go on, rather than
+  // deciding on eleven — the resizing is over, so this is only sampling a settled canvas.
+  let flash = await page.evaluate(() => window.__flash);
+  for (let waited = 0; flash.samples <= 30 && waited < 6000; waited += 500) {
+    await sleep(500);
+    flash = await page.evaluate(() => window.__flash);
+  }
+  flash = await page.evaluate(() => { window.__flash.on = false; return window.__flash; });
+  if (flash.black > 0) {
+    // conclusive however few frames it took: a black frame is a black frame
+    t.check(`resizing never shows a black frame (${flash.black} of ${flash.samples})`, false, flash);
+  } else if (flash.samples > 30) {
+    t.check(`resizing never shows a black frame (0 of ${flash.samples})`, true, flash);
+  } else {
+    t.skip('resizing never shows a black frame', `only ${flash.samples} frames in 7 s — too slow to tell, and none of them were black`);
+  }
 }
 
 // ---- a big screen (1600 rows): scrolling through the level keeps the tile cache within its memory
@@ -163,10 +178,19 @@ const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 2, mobile: false });
   await sleep(400);
   const r2 = await ratio();
+  // What the PAGE thinks its ratio is, read while the override is still on — afterwards it is back
+  // to 1 and says nothing. If r2 is still 1 the question is whether the renderer ignored the change
+  // or the machine never made it, and those want opposite answers: one is a bug, the other is a
+  // machine that cannot be asked. This is the only moment the difference is visible.
+  const devDpr = await page.evaluate(() => window.devicePixelRatio);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
   await sleep(400);
   const r3 = await ratio();
-  t.check('a change of pixel density alone is followed', r1 === 1 && r2 === 2 && r3 === 1, { r1, r2, r3 });
+  if (r2 !== 2 && devDpr < 1.5) {
+    t.skip('a change of pixel density alone is followed', `this machine kept devicePixelRatio at ${devDpr} when asked for 2, so there was no change to follow`);
+  } else {
+    t.check('a change of pixel density alone is followed', r1 === 1 && r2 === 2 && r3 === 1, { r1, r2, r3, devDpr });
+  }
 }
 
 const errs = [...page.errors];
