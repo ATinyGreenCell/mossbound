@@ -63,13 +63,69 @@ jobs:
           failed=$(sed -n 's/^FAIL  *\([A-Za-z0-9-]*\).*/\1/p' /tmp/e2e.log | sort -u | paste -sd, -)
           if [ -z "$failed" ]; then echo "::error::the shard failed before any test ran"; exit 1; fi
           echo "::warning::retrying once: $failed"
-          npm run test:e2e -- --only "$failed"
+          npm run test:e2e -- --only "$failed" 2>&1 | tee /tmp/e2e-retry.log
+      # Why a run failed has to be readable from wherever the next change is being written, and a
+      # sandbox can reach api.github.com but not the Actions web pages or the blob store the logs
+      # and artifacts actually live in. A step summary comes back through the plain API, so it is
+      # the one place a failure can be put and still be found. Everything needed to act on a
+      # failure goes here: which groups failed, and the tail of each one's own log.
+      # Why a run failed has to be readable from wherever the next change gets written, and a
+      # sandbox can reach api.github.com but not the Actions web pages or the blob store that the
+      # logs and artifacts actually live in — both answer 403. So the reason goes out twice, by the
+      # two routes that do come back through the plain API:
+      #
+      #   ::error:: annotations, which are the proven one (reading the group names off a `retrying`
+      #   warning is how the first failure was identified at all), and
+      #   the step summary, which has room for the whole tail of each failed log.
+      - name: Why it failed
+        if: failure()
+        run: |
+          logs="/tmp/e2e-retry.log /tmp/e2e.log"
+          names=$(sed -n 's/^FAIL  *\([A-Za-z0-9-]*\).*/\1/p' $logs 2>/dev/null | sort -u)
+          if [ -z "$names" ]; then
+            echo "::error::shard ${{ matrix.shard }}/4 failed before any test ran"
+          else
+            echo "::error::shard ${{ matrix.shard }}/4 failed: $(echo "$names" | paste -sd, -)"
+          fi
+          {
+            echo "## shard ${{ matrix.shard }}/4 failed"
+            echo
+            echo '### first run'
+            echo '```'
+            grep -hE '^(PASS|FAIL|shard |[0-9]+/[0-9]+ passed)' /tmp/e2e.log 2>/dev/null | head -40
+            echo '```'
+            if [ -s /tmp/e2e-retry.log ]; then
+              echo '### retry'
+              echo '```'
+              grep -hE '^(PASS|FAIL|shard |[0-9]+/[0-9]+ passed)' /tmp/e2e-retry.log 2>/dev/null | head -40
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          for n in $names; do
+            f="tests/e2e/.out/logs/$n.log"
+            [ -f "$f" ] || continue
+            # the last few lines as an annotation (newlines survive; keep it short enough to read)
+            echo "::error title=$n::$(tail -n 6 "$f" | sed 's/%/%25/g; s/\r/%0D/g' | awk '{printf "%s%%0A", $0}')"
+            {
+              echo
+              echo "<details><summary>$n</summary>"
+              echo
+              echo '```'
+              tail -n 60 "$f"
+              echo '```'
+              echo
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
       - name: Test output on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-output-shard-${{ matrix.shard }}
           path: tests/e2e/.out/
+          # .out is a hidden directory, and v4 drops hidden files unless told not to — without this
+          # the upload reports success and uploads nothing, which is worse than failing
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 
