@@ -117,9 +117,16 @@ t.check('controllers back in swapped slots go to whoever presses Ⓐ, not by slo
 // clear the level: both birds into the nest
 await page.evaluate(() => { const s = window.__fbSession; const n = s.L.nest; s.birds[0].place({ x: n.x - 10, y: n.y - 6 }); s.birds[1].place({ x: n.x + 10, y: n.y - 6 }); s.tether.tie(s.birds[0], s.birds[1]); });
 const cleared = await waitFor(() => page.evaluate(() => !!document.querySelector('.overlay.clear [data-act="next"]')), 8000, 'clear overlay');
-await sleep(500);
-await padPress(page, 0, A);
-const next = await waitFor(() => page.evaluate(() => window.__fbSession?.L?.index === 1), 5000, 'level 2');
+// Press until it takes, which is what a player does. A card nobody asked for holds off confirm for
+// its first few polls on purpose, so that the tap you were already making in the nest does not skip
+// the seeds and the time you were meant to read (see ButtonList.arm) — and where a frame is a tenth
+// of a second, half a second of waiting is one poll, so a single press here landed inside the
+// hold-off and was dropped exactly as designed. Pressing once and concluding the level would not
+// advance was the test mistaking that for a fault.
+const next = await waitFor(async () => {
+  await padPress(page, 0, A);
+  return page.evaluate(() => window.__fbSession?.L?.index === 1);
+}, 8000, 'level 2').catch(() => false);
 t.check('both in the nest clears the level; NEXT LEVEL', cleared && next);
 const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v3') ?? '{}'));
 t.check('the clear is saved', saved.unlocked >= 1 && saved.levels?.garden?.clears === 1, { unlocked: saved.unlocked });
