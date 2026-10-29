@@ -133,4 +133,9 @@ export class Camera {
   toCss(x: number, y: number, pixelRatio: number): Pt {
     return { x: (x * this.scale - this.ox) / pixelRatio, y: (y * this.scale - this.oy) / pixelRatio };
   }
+
+  /** CSS pixel position → world point: toCss turned round, for a tap on the canvas. */
+  fromCss(x: number, y: number, pixelRatio: number): Pt {
+    return { x: (x * pixelRatio + this.ox) / this.scale, y: (y * pixelRatio + this.oy) / this.scale };
+  }
 }

@@ -23,7 +23,7 @@ export const relayNoise = (text) => /WebSocket connection to 'wss:\/\/[^']+' fai
 export const testNoise = (text) => /willReadFrequently/.test(text);
 
 /** The game URL with dev-only test switches: always ?fast, plus ?noaudio unless the test listens. */
-export const url = ({ audio = false, extra = '', base = BASE } = {}) => `${base}?fast${audio ? '' : '&noaudio'}${extra ? `&${extra}` : ''}`;
+export const url = ({ audio = false, extra = '', hash = '', base = BASE } = {}) => `${base}?fast${audio ? '' : '&noaudio'}${extra ? `&${extra}` : ''}${hash ? `#${hash}` : ''}`;
 
 /**
  * Headless Chrome on the machine's GPU (like a real phone or laptop: a level runs at a steady 60 fps).

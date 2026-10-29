@@ -98,10 +98,16 @@ function garden(): LevelDef {
   m.fill(99, F - 2, 101, F - 1, '#');
   m.set(103, F - 1, 'i');
   m.seeds(104, 112, F - 1, 2);
+  // the meadow's residents: a beetle first, on ground wide enough to walk right round it, and a
+  // snaptrap further on with room to watch it from
+  m.set(105, F - 1, 'i');
+  m.set(109, F - 1, 'b');
   m.set(114, F - 1, 'S');
   m.row(112, 118, F - 7, '=');
   m.set(115, F - 8, 'F');
   m.seeds(113, 117, F - 10);
+  m.set(119, F - 1, 'i');
+  m.set(123, F - 1, 't');
   m.seeds(120, 132, F - 2, 3);
   // a patch of soil: the small sprout grows a leaf platform, and from it both of them reach the
   // seeds hanging above — two rows higher than a jump from the meadow can manage. (Clear of the seed
@@ -127,6 +133,8 @@ function garden(): LevelDef {
       'A branch, too high to jump to. Point at it and {shoot} to throw your vine over it — then swing, {climb} to pull yourself up, or {shoot} again to let go.',
       'Too far again! Run and bounce off your partner’s head to sail across — then {tug} to yank them over (too heavy? hold on while they climb).',
       'Flowers bounce. And send your partner a {heart} now and then.',
+      'A bristle beetle. It only ever paces its own patch — walk round it, or hop over. Those bristles smart.',
+      'And a snaptrap, rooted there. Come close and it rears up — that is your moment. Lure it with one of you, cross with the other.',
       'Soil! Small sprout — stand on it and {shoot} your vine into the ground. Something will grow for you both to stand on.',
     ],
   };
@@ -143,6 +151,7 @@ function woods(): LevelDef {
   m.set(8, F - 1, 'i');
   m.fill(12, F - 2, 13, F - 1, 'X');
   m.seeds(15, 21, F - 2, 2);
+  m.set(18, F - 1, 'b');
   // the stream: swing to the island, swing again
   m.set(23, F - 1, 'i');
   m.pit(26, 31);
@@ -154,6 +163,9 @@ function woods(): LevelDef {
   m.seeds(37, 40, F - 3);
   m.ground(42, 55, F + 4);
   m.set(45, F + 3, 'C');
+  // a beetle to get past before the bridge, so you reach it already moving — at the far end of the
+  // bank, where its walk cannot reach back to the lantern at 45
+  m.set(55, F + 3, 'b');
   // the cracking bridge, and a feather down in the hollow (lower your partner on the string)
   m.set(49, F + 3, 'i');
   m.pit(56, 63);
@@ -174,6 +186,8 @@ function woods(): LevelDef {
   m.set(92, F - 3, 'i');
   m.set(94, F - 2, ',');
   m.seeds(93, 95, F - 8);
+  // a trap guarding the lip of the clearing: the run-up to the stumps has to be taken past it
+  m.set(99, F - 3, 't');
   // stepping stumps: take turns swinging, each a little lower
   m.set(97, F - 3, 'i');
   m.pit(101, 106);
@@ -195,6 +209,7 @@ function woods(): LevelDef {
   m.fill(134, F + 1, 136, F + 3, 'X');
   m.ground(137, 171, F - 2);
   m.seeds(139, 155, F - 3, 2);
+  m.set(148, F - 3, 'b');
   m.set(160, F - 3, 'N');
   return {
     id: 'woods',
@@ -223,6 +238,7 @@ function mill(): LevelDef {
   m.set(3, F - 1, '1').set(5, F - 1, '2');
   m.set(8, F - 1, 'i');
   m.seeds(10, 16, F - 2, 2);
+  m.set(14, F - 1, 'b');
   // two airlocks: hold the gate for each other
   m.set(21, F - 1, 'p');
   m.fill(26, 0, 26, F - 5, 'X');
@@ -248,6 +264,7 @@ function mill(): LevelDef {
   m.ground(52, 70, F - 9);
   m.set(55, F - 10, 'C');
   m.seeds(57, 68, F - 10, 2);
+  m.set(66, F - 10, 'b');
   // the mill race: ride the ferry together
   m.ground(71, 76, F - 6);
   m.set(73, F - 7, 'i');
@@ -267,12 +284,14 @@ function mill(): LevelDef {
   m.seeds(108, 111, 2);
   m.seeds(119, 128, 2, 3);
   m.seeds(110, 124, F - 7, 2);
+  m.set(121, F - 7, 't');
   // the mill roof: one more springboard, and the nest
   m.ground(131, 169, 6);
   m.set(136, 5, 'i');
   m.pit(140, 145, 6);
   m.seeds(141, 144, 2);
   m.seeds(147, 155, 5, 2);
+  m.set(152, 5, 'b');
   m.set(160, 5, 'N');
   return {
     id: 'mill',
@@ -308,15 +327,18 @@ function paris(): LevelDef {
   m.seeds(15, 17, 11);
   m.ground(18, 30, 14);
   m.seeds(20, 28, 13, 2);
+  m.set(25, 13, 'b');
   m.seeds(31, 34, 10);
   m.ground(35, 52, 13);
   // a chimney updraft to the tall roof
+  m.set(42, 12, 'b');
   m.set(47, 12, 'i');
   m.set(50, 13, 'U');
   m.set(49, 1, 'F');
   m.ground(53, 70, 4);
   m.set(56, 3, 'C');
   m.seeds(58, 64, 3, 2);
+  m.set(61, 3, 't');
   // the boulevard: ride the window-washer's gondola (a feather waits on a balcony below)
   m.set(66, 3, 'i');
   m.set(76, 1, 'o');
@@ -333,6 +355,7 @@ function paris(): LevelDef {
   m.ground(111, 130, 6);
   m.set(114, 5, 'C');
   m.seeds(116, 122, 5, 2);
+  m.set(123, 5, 'b');
   // loose tiles over the courtyard (a feather down there, for whoever gets lowered)
   m.set(124, 5, 'i');
   m.row(131, 142, 6, '%');
@@ -340,6 +363,7 @@ function paris(): LevelDef {
   m.seeds(132, 141, 4, 3);
   m.ground(143, 189, 6);
   m.seeds(145, 160, 5, 3);
+  m.set(155, 5, 't');
   // the rooftop garden, and the nest with a view of the tower
   m.set(165, 5, 'i');
   m.set(176, 5, 'N');
@@ -392,8 +416,13 @@ function tower(): LevelDef {
   plank(4, 12, 84);
   m.set(6, 79, 'F');
   for (const [x, y] of [[9, 104], [17, 101], [25, 98], [33, 95], [24, 92], [16, 89]]) m.set(x, y, '*');
+  // beetles pacing the staircase: a girder you have to land on at the right moment, not just reach
+  m.set(19, 101, 'b');
+  m.set(27, 98, 'b');
   plank(2, 43, 81);
   m.set(24, 80, 'C');
+  // (well clear of the lantern at 24: a trap you respawn into would be a trap you never get past)
+  m.set(30, 80, 't');
   // stage 2: the fan shaft, a ring swing across, a crumbling ledge
   m.set(20, 80, 'i');
   m.set(34, 81, 'U');
@@ -410,12 +439,14 @@ function tower(): LevelDef {
   for (const [x, y] of [[37, 69], [25, 71], [17, 68], [22, 65], [16, 62]]) m.set(x, y, '*');
   plank(7, 38, 58);
   m.set(20, 57, 'C');
+  m.set(12, 57, 'b');
   m.set(36, 52, 'F');
   // stage 3: the service lift
   m.set(24, 57, 'i');
   for (let y = 54; y >= 40; y -= 3) m.set(27, y, '*');
   plank(10, 35, 36);
   m.set(16, 35, 'C');
+  m.set(30, 35, 't');
   // stage 4: the spire
   m.set(12, 35, 'S');
   plank(11, 16, 29);
@@ -424,6 +455,7 @@ function tower(): LevelDef {
   plank(20, 26, 20);
   m.set(25, 20, 'U');
   for (const [x, y] of [[14, 28], [21, 25], [14, 22], [22, 19]]) m.set(x, y, '*');
+  m.set(24, 19, 'b');
   plank(14, 31, 9);
   m.set(18, 8, 'i');
   m.set(22, 8, 'N');
@@ -461,9 +493,9 @@ export const LEVELS: LevelDef[] = [garden(), woods(), mill(), paris(), tower()];
  * keeps no run (see SessionOpts.practice), so nothing a player does here touches their save.
  */
 function practice(): LevelDef {
-  const m = new Map(212, 20);
+  const m = new Map(232, 20);
   const F = 15;
-  m.ground(0, 211, F);
+  m.ground(0, 231, F);
   // --- walking and jumping
   m.set(3, F - 1, '1').set(5, F - 1, '2');
   m.set(8, F - 1, 'i');
@@ -543,11 +575,17 @@ function practice(): LevelDef {
   m.set(190, F - 1, 'i');
   m.set(193, F, ',');
   m.seeds(192, 194, F - 6);
+  // --- a beetle, with nothing at stake: learn its pace and that it only ever paces
+  m.set(197, F - 1, 'i');
+  m.set(202, F - 1, 'b');
+  // --- a snaptrap, to learn how long the rear-up gives you before the bite
+  m.set(208, F - 1, 'i');
+  m.set(213, F - 1, 't');
   // --- thorns, to show that they only send you back to your partner
-  m.set(199, F - 1, 'i');
-  m.set(201, F - 1, 'C');
-  m.row(204, 206, F - 1, '^');
-  m.set(209, F - 1, 'N');
+  m.set(218, F - 1, 'i');
+  m.set(220, F - 1, 'C');
+  m.row(223, 225, F - 1, '^');
+  m.set(228, F - 1, 'N');
   return {
     id: 'practice',
     name: 'The Practice Ground',
@@ -574,6 +612,8 @@ function practice(): LevelDef {
       'These crumble under your feet. Keep moving.',
       'A ferry. Hop on, ride across.',
       'Soil. The small sprout stands on it and {shoot}s its vine into the ground — something grows for you both to stand on.',
+      'A bristle beetle. It paces its own patch and nothing else — it will never come after you. Walk round it, hop over it, or swing past on the vine.',
+      'A snaptrap, rooted in the ground. Come near and it rears up: that is your warning, and it is about as long as a breath. It can only bite the once before it has to rest.',
       'Thorns. They can’t really hurt you: you’ll drift back to your partner as a seed. The pot is just past them.',
     ],
   };

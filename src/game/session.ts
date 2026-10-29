@@ -30,7 +30,7 @@ import {
   type Profile,
   type Resume,
 } from '../net/protocol';
-import { drawBubble, drawCheckpoint, drawCrumble, drawDoor, drawFirefly, drawLeaf, drawLooseEnd, drawMover, drawNest, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSoil, drawSpring, nameLabel } from '../render/art';
+import { drawBeetle, drawBubble, drawCheckpoint, drawCrumble, drawDoor, drawFirefly, drawLeaf, drawLooseEnd, drawMover, drawNest, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSnaptrap, drawSoil, drawSpring, nameLabel } from '../render/art';
 import { Backdrop } from '../render/backdrop';
 import { Particles, PK } from '../render/particles';
 import { drawSprout, sproutTop } from '../render/sprouts';
@@ -41,13 +41,15 @@ import { Hud } from '../ui/hud';
 import { Bird, BIRD_COLORS, type BirdFx } from './bird';
 import { Camera } from './camera';
 import { Dummy } from './dummy';
-import { parseLevel, type LevelData, type Pt } from './level';
+import { dbg } from '../core/debug';
+import { DebugPanel } from '../ui/debugpanel';
+import { Creature, parseLevel, type LevelData, type Pt } from './level';
 import { LEVELS, PRACTICE } from './levels';
 import { menuOpen, RemoteFeed } from './remote';
 import { Tether } from './tether';
-import { LAND_KICK_DROP, LAND_KICK_FULL, ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TUG_COOLDOWN, TUG_MIN } from './tuning';
+import { INVULN_TIME, LAND_KICK_DROP, LAND_KICK_FULL, NOCLIP_SPEED, ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TRAP_RANGE, TUG_COOLDOWN, TUG_MIN } from './tuning';
 import type { Kind } from './traits';
-import { World } from './world';
+import { Trap, World } from './world';
 
 export interface SessionOpts {
   level: number;
@@ -78,6 +80,11 @@ export interface SessionOpts {
    * no fireflies and unlocks nothing — nothing done here touches the save.
    */
   practice?: boolean;
+  /**
+   * The debug ground: the practice rules (a walked partner, nothing written down) but on any level
+   * of LEVELS, with the toolbox in ui/debugpanel.ts over it. Reached only from #debug.
+   */
+  debug?: boolean;
 }
 
 /** Snapshots per second to the partner (the relay path thins this to what its broker allows). */
@@ -152,6 +159,12 @@ export class Session implements Screen {
   private readonly seatGen: [number, number] | null;
   /** the solo practice ground (see SessionOpts.practice) */
   readonly practice: boolean;
+  /** the debug ground (see core/debug.ts): any level, alone, with the toolbox */
+  readonly debug: boolean;
+  /** debug only: the toolbox over the level, and the canvas tap handler it installs */
+  private panel: DebugPanel | null = null;
+  /** either of the two: one player, a walked partner, and nothing written to the journal */
+  readonly solo: boolean;
   /** practice: what walks the second sprout, and the frame it last asked for */
   private readonly dummy: Dummy | null;
   private dummyFrame = NEUTRAL;
@@ -162,8 +175,13 @@ export class Session implements Screen {
     readonly opts: SessionOpts,
   ) {
     this.practice = opts.practice === true;
+    this.debug = opts.debug === true;
+    // Both are played the same way — one player, the game walking the other sprout, and nothing
+    // written down. They differ only in which level you get: the practice ground is its own place,
+    // while the debug ground drops you into any level you like.
+    this.solo = this.practice || this.debug;
     this.L = parseLevel(this.practice ? PRACTICE : LEVELS[opts.level], opts.level);
-    this.dummy = this.practice ? new Dummy() : null;
+    this.dummy = this.solo ? new Dummy() : null;
     this.world = new World(this.L);
     this.theme = THEMES[this.L.def.theme];
     this.online = opts.mode === 'online';
@@ -197,6 +215,10 @@ export class Session implements Screen {
     this.tiles = new TileCache(this.L, this.theme);
     this.hud = new Hud(app.ui, this.L.def.name, this.L.def.subtitle);
     this.hud.onMenu = () => this.togglePause();
+    if (this.debug) {
+      app.fpsWanted = true;
+      this.panel = this.makePanel(app.ui);
+    }
     const r = opts.resume;
     if (r) {
       for (const i of r.seeds) if (i >= 0 && i < this.seedTaken.length) this.seedTaken[i] = 1;
@@ -352,6 +374,10 @@ export class Session implements Screen {
     } else if (input.menu.pause) {
       this.togglePause();
     }
+    if (this.panel) {
+      this.panel.setText(this.panelText());
+      this.panel.tick();
+    }
     // online, the partner's bird plays back from their snapshots
     if (this.feed) {
       const other = this.birds[1 - this.me];
@@ -467,10 +493,116 @@ export class Session implements Screen {
     );
   }
 
+  // ------------------------------------------------------------------ the debug ground
+
+  /** The toolbox and its wiring. Only ever built for a debug session. */
+  private makePanel(parent: HTMLElement) {
+    const p = new DebugPanel(parent, LEVELS.map((l) => l.name), this.L.index);
+    p.onLevel = (i) => this.flow.debug(i);
+    p.onCheckpoint = (dir) => {
+      const cps = this.L.checkpoints;
+      if (!cps.length) return;
+      const next = clamp(this.checkpoint + dir, -1, cps.length - 1);
+      this.checkpoint = next;
+      const to = next < 0 ? this.L.spawns[0] : cps[next];
+      for (const b of this.birds) this.teleport(b, to.x + (b.idx ? 22 : -22), to.y);
+    };
+    p.onSwap = () => this.flow.debug(this.L.index, this.birds[0].kind !== 'tall');
+    p.onRespawn = () => {
+      for (const b of this.birds) if (b.local) b.die('fall');
+    };
+    p.onLeave = () => this.flow.levels();
+    // the panel puts a sheet over the level for this, so the touch stick can't eat the tap
+    p.onTapWorld = (cx, cy) => {
+      if (this.overlay || this.paused) return;
+      const w = this.cam.fromCss(cx, cy, this.app.renderer.pixelRatio);
+      const me = this.birds.find((b) => b.local);
+      if (me) this.teleport(me, w.x, w.y);
+    };
+    return p;
+  }
+
+  /** What the readout says. Rebuilt every frame but only written when it changes (see DebugPanel). */
+  private panelText() {
+    const w = this.world;
+    const me = this.birds.find((b) => b.local) ?? this.birds[0];
+    const r = (n: number) => (Math.round(n * 10) / 10).toFixed(1);
+    const flags = [me.grounded && 'ground', me.hanging && 'hang', me.anchored && 'anchor', me.cling && 'cling', me.dashT > 0 && 'dash', me.ghost && 'ghost', me.invuln > 0 && 'invuln']
+      .filter(Boolean)
+      .join(' ');
+    const lines = [
+      `fps  ${Math.round(this.app.fps)}${dbg.speed !== 1 ? `  @${dbg.speed}×` : ''}${dbg.frozen ? '  FROZEN' : ''}`,
+      `${me.kind}  ${r(me.x)},${r(me.y)}`,
+      `v    ${r(me.vx)},${r(me.vy)}`,
+      flags || '—',
+      `vine ${r(this.tether.length)} / ${r(ROPE_LEN)}${this.tether.ends[me.idx].taut ? ' TAUT' : ''}  bends ${this.tether.pts.length - 2}`,
+      `clock ${r(this.sharedT)}  t ${r(this.time)}`,
+    ];
+    // the nearest creature, and what it is doing — the thing most worth watching while testing one
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < this.L.creatures.length; i++) {
+      const c = this.L.creatures[i];
+      const cx = c.kind === Creature.Beetle ? w.creatureX[i] : c.x;
+      const d = Math.hypot(cx - me.x, c.y - me.y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best >= 0) {
+      const c = this.L.creatures[best];
+      if (c.kind === Creature.Beetle) lines.push(`beetle ${r(bestD)} away  x ${r(w.creatureX[best])}`);
+      else lines.push(`trap ${r(bestD)} away  ${['dormant', 'rearing', 'BITING', 'open', 'resting'][w.trapState[best]]} ${r(w.trapT[best])}`);
+    }
+    return lines.join('\n');
+  }
+
+  /**
+   * Free flight, instead of a physics step: straight from the stick, through everything, with no
+   * gravity and nothing to stand on. It is only ever given the local sprout in a debug session, and
+   * it leaves the bird in a state the normal step can pick up again the moment it's switched off.
+   */
+  private noclip(dt: number, b: Bird, c: ControlFrame) {
+    const fast = c.anchor ? 3 : 1;
+    b.prevX = b.x;
+    b.prevY = b.y;
+    b.x += c.moveX * NOCLIP_SPEED * fast * dt;
+    b.y -= c.moveY * NOCLIP_SPEED * fast * dt;
+    b.vx = b.vy = 0;
+    b.grounded = false;
+    b.groundMover = -1;
+    b.hanging = false;
+    b.anchored = false;
+    b.cling = 0;
+    b.dashT = 0;
+    b.invuln = 0.2;
+    if (c.moveX > 0.1) b.facing = 1;
+    else if (c.moveX < -0.1) b.facing = -1;
+  }
+
+  /**
+   * Put a sprout somewhere, on purpose: the panel's "tap to go". placeCenter is what a respawn
+   * uses, so this leaves the bird in exactly the state the game already knows how to carry on from
+   * — including bringing a ghost back to life.
+   */
+  teleport(b: Bird, x: number, y: number) {
+    b.placeCenter({ x, y });
+    b.invuln = INVULN_TIME;
+  }
+
   // ------------------------------------------------------------------ physics step
 
   update(dt: number) {
     if (this.paused || this.state !== 'play' || this.frozen) return;
+    if (this.debug) {
+      // frozen: nothing advances until STEP lets exactly one physics step through
+      if (dbg.frozen && !dbg.stepOne) return;
+      dbg.stepOne = false;
+      dt *= dbg.speed;
+      if (dt <= 0) return;
+      if (dbg.invuln) for (const b of this.birds) if (b.local) b.invuln = Math.max(b.invuln, 0.5);
+    }
     // practice: the game asks for the second sprout's controls, once per step, before anyone moves
     if (this.dummy) this.dummyFrame = this.dummy.step(dt, this.birds[1], this.birds[0]);
     this.time += dt;
@@ -498,7 +630,8 @@ export class Session implements Screen {
       }
       b.rope = this.tether.ends[i];
       b.lifting = b.grounded && b.rope.taut && other.present && !other.grounded && other.hanging;
-      b.step(dt, this.controlsFor(i), this.world, other);
+      if (this.debug && dbg.noclip && b.local) this.noclip(dt, b, this.controlsFor(i));
+      else b.step(dt, this.controlsFor(i), this.world, other);
     }
     this.tether.follow(A, B);
     if (this.time >= this.ropeOffUntil) this.tether.solve(this.birds, [this.auth[0], this.auth[1]], dt);
@@ -515,6 +648,7 @@ export class Session implements Screen {
       b.droppedVine = false;
     }
     this.world.stepDynamic(dt, this.birds);
+    this.creatureSounds();
     for (let i = 0; i < 2; i++) if (this.auth[i]) this.pickups(this.birds[i]);
     this.checkGoal(dt);
     this.tether.twang = Math.max(0, this.tether.twang - dt * 1.6);
@@ -596,7 +730,7 @@ export class Session implements Screen {
     this.runDirty = this.runUrgent = false;
     this.runT = 1.5;
     // the practice ground keeps no run: it isn't one of LEVELS, and nothing done there is progress
-    if (this.practice || this.state !== 'play') return;
+    if (this.solo || this.state !== 'play') return;
     const r = this.resumeState();
     // nothing found yet and barely begun: not worth a CONTINUE card (and an older run of this level stays)
     if (r.cp < 0 && !r.seeds.length && !r.grown?.length && !r.feathers && r.time < 20) return;
@@ -639,7 +773,7 @@ export class Session implements Screen {
     this.feathers |= 1 << i;
     // found is found: it counts (for hats too) even if this level never gets finished — but the practice
     // ground keeps nothing, and its fireflies are there to be reached, not banked
-    if (!this.practice) bankFeathers(this.L.def.id, 1 << i);
+    if (!this.solo) bankFeathers(this.L.def.id, 1 << i);
     this.runDirty = this.runUrgent = true;
     this.runT = 0;
     const s = this.L.feathers[i];
@@ -892,6 +1026,32 @@ export class Session implements Screen {
     b.fx.length = 0;
   }
 
+  /**
+   * A snaptrap waking or biting, as heard from the camera. Both screens run their own traps, so
+   * this is read straight off the world rather than sent — and a trap too far off screen to matter
+   * is left silent rather than filling the level with snapping from somewhere you can't see.
+   */
+  private creatureSounds() {
+    const w = this.world;
+    const reach = this.cam.viewW * 0.75;
+    for (let i = 0; i < this.L.creatures.length; i++) {
+      const fired = w.trapFired[i];
+      const bit = w.trapBit[i];
+      if (!fired && !bit) continue;
+      w.trapFired[i] = 0;
+      w.trapBit[i] = 0;
+      const c = this.L.creatures[i];
+      const dx = c.x - this.cam.x;
+      if (Math.abs(dx) > reach || Math.abs(c.y - this.cam.y) > reach) continue;
+      const pan = clamp(dx / (this.cam.viewW / 2), -1, 1) * 0.6;
+      if (fired) audio.play('rear', 0.4, pan, 0.95 + (i % 3) * 0.05);
+      if (bit) {
+        audio.play('snap', 0.65, pan, 0.97 + (i % 3) * 0.04);
+        this.fx.burst(PK.Dust, c.x, c.y + c.h / 2 - 2, 6, 90, 0.35, 4, '#e8cdbb', 60, 4);
+      }
+    }
+  }
+
   private onFx(b: Bird, e: BirdFx, pan: number, vol: number) {
     const fx = this.fx;
     switch (e.k) {
@@ -940,7 +1100,7 @@ export class Session implements Screen {
       case 'die':
         audio.play('die', 0.7 * vol, pan);
         fx.burst(PK.Leaf, b.x, Math.min(b.y, this.world.floorY), 10, 160, 1.2, 5, '#a8d64a', 120, 1.5);
-        if (b.local) this.cam.shake(2.8);
+        if (b.local) this.cam.shake(e.cause === 'fall' ? 2.8 : 3.4);
         break;
       case 'respawn':
         audio.play('respawn', 0.6 * vol, pan);
@@ -986,7 +1146,7 @@ export class Session implements Screen {
     for (let k = 0; k < 3; k++) this.fx.burst(PK.Heart, n.x, n.y - 20, 8, 160, 1.6, 9, ['#ff6f9a', '#ffb3c8', '#ffd75a'][k], -60, 1.5, 40);
     let seeds = 0;
     for (const v of this.seedTaken) seeds += v;
-    if (!this.practice) {
+    if (!this.solo) {
       recordClear(this.L.def.id, this.L.index, seeds, this.feathers, time, this.runGen);
       this.flow.shareSave();
     }
@@ -1072,11 +1232,12 @@ export class Session implements Screen {
           // Just for this ground: swapping here must not decide who's which sprout the next time the
           // two of you play together. (Two alike have nothing to swap, so that button isn't offered.)
           this.flow.practice(this.birds[0].kind === 'tall');
-        } else if (a === 'restart') this.practice ? this.flow.practice() : this.flow.playLevel(this.L.index);
+        } else if (a === 'restart') this.practice ? this.flow.practice() : this.debug ? this.flow.debug(this.L.index) : this.flow.playLevel(this.L.index);
         else if (a === 'controls') this.flow.showControls();
         else if (a === 'quit') {
           if (this.online && this.me === 1) this.flow.leaveOnline();
           else if (this.practice) this.flow.title();
+          else if (this.debug) this.flow.levels();
           else this.flow.levels();
         }
       },
@@ -1240,7 +1401,7 @@ export class Session implements Screen {
       for (let k = 0; k < 2; k++) {
         const b = this.birds[k];
         // (practice: the second sprout is the game's, and a sign it wanders past is not the player's)
-        if (!this.auth[k] || b.ghost || (this.practice && k !== 0)) continue;
+        if (!this.auth[k] || b.ghost || (this.solo && k !== 0)) continue;
         const d = Math.hypot(b.x - s.x, b.y - s.y);
         if (d < bestD) {
           bestD = d;
@@ -1318,6 +1479,15 @@ export class Session implements Screen {
       const sp = this.L.springs[i];
       if (vis(sp.x, sp.y)) drawSpring(ctx, sp.x, sp.y, w.springT[i], th);
     }
+    for (let i = 0; i < this.L.creatures.length; i++) {
+      const c = this.L.creatures[i];
+      if (c.kind === Creature.Beetle) {
+        const cx = w.creatureX[i];
+        if (vis(cx, c.y, T)) drawBeetle(ctx, cx, c.y, c.w, c.h, w.creatureFace[i], th);
+      } else if (vis(c.x, c.y, 3 * T)) {
+        drawSnaptrap(ctx, c.x, c.y + c.h / 2, w.trapOpen(i), w.trapState[i] === Trap.Biting, t, th);
+      }
+    }
     for (let i = 0; i < this.L.signs.length; i++) {
       const sg = this.L.signs[i];
       if (vis(sg.x, sg.y)) drawSign(ctx, sg.x, sg.y, th, i === this.hintSign);
@@ -1371,7 +1541,7 @@ export class Session implements Screen {
       if (!name || b.ghost || (!b.present && !b.local)) continue;
       if (this.online && i === this.me) continue;
       // (nobody is holding the practice partner, so there is no second player to name)
-      if (this.practice && i === 1) continue;
+      if (this.solo && i === 1) continue;
       const lab = nameLabel(name, '#ffffff', px);
       const sx = Math.round(b.x * s - cam.ox - lab.width / 2);
       let sy = Math.round((b.y - sproutTop(b) - 4) * s - cam.oy - lab.height - (b.emote ? 26 * s : 0));
@@ -1383,6 +1553,55 @@ export class Session implements Screen {
     if (th.tint) {
       ctx.fillStyle = th.tint;
       ctx.fillRect(0, 0, W, H);
+    }
+    if (this.debug && dbg.boxes) this.drawBoxes(ctx, s, cam.ox, cam.oy);
+  }
+
+  /**
+   * What everything is really made of: the boxes the game collides with, a snaptrap's reach, and a
+   * beetle's whole ledge. Drawn last, in screen space, over everything — the point is to see where
+   * a box sits against the art, which is exactly where art alone cannot be trusted.
+   */
+  private drawBoxes(ctx: CanvasRenderingContext2D, s: number, ox: number, oy: number) {
+    const w = this.world;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.lineWidth = 1;
+    const box = (x: number, y: number, bw: number, bh: number, col: string) => {
+      ctx.strokeStyle = col;
+      ctx.strokeRect(Math.round((x - bw / 2) * s - ox) + 0.5, Math.round((y - bh / 2) * s - oy) + 0.5, Math.round(bw * s), Math.round(bh * s));
+    };
+    for (const b of this.birds) {
+      if (!b.present) continue;
+      box(b.x, b.y, b.w, b.h, b.ghost ? '#888888' : b.local ? '#5cff9a' : '#5cb8ff');
+    }
+    for (let i = 0; i < this.L.creatures.length; i++) {
+      const c = this.L.creatures[i];
+      if (c.kind === Creature.Beetle) {
+        box(w.creatureX[i], c.y, c.w, c.h, '#ff5c5c');
+        // the ledge it was measured onto, once, at parse time
+        ctx.strokeStyle = 'rgba(255,92,92,0.4)';
+        ctx.beginPath();
+        ctx.moveTo(Math.round(c.x0 * s - ox), Math.round((c.y + c.h / 2) * s - oy) + 0.5);
+        ctx.lineTo(Math.round((c.x0 + c.span) * s - ox), Math.round((c.y + c.h / 2) * s - oy) + 0.5);
+        ctx.stroke();
+      } else {
+        const t = w.trapBox(i);
+        box(t.x, t.y, t.w, t.h, w.trapState[i] === Trap.Biting ? '#ff5c5c' : '#ffb35c');
+        ctx.strokeStyle = 'rgba(255,179,92,0.3)';
+        ctx.beginPath();
+        ctx.arc(Math.round(c.x * s - ox), Math.round(c.y * s - oy), TRAP_RANGE * s, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    // the vine, bend by bend
+    const pts = this.tether.pts;
+    if (pts.length) {
+      ctx.strokeStyle = '#ffe24a';
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) ctx.lineTo(Math.round(pts[i].x * s - ox), Math.round(pts[i].y * s - oy));
+      ctx.stroke();
+      ctx.fillStyle = '#ffe24a';
+      for (const p of pts) ctx.fillRect(Math.round(p.x * s - ox) - 2, Math.round(p.y * s - oy) - 2, 4, 4);
     }
   }
 
@@ -1398,6 +1617,8 @@ export class Session implements Screen {
     window.clearInterval(this.clearRepeat);
     this.closeOverlay();
     this.hud.dispose();
+    this.panel?.destroy();
+    this.app.fpsWanted = false;
     this.offResize();
     // (a level's painted tiles and scenery are tens of MB: give them back now, not at some later GC)
     this.tiles.clear();

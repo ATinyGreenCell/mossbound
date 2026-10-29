@@ -60,7 +60,7 @@ export type BirdFx =
   | { k: 'spring'; i: number }
   | { k: 'bounce' }
   | { k: 'bonk' }
-  | { k: 'die'; cause: 'spikes' | 'fall' }
+  | { k: 'die'; cause: 'spikes' | 'fall' | 'bite' }
   | { k: 'respawn' }
   | { k: 'step' }
   | { k: 'grab' }
@@ -606,7 +606,10 @@ export class Bird implements RopeBird {
     if (T_.climb) this.stepWall(world, mx, c);
 
     // --- dangers
-    if (this.invuln <= 0 && world.hazard(this)) this.die('spikes');
+    if (this.invuln <= 0) {
+      if (world.hazard(this)) this.die('spikes');
+      else if (world.creatureHazard(this)) this.die('bite');
+    }
     // (a safety net: nothing in the game moves a bird faster than this)
     const sp = Math.hypot(this.vx, this.vy);
     if (sp > MAX_SPEED) {
@@ -792,7 +795,7 @@ export class Bird implements RopeBird {
     }
   }
 
-  die(cause: 'spikes' | 'fall') {
+  die(cause: 'spikes' | 'fall' | 'bite') {
     if (this.ghost) return;
     this.ghost = true;
     this.ghostT = 0;

@@ -1,5 +1,19 @@
-import { isSolidTile, moverPos, Tile, type LevelData, type Pt } from './level';
-import { CORNER_NUDGE, CRUMBLE_GONE, CRUMBLE_SHAKE, DOOR_HOLD, GROW_TIME, T } from './tuning';
+import { beetlePos, Creature, isSolidTile, moverPos, Tile, type LevelData, type Pt } from './level';
+import {
+  CORNER_NUDGE,
+  CRUMBLE_GONE,
+  CRUMBLE_SHAKE,
+  DOOR_HOLD,
+  GROW_TIME,
+  T,
+  TRAP_BITE,
+  TRAP_H,
+  TRAP_H_OPEN,
+  TRAP_HOLD,
+  TRAP_RANGE,
+  TRAP_REST,
+  TRAP_TELL,
+} from './tuning';
 
 /** Anything with a box that stands on things: the local birds and the partner's mirrored bird. */
 export interface BodyLike {
@@ -29,6 +43,22 @@ const enum Crumble {
 }
 
 /**
+ * A snaptrap's round: dormant until a sprout comes near, a rear-up you can see coming, the bite
+ * itself (the only part that hurts), then open a moment and shut to rest. It always comes back to
+ * Dormant, which is what keeps two screens together: they may start a round a few frames apart,
+ * but neither carries that difference forward, the same way a crumbling block doesn't.
+ */
+export const enum Trap {
+  Dormant = 0,
+  Rearing = 1,
+  Biting = 2,
+  Open = 3,
+  Resting = 4,
+}
+
+const TRAP_PHASE = [0, TRAP_TELL, TRAP_BITE, TRAP_HOLD, TRAP_REST];
+
+/**
  * The live level: tiles plus everything that moves or changes (doors, plates, crumbling blocks,
  * moving platforms), and box-vs-tile movement for bodies. Moving platforms are a pure function of
  * the shared clock, so both screens see them in the same place.
@@ -53,6 +83,15 @@ export class World {
   readonly grown: Uint8Array;
   /** how far a patch's leaves have unfurled, 0..1 (drawing) */
   readonly growT: Float32Array;
+  /** beetles: where they are now (from the clock), and which way they face (drawing) */
+  readonly creatureX: Float32Array;
+  readonly creatureFace: Int8Array;
+  /** snaptraps: where they are in their round, and how long is left of it */
+  readonly trapState: Uint8Array;
+  readonly trapT: Float32Array;
+  /** set the step a trap woke / bit, for the sound and the dust; the session clears them */
+  readonly trapFired: Uint8Array;
+  readonly trapBit: Uint8Array;
   private readonly tmp: Pt = { x: 0, y: 0 };
   private readonly hold: number;
 
@@ -73,8 +112,15 @@ export class World {
     this.springT = new Float32Array(L.springs.length);
     this.grown = new Uint8Array(L.soils.length);
     this.growT = new Float32Array(L.soils.length);
+    this.creatureX = new Float32Array(L.creatures.length);
+    this.creatureFace = new Int8Array(L.creatures.length).fill(1);
+    this.trapState = new Uint8Array(L.creatures.length);
+    this.trapT = new Float32Array(L.creatures.length);
+    this.trapFired = new Uint8Array(L.creatures.length);
+    this.trapBit = new Uint8Array(L.creatures.length);
     this.hold = L.def.doorHold ?? DOOR_HOLD;
     this.placeMovers(0, true);
+    this.placeCreatures(0);
   }
 
   // ------------------------------------------------------------------ queries
@@ -272,6 +318,64 @@ export class World {
 
   // ------------------------------------------------------------------ update
 
+  /** Beetles, straight from the shared clock — never stepped, so they cannot drift apart. */
+  private placeCreatures(t: number) {
+    const cs = this.L.creatures;
+    for (let i = 0; i < cs.length; i++) {
+      if (cs[i].kind !== Creature.Beetle) continue;
+      const p = beetlePos(cs[i], t);
+      this.creatureX[i] = p.x;
+      this.creatureFace[i] = p.face;
+    }
+  }
+
+  /** A snaptrap's live box: it rears up out of the ground as it opens, and sinks back as it shuts. */
+  trapBox(i: number): { x: number; y: number; w: number; h: number } {
+    const c = this.L.creatures[i];
+    const st = this.trapState[i];
+    const left = this.trapT[i];
+    const of = TRAP_PHASE[st] || 1;
+    // how far open, 0..1: up through the rear-up, all the way through the bite, down as it shuts
+    let open = 0;
+    if (st === Trap.Rearing) open = 1 - left / of;
+    else if (st === Trap.Biting || st === Trap.Open) open = 1;
+    else if (st === Trap.Resting) open = Math.max(0, left / of - 0.55) / 0.45;
+    const h = TRAP_H + (TRAP_H_OPEN - TRAP_H) * open;
+    // rooted: it grows upward from the ground it sits on, so its foot never moves
+    return { x: c.x, y: c.y + c.h / 2 - h / 2, w: c.w, h };
+  }
+
+  /** How far open a snaptrap is, 0..1 (drawing). */
+  trapOpen(i: number) {
+    return (this.trapBox(i).h - TRAP_H) / (TRAP_H_OPEN - TRAP_H);
+  }
+
+  /**
+   * Is a creature touching this body? Each screen asks this about its own sprout only, so the
+   * sprout that dies is the one whose own device said so — which is already how falling out of the
+   * world works, and why a creature needs nothing of its own on the wire.
+   */
+  creatureHazard(b: BodyLike) {
+    if (b.ghost) return false;
+    const cs = this.L.creatures;
+    const l = b.x - b.w / 2 + 2;
+    const r = b.x + b.w / 2 - 2;
+    const t = b.y - b.h / 2 + 2;
+    const bot = b.y + b.h / 2 - 1;
+    for (let i = 0; i < cs.length; i++) {
+      const c = cs[i];
+      if (c.kind === Creature.Beetle) {
+        const cx = this.creatureX[i];
+        // its bristly back is what hurts; a sprout brushing the very edge is let off
+        if (r > cx - c.w / 2 + 3 && l < cx + c.w / 2 - 3 && bot > c.y - c.h / 2 + 2 && t < c.y + c.h / 2) return true;
+      } else if (this.trapState[i] === Trap.Biting) {
+        const box = this.trapBox(i);
+        if (r > box.x - box.w / 2 + 4 && l < box.x + box.w / 2 - 4 && bot > box.y - box.h / 2 && t < box.y + box.h / 2) return true;
+      }
+    }
+    return false;
+  }
+
   private placeMovers(t: number, reset: boolean) {
     const ms = this.L.movers;
     for (let i = 0; i < ms.length; i++) {
@@ -287,12 +391,14 @@ export class World {
   setTime(t: number) {
     this.time = t;
     this.placeMovers(t, true);
+    this.placeCreatures(t);
   }
 
   /** Advance moving platforms to shared time `t`; bodies standing on them are carried by moverDX/DY. */
   stepMovers(t: number) {
     this.time = t;
     this.placeMovers(t, false);
+    this.placeCreatures(t);
   }
 
   /** Plates, doors and crumbling blocks, given everyone who can stand on them this step. */
@@ -350,6 +456,32 @@ export class World {
           let blocked = false;
           for (const b of bodies) if (this.overlapsTile(b, c.tx, c.ty)) blocked = true;
           if (!blocked) this.crumbleState[i] = Crumble.Intact;
+        }
+      }
+    }
+    // Snaptraps. Dormant ones watch for anyone near; the rest just run their round down. A trap
+    // woken on one screen a few frames before the other ends in the same state either way.
+    for (let i = 0; i < L.creatures.length; i++) {
+      const c = L.creatures[i];
+      if (c.kind !== Creature.Snaptrap) continue;
+      const st = this.trapState[i];
+      if (st === Trap.Dormant) {
+        for (const b of bodies) {
+          if (b.ghost) continue;
+          if (Math.abs(b.x - c.x) < TRAP_RANGE && Math.abs(b.y - c.y) < TRAP_RANGE) {
+            this.trapState[i] = Trap.Rearing;
+            this.trapT[i] = TRAP_TELL;
+            this.trapFired[i] = 1;
+            break;
+          }
+        }
+      } else {
+        this.trapT[i] -= dt;
+        if (this.trapT[i] <= 0) {
+          const next = st === Trap.Rearing ? Trap.Biting : st === Trap.Biting ? Trap.Open : st === Trap.Open ? Trap.Resting : Trap.Dormant;
+          this.trapState[i] = next;
+          this.trapT[i] = TRAP_PHASE[next];
+          if (next === Trap.Biting) this.trapBit[i] = 1;
         }
       }
     }

@@ -140,6 +140,42 @@ export const DOOR_HOLD = 0.5;
 /** seconds a plant takes to unfurl its leaves after the small sprout grows it */
 export const GROW_TIME = 0.45;
 
+// ---- creatures
+/**
+ * Both creatures are kept in step between two screens the way everything else in the world is, and
+ * nothing here may break that. A beetle's position is worked out from the shared clock alone (like a
+ * moving platform), so it is never integrated and can never drift. A snaptrap never moves at all: it
+ * runs a timer that always comes back round to dormant, so two screens starting it a few frames
+ * apart end up in the same place, exactly as a crumbling block does.
+ */
+/** how fast a beetle trundles, px/s — about a third of RUN_MAX, so you can always outrun one */
+export const BEETLE_SPEED = 70;
+/**
+ * How far it wanders either side of where the map put it, in tiles. A beetle measures its own
+ * ledge, and without this a long floor would give one a forty-tile beat nobody can read or time.
+ * Capping it means dropping a `b` somewhere says what that beetle will do: this much, each way,
+ * less wherever a wall or a drop comes first.
+ */
+export const BEETLE_REACH = 4;
+/** it pauses at each end of its ledge before turning round (seconds) */
+export const BEETLE_TURN = 0.55;
+export const BEETLE_W = 26;
+export const BEETLE_H = 18;
+
+/** how close a sprout has to come for a snaptrap to wake (px, from the trap's middle) */
+export const TRAP_RANGE = 74;
+/** it rears up for this long before it bites — the warning that makes it fair */
+export const TRAP_TELL = 0.42;
+/** and bites for this long, which is the only time it can hurt anyone */
+export const TRAP_BITE = 0.22;
+/** then hangs open, then shuts and rests. It can't be woken again until it is dormant. */
+export const TRAP_HOLD = 0.3;
+export const TRAP_REST = 1.15;
+export const TRAP_W = 30;
+/** closed, and reared up mid-bite */
+export const TRAP_H = 20;
+export const TRAP_H_OPEN = 44;
+
 // ---- death & regroup
 export const GHOST_TIME = 0.95;
 export const INVULN_TIME = 1.2;
@@ -148,3 +184,7 @@ export const INVULN_TIME = 1.2;
 export const VIEW_TILES_H = 14.5;
 export const VIEW_TILES_MIN_W = 17;
 export const VIEW_TILES_MAX_W = 34;
+
+// ---- the debug ground (core/debug.ts): dev tooling, never reachable in ordinary play
+/** free-flight speed with noclip on; holding the hold-on button makes it three times that */
+export const NOCLIP_SPEED = 340;
