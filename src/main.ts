@@ -12,6 +12,7 @@ import { debugOn } from './core/debug';
 import { TouchControls } from './core/touch';
 import { Flow } from './flow';
 import { preloadNet } from './net/link';
+import { comeBack, watchUpdates } from './update';
 
 // an invite link means online play is coming: fetch the networking code while the rest boots
 const invite = /(?:^|[#&])join=([A-Za-z0-9]{4})/.exec(location.hash);
@@ -82,10 +83,13 @@ async function boot() {
     flow.online({ joinCode: invite[1].toUpperCase() });
   } else if (debugLevel && debugOn()) {
     flow.debug(Number(debugLevel[1]) - 1);
-  } else {
+  } else if (!comeBack(app, flow)) {
+    // (comeBack: this load is an update taking effect — it puts the players back where they were)
     flow.title();
   }
   app.start();
+  // a newer build on the site is taken at the first moment that costs nothing (see update.ts)
+  watchUpdates(app, flow);
   // the worker is what makes the browser willing to install this at all (see core/install.ts)
   registerWorker();
   if (import.meta.env.DEV) Object.assign(window, { __fb: { app, flow, audio, save: await import('./core/save') } });

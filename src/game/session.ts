@@ -89,6 +89,8 @@ export interface SessionOpts {
 
 /** Snapshots per second to the partner (the relay path thins this to what its broker allows). */
 const SNAP_HZ = 40;
+/** How long a seat waits for a pad that hasn't turned up yet before it counts as a lost controller. */
+const SEAT_WAIT_MS = 5000;
 /** Silence from the partner after which the level holds still until they're back. */
 const FREEZE_MS = 1600;
 const NEUTRAL = makeControls();
@@ -111,14 +113,14 @@ export class Session implements Screen {
   private readonly backdrop: Backdrop;
   private readonly tiles: TileCache;
   private readonly hud: Hud;
-  private readonly online: boolean;
+  readonly online: boolean;
   private readonly link: NetLink | null;
   private readonly feed: RemoteFeed | null;
   /** which birds this screen simulates */
   readonly auth: [boolean, boolean];
   readonly me: 0 | 1;
   private readonly nonce: number;
-  private readonly seats: [DeviceId, DeviceId] | null;
+  readonly seats: [DeviceId, DeviceId] | null;
   private colors: [(typeof BIRD_COLORS)[number], (typeof BIRD_COLORS)[number]];
   /** names, colors and hats by bird (online, the partner's arrives — or changes — over the network) */
   private profiles: [Profile, Profile];
@@ -156,6 +158,8 @@ export class Session implements Screen {
   private clearRepeat = 0;
   private readonly offResize: () => void;
   private seatLost = [false, false];
+  /** when this level was built (see controlsFor: how long a seat waits for a pad that hasn't arrived) */
+  private readonly bornAt = performance.now();
   private readonly seatGen: [number, number] | null;
   /** the solo practice ground (see SessionOpts.practice) */
   readonly practice: boolean;
@@ -463,6 +467,11 @@ export class Session implements Screen {
     if (this.online || this.seats?.[i] === 'keys') return this.app.input.controls;
     const dev = this.seats ? this.app.input.device(this.seats[i]) : null;
     if (!dev) return i === 0 ? this.app.input.controls : NEUTRAL;
+    // A seat held for a pad that hasn't turned up yet: a page that has just loaded (an update taking
+    // effect, see update.ts) shows no gamepad until it's pressed, and the seat waits for the
+    // generation that pad will arrive as. That's not a lost controller — for a few seconds. After that
+    // it is treated as one, so the notice and "press Ⓐ to take it back" are there if it never comes.
+    if (!dev.connected && this.seatGen && dev.generation < this.seatGen[i] && performance.now() - this.bornAt < SEAT_WAIT_MS) return NEUTRAL;
     if (!dev.connected || (this.seatGen && dev.generation !== this.seatGen[i])) {
       this.seatLost[i] = true;
       return NEUTRAL;

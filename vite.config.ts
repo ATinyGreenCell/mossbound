@@ -108,6 +108,8 @@ self.addEventListener('fetch', (e) => {
 // Relative base so the build works from any GitHub Pages sub-path (user.github.io/<repo>/).
 export default defineConfig({
   base: './',
+  // the running build's own version, which update.ts compares with the site's version.json
+  define: { __APP_VERSION__: JSON.stringify(version) },
   plugins: [versionFile(), serviceWorker()],
   build: {
     target: 'es2022',

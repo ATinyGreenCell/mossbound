@@ -444,6 +444,54 @@ body {
   pointer-events: none;
 }
 
+/* which build this is, and whether it's the newest the site has (see update.ts badge) */
+.version-badge {
+  position: absolute;
+  left: calc(12px + var(--sal, 0px));
+  bottom: calc(10px + var(--sab, 0px));
+  z-index: 23;
+  padding: 0.2em 0.7em;
+  border-radius: 0.8em;
+  background: rgba(20, 16, 36, 0.38);
+  color: #fff;
+  font-size: 0.72em;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.version-badge.stale {
+  background: rgba(150, 60, 20, 0.7);
+  opacity: 1;
+}
+
+/* an update waiting for a moment that costs nothing, and the note once it has landed (see update.ts) */
+.update-pill,
+.update-toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(14px + var(--sab, 0px));
+  transform: translateX(-50%);
+  z-index: 24;
+  max-width: calc(100% - 32px);
+  padding: 0.45em 1.1em;
+  border-radius: 1em;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1em;
+  font-size: 0.8em;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0.92;
+}
+
+.update-pill span,
+.update-toast span {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
 .seats {
   display: flex;
   gap: 1em;

@@ -436,7 +436,7 @@ export class Flow {
 }
 
 /** A resume block from the wire, or undefined if it isn't a sane one. */
-function cleanResume(r: unknown): Resume | undefined {
+export function cleanResume(r: unknown): Resume | undefined {
   if (!r || typeof r !== 'object') return undefined;
   const o = r as Partial<Resume>;
   const seeds = Array.isArray(o.seeds) ? o.seeds.filter((s) => Number.isInteger(s) && s >= 0 && s < 5000).slice(0, 5000) : [];

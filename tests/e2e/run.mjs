@@ -52,6 +52,7 @@ const TESTS = [
   { name: 'sprouts', file: 'sprouts.mjs', est: 30, pass: passed('sprouts') },
   { name: 'practice', file: 'practice.mjs', est: 25, pass: passed('practice') },
   { name: 'course', file: 'course.mjs', est: 20, pass: passed('course') },
+  { name: 'update', file: 'update.mjs', est: 30, pass: passed('update') },
   { name: 'debug', file: 'debug.mjs', est: 30, pass: passed('debug') },
   { name: 'xbox', file: 'xbox.mjs', est: 25, pass: passed('xbox') },
   { name: 'units', file: 'units.mjs', est: 20, pass: passed('units') },

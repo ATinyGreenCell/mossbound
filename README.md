@@ -164,6 +164,16 @@ online groups need live relays, which neither a phone nor a sandbox can provide.
 retried once — a public broker having a bad minute shouldn't block a release — and anything that
 fails twice blocks it. The built site serves `version.json`, so what's live can always be checked.
 
+### Updates
+
+An open game picks up a new version by itself. It checks `version.json` at boot and every 90 seconds,
+and when the site has moved on it waits for a moment that costs nothing — the title, the level select,
+a clear card, or (playing on one screen) the moment a lantern is lit — saves, reloads, and puts you
+back where you were: the same screen, or the same level at that lantern. Never in an online room (it
+waits until the room is left), and on an Xbox never mid-level. The corner of every menu says which
+version is running and whether it's the latest; if a reload keeps landing on an old copy, it says so
+instead of trying again.
+
 ## The `mb` command
 
 `mb` is the dev loop from a phone: Termux, a clone of this repo, and a build archive dropped in

@@ -1,3 +1,4 @@
+import { IS_XBOX } from '../core/platform';
 /**
  * Bumps when the GPU let go of every canvas's pixels (a lost context, then restored): anything that
  * keeps pre-painted canvases (tiles, backdrops, glows, labels) compares it with its own and repaints.
@@ -109,8 +110,10 @@ export class Renderer {
     const cssH = Math.max(1, Math.round(r.height || window.innerHeight));
     this.dpr = window.devicePixelRatio;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    // never more than ~1600 device rows: a 4K laptop panel doesn't need 4K of grass
-    const k = Math.min(dpr, 1600 / cssH) * this.scale;
+    // never more than ~1600 device rows: a 4K laptop panel doesn't need 4K of grass. On an Xbox, 1080:
+    // the game is a TV across the room away, and Edge at 4K output was asking for over twice the
+    // pixels of 1080p — every frame, for a sharpness nobody on the sofa can see
+    const k = Math.min(dpr, (IS_XBOX ? 1080 : 1600) / cssH) * this.scale;
     const w = Math.max(160, Math.round(cssW * k));
     const h = Math.max(90, Math.round(cssH * k));
     if (!force && w === this.width && h === this.height && cssW === this.cssW && cssH === this.cssH) return;
