@@ -151,6 +151,53 @@ function buildings(ctx: CanvasRenderingContext2D, W: number, H: number, r: () =>
 }
 
 export const THEMES: Record<ThemeId, Theme> = {
+  // the title: a yellow-green morning over a mossy creek (the creek, the fall and the banks themselves
+  // are render/creek.ts — this is the sky and the woods behind them)
+  creek: {
+    id: 'creek',
+    sky: ['#9fd4c4', '#d3ecbf', '#f4f1c8'],
+    sun: { x: 0.2, y: 0.2, r: 0.065, core: '#fffbe2', glow: 'rgba(255,246,190,0.55)' },
+    moon: false,
+    stars: 0,
+    clouds: { color: '#fbfff0', alpha: 0.55, count: 4 },
+    layers: [
+      {
+        fx: 0.04,
+        fy: 0.02,
+        period: 2.4,
+        paint(ctx, W, H) {
+          hills(ctx, W, H, 0.5, 0.05, '#d2e6b2', 31, 2);
+          hills(ctx, W, H, 0.57, 0.05, '#bfdb9c', 32, 3);
+        },
+      },
+      {
+        fx: 0.1,
+        fy: 0.05,
+        period: 2.2,
+        paint(ctx, W, H, r) {
+          hills(ctx, W, H, 0.62, 0.04, '#a6cb72', 41, 3);
+          for (let i = 0; i < 26; i++) {
+            const x = r() * W;
+            roundTree(ctx, x, hillY(W, x, 0.62, 0.04, 41, 3) * H + 6, H * (0.12 + r() * 0.08), ['#9cc65c', '#adcf66', '#8dbb52'][Math.floor(r() * 3)], '#6f5d3e');
+          }
+          hills(ctx, W, H, 0.7, 0.03, '#86b24f', 42, 4);
+          for (let i = 0; i < 30; i++) {
+            const x = r() * W;
+            roundTree(ctx, x, hillY(W, x, 0.7, 0.03, 42, 4) * H + 8, H * (0.14 + r() * 0.1), ['#7aaa45', '#6c9c3e', '#88b84c'][Math.floor(r() * 3)], '#5e4e34');
+          }
+        },
+      },
+    ],
+    ground: { top: '#a8cc4a', topDark: '#7fa83a', body: '#6b5236', bodyDark: '#54402a', speck: '#86a346', speck2: '#4d3a26' },
+    stone: { face: '#8d9a83', light: '#aab69f', dark: '#6d7a63', line: '#56614e' },
+    plank: { top: '#dca36a', side: '#b77c45', dark: '#8c5a2e' },
+    spikes: { a: '#3f7d3a', b: '#2b5a28' },
+    tint: null,
+    ambient: 'motes',
+    ambientColor: ['#e8f59a', '#ffffff', '#c8e86a'],
+    glow: 0.35,
+    ink: '#24331c',
+  },
   garden: {
     id: 'garden',
     sky: ['#86ccff', '#c4eaff', '#fff2d2'],

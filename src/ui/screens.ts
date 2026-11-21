@@ -10,6 +10,7 @@ import { IS_IOS, IS_STANDALONE, IS_XBOX, XBOX_HINT } from '../core/platform';
 import type { Flow } from '../flow';
 import { Bird, BIRD_COLORS } from '../game/bird';
 import { COURSE, COURSE_INDEX, LEVELS } from '../game/levels';
+import { CREEK_BANK, CreekScene } from '../render/creek';
 import { fmtTime } from '../game/session';
 import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type CtrlMsg } from '../net/protocol';
@@ -129,7 +130,10 @@ function menuBackdrop(theme: Theme) {
   return b;
 }
 
-/** Two birds on a rooftop at sunset, tied by their string — drawn behind every menu. */
+/**
+ * The two sprouts, tied by their vine, behind every menu: by a mossy creek on the title (see
+ * render/creek.ts), and on a strip of the picked level's ground elsewhere.
+ */
 class MenuScene {
   private backdrop: Backdrop;
   private readonly birds: [Bird, Bird] = [new Bird(0), new Bird(1)];
@@ -137,8 +141,9 @@ class MenuScene {
   private hopT = [2, 3.4];
   private heartT = 5;
   private camX = 0;
+  private creek: CreekScene | null = null;
 
-  constructor(private theme: Theme = THEMES.paris) {
+  constructor(private theme: Theme = THEMES.creek) {
     this.backdrop = menuBackdrop(theme);
     this.birds[0].facing = 1;
     this.birds[1].facing = -1;
@@ -162,17 +167,22 @@ class MenuScene {
     const W = r.width;
     const H = r.height;
     const t = app.time;
-    this.camX += dt * 14;
+    // (the creek holds still — only its water moves; the other scenery drifts slowly by)
+    const creek = this.theme.id === 'creek';
+    if (!creek) this.camX += dt * 14;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.backdrop.draw(ctx, W, H, this.camX, 0, 0, 1, t);
     const s = H / 420;
-    const ground = H * 0.86;
-    ctx.fillStyle = this.theme.ground.body;
-    ctx.fillRect(0, ground, W, H - ground);
-    ctx.fillStyle = this.theme.ground.top;
-    ctx.fillRect(0, ground - 4 * s, W, 9 * s);
-    ctx.fillStyle = this.theme.ground.topDark;
-    ctx.fillRect(0, ground + 5 * s, W, 4 * s);
+    const ground = H * (creek ? CREEK_BANK : 0.86);
+    if (creek) (this.creek ??= new CreekScene()).draw(ctx, W, H, t);
+    else {
+      ctx.fillStyle = this.theme.ground.body;
+      ctx.fillRect(0, ground, W, H - ground);
+      ctx.fillStyle = this.theme.ground.top;
+      ctx.fillRect(0, ground - 4 * s, W, 9 * s);
+      ctx.fillStyle = this.theme.ground.topDark;
+      ctx.fillRect(0, ground + 5 * s, W, 4 * s);
+    }
     // sprouts idle, blink, hop now and then, and swap hearts
     const cx = W * 0.5;
     const [A, B] = this.birds;

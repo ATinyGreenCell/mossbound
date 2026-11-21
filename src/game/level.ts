@@ -1,6 +1,7 @@
 import { BEETLE_H, BEETLE_REACH, BEETLE_SPEED, BEETLE_TURN, BEETLE_W, T, TRAP_H, TRAP_W, VENT_HEIGHT } from './tuning';
 
-export type ThemeId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower';
+/** (`creek` is the title's: a mossy creek with a waterfall, see render/creek.ts — no level uses it) */
+export type ThemeId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'creek';
 export type SongId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'title';
 
 export interface MoverDef {

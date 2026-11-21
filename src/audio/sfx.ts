@@ -209,7 +209,8 @@ const LEN: Record<Sfx, number> = {
   leave: 0.45,
 };
 
-const PEAK: Partial<Record<Sfx, number>> = { step: 0.12, flutter: 0.3, seed: 0.42, uiMove: 0.25, land: 0.5, plate: 0.45 };
+// (the melodic ones sit under the chill music rather than on top of it)
+const PEAK: Partial<Record<Sfx, number>> = { step: 0.12, flutter: 0.3, seed: 0.42, uiMove: 0.25, land: 0.5, plate: 0.45, clear: 0.5, feather: 0.45, checkpoint: 0.5, join: 0.45, leave: 0.4, nuzzle: 0.45, respawn: 0.45 };
 
 /** Synthesize one sound at `rate` Hz. */
 export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
@@ -248,8 +249,9 @@ export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
       hiss(b, rate, { dur: 0.35, at: 0.05, vol: 0.25, lp: 2400, lp1: 400, decay: 0.12 });
       break;
     case 'respawn':
-      for (let k = 0; k < 4; k++) tone(b, rate, { f0: midi(72 + k * 4), f1: midi(79 + k * 4), dur: 0.35, at: k * 0.05, vol: 0.18, decay: 0.12 });
-      for (let k = 0; k < 6; k++) bell(b, rate, midi(88 + ((k * 5) % 12)), { at: 0.1 + k * 0.06, dur: 0.25, vol: 0.06 });
+      // a seed taking root again: two soft rising breaths and three quiet notes, no sparkle shower
+      for (let k = 0; k < 2; k++) tone(b, rate, { f0: midi(67 + k * 5), f1: midi(74 + k * 5), dur: 0.4, at: k * 0.08, vol: 0.14, attack: 0.03, decay: 0.15 });
+      [76, 79, 83].forEach((m, k) => bell(b, rate, midi(m), { at: 0.14 + k * 0.09, dur: 0.4, vol: 0.07, ratio: 2, index: 0.4 }));
       break;
     case 'step':
       hiss(b, rate, { dur: 0.035, vol: 0.6, lp: 2200, hp: 400, decay: 0.008 });
@@ -277,11 +279,13 @@ export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
       tone(b, rate, { f0: 1980, dur: 0.15, at: 0.035, vol: 0.3, decay: 0.04 });
       break;
     case 'feather':
-      [84, 88, 91, 96, 100].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.06, dur: 0.6, vol: 0.22, ratio: 2, index: 1.4 }));
+      // a firefly: a glassy shimmer up a major seventh, rolled slowly, not a run up the scale
+      [79, 83, 86, 90].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.08, dur: 0.75, vol: 0.18, ratio: 2, index: 0.5 }));
       break;
     case 'checkpoint':
-      bell(b, rate, midi(79), { dur: 1.0, vol: 0.35, ratio: 3.5, index: 1.6 });
-      bell(b, rate, midi(84), { at: 0.12, dur: 0.95, vol: 0.3, ratio: 3.5, index: 1.6 });
+      // a lantern catching: a warm open fifth, low and round
+      bell(b, rate, midi(67), { dur: 1.05, vol: 0.32, ratio: 2, index: 0.6 });
+      bell(b, rate, midi(74), { at: 0.14, dur: 0.95, vol: 0.24, ratio: 2, index: 0.5 });
       break;
     case 'door':
       hiss(b, rate, { dur: 0.45, vol: 0.5, lp: 260, attack: 0.04, decay: 0.2 });
@@ -316,12 +320,14 @@ export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
     case 'nuzzle':
       chirp(b, rate, 2300, 3300, 0, 0.07, 0.3);
       chirp(b, rate, 2100, 3100, 0.1, 0.07, 0.3);
-      [76, 81, 84, 88].forEach((m, k) => bell(b, rate, midi(m), { at: 0.18 + k * 0.08, dur: 0.6, vol: 0.18, ratio: 2, index: 1.2 }));
+      [76, 83].forEach((m, k) => bell(b, rate, midi(m), { at: 0.2 + k * 0.12, dur: 0.6, vol: 0.14, ratio: 2, index: 0.5 }));
       break;
     case 'clear':
-      [72, 76, 79, 84].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.11, dur: 0.9, vol: 0.26, ratio: 2, index: 1.6 }));
-      [72, 76, 79, 84, 88].forEach((m) => bell(b, rate, midi(m), { at: 0.5, dur: 1.25, vol: 0.14, ratio: 3, index: 1.2 }));
-      tone(b, rate, { f0: midi(48), dur: 1.2, at: 0.5, vol: 0.25, decay: 0.5, type: 'tri' });
+      // home: a warm major-ninth chord rolled slowly up from a low root, and a bird answering — not a fanfare
+      tone(b, rate, { f0: midi(48), dur: 1.6, vol: 0.22, attack: 0.04, decay: 0.7, type: 'tri' });
+      [60, 64, 67, 71, 74].forEach((m, k) => bell(b, rate, midi(m), { at: 0.05 + k * 0.1, dur: 1.4, vol: 0.18, ratio: 2, index: 0.45 }));
+      chirp(b, rate, 3000, 4100, 1.0, 0.08, 0.12);
+      chirp(b, rate, 2900, 4000, 1.14, 0.08, 0.1);
       break;
     case 'uiMove':
       tone(b, rate, { f0: 1100, dur: 0.035, vol: 0.4, decay: 0.012 });
@@ -335,10 +341,11 @@ export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
       tone(b, rate, { f0: 590, dur: 0.08, at: 0.05, vol: 0.4, decay: 0.03 });
       break;
     case 'join':
-      [79, 84, 88].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.09, dur: 0.45, vol: 0.28, ratio: 2, index: 1.2 }));
+      // an open fifth up: someone's here
+      [72, 79].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.11, dur: 0.48, vol: 0.26, ratio: 2, index: 0.5 }));
       break;
     case 'leave':
-      [84, 79, 72].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.1, dur: 0.3, vol: 0.25, ratio: 2, index: 1.2 }));
+      [79, 72].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.12, dur: 0.32, vol: 0.24, ratio: 2, index: 0.5 }));
       break;
   }
   return normalize(b, PEAK[name] ?? 0.7);

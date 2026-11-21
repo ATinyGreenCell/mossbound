@@ -413,12 +413,20 @@ body {
 .xbox-hint,
 .foot-hint {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: 50%;
+  transform: translateX(-50%);
   bottom: calc(10px + var(--sab));
+  /* (clear of the version badge in the bottom-left corner) */
+  max-width: 70%;
+  width: max-content;
+  padding: 0.3em 1em;
+  border-radius: 1em;
+  /* a backing of its own: the title's mossy bank behind it is busy, and this is the line a player
+     on an Xbox most needs to be able to read */
+  background: rgba(20, 30, 16, 0.55);
   text-align: center;
   font-size: 0.85em;
-  opacity: 0.85;
+  opacity: 0.92;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
 
