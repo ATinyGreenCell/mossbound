@@ -4,7 +4,7 @@ import { clamp } from './core/math';
 import type { DeviceId } from './core/input';
 import { flushSave, freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
 import { saveSettings, settings } from './core/settings';
-import { LEVELS } from './game/levels';
+import { COURSE, COURSE_INDEX, LEVELS } from './game/levels';
 import { Session } from './game/session';
 import { isKind, type Kind, kindsFor } from './game/traits';
 import { NetLink, type LinkStatus } from './net/link';
@@ -179,8 +179,8 @@ export class Flow {
         return;
       }
       case 'load':
-        // the host picked a level: everyone in
-        if (this.role === 'guest' && Number.isInteger(m.level) && m.level >= 0 && m.level < LEVELS.length && Number.isInteger(m.n)) {
+        // the host picked a level (or the test course, COURSE_INDEX): everyone in
+        if (this.role === 'guest' && Number.isInteger(m.level) && (m.level === COURSE_INDEX || (m.level >= 0 && m.level < LEVELS.length)) && Number.isInteger(m.n)) {
           this.link?.send({ t: 'loaded', n: m.n });
           const cur = this.app.next;
           if (cur instanceof Session && this.nonce === m.n) return; // a repeat of the load we're already in
@@ -317,7 +317,8 @@ export class Flow {
 
   /** Go into level `i`: where its run got to, if it has one, else from the start. */
   enterLevel(i: number) {
-    this.playLevel(i, resumeOf(i) ?? undefined);
+    // (the test course keeps no run, so it always starts at the start)
+    this.playLevel(i, i === COURSE_INDEX ? undefined : (resumeOf(i) ?? undefined));
   }
 
   /**
@@ -325,13 +326,17 @@ export class Flow {
    * online the host tells the guest to follow (until they confirm).
    */
   playLevel(i: number, resume?: Resume) {
+    // The test course goes through here like a level (online, the host's load sends the guest along,
+    // and a partner rejoining starts it again for both from its lantern) — it just keeps nothing.
+    const course = i === COURSE_INDEX;
     if (i >= LEVELS.length) {
       this.ending();
       return;
     }
+    if (!course && !LEVELS[i]) return;
     // (there's progress worth keeping now: ask the browser not to clear it away)
-    keepStorage();
-    const id = LEVELS[i].id;
+    if (!course) keepStorage();
+    const id = course ? COURSE.id : LEVELS[i].id;
     // which start of this level the run is: both devices record it under the same number
     const gen = resume ? (resume.gen ?? save.runs[id]?.gen ?? 1) : freshGen(id);
     if (this.mode === 'online') {

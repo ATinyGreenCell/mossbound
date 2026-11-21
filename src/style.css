@@ -1054,6 +1054,11 @@ body:not(.touch) .ctl-col:last-child {
   opacity: 0.8;
 }
 
+/* the two-player test course: a border, not an outline, so it never reads as the highlighted card */
+.card.course {
+  border: 2px dashed rgba(43, 33, 64, 0.45);
+}
+
 /* ---- the debug ground's panel (see core/debug.ts) --------------------------------------------
    Pinned to the left so it never sits under the right-hand touch buttons, and narrow enough that a
    landscape phone still shows the level beside it. Every control is a real tap target. */

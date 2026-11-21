@@ -6,7 +6,7 @@ import { frames, gameTime, launch, open, padAxis, padPress, reporter, screenName
 const browser = await launch();
 const page = await open(browser, { pads: 2 });
 const t = reporter();
-const A = 0, B = 1, Y = 3, RT = 7, START = 9, DOWN = 13;
+const A = 0, B = 1, Y = 3, RT = 7, START = 9, DOWN = 13, RIGHT = 15;
 
 await waitFor(async () => (await screenName(page)) === 'TitleScreen', 10000, 'title');
 await sleep(400);
@@ -33,6 +33,13 @@ await waitFor(async () => (await screenName(page)) === 'LevelSelect', 5000, 'lev
 const seats = await page.evaluate(() => window.__fb.flow.seats);
 t.check('each controller claims a seat', seats[0] === 'pad0' && seats[1] === 'pad1', seats);
 await sleep(400);
+// a fresh journal lights the two-player test course, the first card (course.mjs covers it): this is
+// about The Garden, one card along, whose clear is saved and whose NEXT LEVEL is Woodland Rings
+const lit = () => page.evaluate(() => document.querySelector('.levels-screen .card.sel')?.dataset.act ?? null);
+const litFirst = await lit();
+await padPress(page, 0, RIGHT);
+await waitFor(async () => (await lit()) === 'lvl:0', 3000, 'the garden lit').catch(() => undefined);
+t.check(`the d-pad steps from the test course to The Garden (${litFirst} → ${await lit()})`, litFirst === 'course' && (await lit()) === 'lvl:0');
 await padPress(page, 0, A);
 await waitFor(async () => (await screenName(page)) === 'Session', 5000, 'session');
 await sleep(800);

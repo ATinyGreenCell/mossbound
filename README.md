@@ -40,6 +40,9 @@ holds for both.
 
 ## Playing together
 
+- **The test course** — the first card on the level select, open from the start: every station of the
+  practice ground, for the two of you, on one screen or online. Nothing in it is saved and nothing can
+  be failed, so it's the quick way to try every move together. Its NEXT LEVEL is The Garden.
 - **On one device** — *Play on one screen*: split one keyboard, use two controllers, or mix them. If a
   controller drops out (or dozes off), reconnect it and press Ⓐ to take your sprout back.
 - **Far apart** — *Play online*: one of you makes a room and reads out the four-letter code; the other

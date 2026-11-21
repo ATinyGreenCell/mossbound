@@ -43,6 +43,11 @@ async function levels(page) {
   // `app.current` is no help either: it is still the outgoing screen until the swap. Half a second
   // covered the gap on a screen and is less than one frame on a runner without a GPU.
   await waitFor(() => page.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 8000, 'one level select on screen');
+  // …and then past its click guard, which is wall-clock (CLICK_GUARD_MS, 350 ms from when the screen
+  // was built), so a wall-clock pause is the right unit. On a machine with a GPU the wait above returns
+  // inside the guard and the click that follows was swallowed — `replay`, `quit` and `clocks` all timed
+  // out there while a slow runner, which takes longer than the guard just to get here, passed.
+  await sleep(450);
 }
 const text = (page, sel) => page.evaluate((sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim() ?? '', sel);
 /** Click a card on the level select and wait to be in that level. */
@@ -272,6 +277,7 @@ await scenario('save codes', async () => {
   // ("Node is detached from document"). Half a second covers that on a screen and is less than one
   // frame on a runner with no GPU, which is the whole of why this came and went.
   await waitFor(() => page.evaluate(() => document.querySelectorAll('.title-screen').length === 1 && window.__fb.app.current?.constructor.name === 'TitleScreen'), 6000, 'one title on screen');
+  await sleep(450); // past the title's click guard (see levels())
   await page.click('[data-act="settings"]');
   await waitFor(() => page.evaluate(() => !!document.querySelector('[data-act="copysave"]')), 3000, 'settings');
   await page.evaluate(() => { for (const d of document.querySelectorAll('details.advanced')) d.open = true; });

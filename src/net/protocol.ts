@@ -11,8 +11,9 @@ import type { Save } from '../core/save';
  *
  * 5: creatures (beetles and snaptraps), and the five levels rebuilt around them.
  * 6: the vine is tied between the sprouts rather than always there, and the small one is taller.
+ * 7: the two-player test course — a host's `load` can send the guest there (level -1, COURSE_INDEX).
  */
-export const PROTOCOL = 6;
+export const PROTOCOL = 7;
 export const APP_ID = 'mossbound/coop/v1';
 
 export type Role = 'host' | 'guest';

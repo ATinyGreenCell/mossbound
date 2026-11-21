@@ -44,7 +44,7 @@ import { Dummy } from './dummy';
 import { dbg } from '../core/debug';
 import { DebugPanel } from '../ui/debugpanel';
 import { Creature, parseLevel, type LevelData, type Pt } from './level';
-import { LEVELS, PRACTICE } from './levels';
+import { COURSE, COURSE_INDEX, LEVELS, PRACTICE } from './levels';
 import { menuOpen, RemoteFeed } from './remote';
 import { Tether } from './tether';
 import { INVULN_TIME, LAND_KICK_DROP, LAND_KICK_FULL, LINK_REACH, NOCLIP_SPEED, ROPE_LEN, ROPE_MIN, SHOT_CONE, SHOT_COOLDOWN, SHOT_DEFAULT_UP, SHOT_TAKEUP, T, TRAP_RANGE, TUG_COOLDOWN, TUG_MIN } from './tuning';
@@ -165,6 +165,10 @@ export class Session implements Screen {
   private panel: DebugPanel | null = null;
   /** either of the two: one player, a walked partner, and nothing written to the journal */
   readonly solo: boolean;
+  /** the two-player test course (levels.ts COURSE): played like a level, kept like the practice ground */
+  readonly course: boolean;
+  /** nothing done here is written to the journal: no run, no fireflies banked, no clear recorded */
+  readonly offRecord: boolean;
   /** practice: what walks the second sprout, and the frame it last asked for */
   private readonly dummy: Dummy | null;
   private dummyFrame = NEUTRAL;
@@ -180,7 +184,10 @@ export class Session implements Screen {
     // written down. They differ only in which level you get: the practice ground is its own place,
     // while the debug ground drops you into any level you like.
     this.solo = this.practice || this.debug;
-    this.L = parseLevel(this.practice ? PRACTICE : LEVELS[opts.level], opts.level);
+    this.course = !this.solo && opts.level === COURSE_INDEX;
+    // the test course is played by two, like a real level, but it is off the record like those two
+    this.offRecord = this.solo || this.course;
+    this.L = parseLevel(this.practice ? PRACTICE : this.course ? COURSE : LEVELS[opts.level], opts.level);
     this.dummy = this.solo ? new Dummy() : null;
     this.world = new World(this.L);
     this.theme = THEMES[this.L.def.theme];
@@ -737,8 +744,8 @@ export class Session implements Screen {
     const now = this.runUrgent;
     this.runDirty = this.runUrgent = false;
     this.runT = 1.5;
-    // the practice ground keeps no run: it isn't one of LEVELS, and nothing done there is progress
-    if (this.solo || this.state !== 'play') return;
+    // the practice ground (and the course) keeps no run: it isn't one of LEVELS, and nothing done there is progress
+    if (this.offRecord || this.state !== 'play') return;
     const r = this.resumeState();
     // nothing found yet and barely begun: not worth a CONTINUE card (and an older run of this level stays)
     if (r.cp < 0 && !r.seeds.length && !r.grown?.length && !r.feathers && r.time < 20) return;
@@ -781,7 +788,7 @@ export class Session implements Screen {
     this.feathers |= 1 << i;
     // found is found: it counts (for hats too) even if this level never gets finished — but the practice
     // ground keeps nothing, and its fireflies are there to be reached, not banked
-    if (!this.solo) bankFeathers(this.L.def.id, 1 << i);
+    if (!this.offRecord) bankFeathers(this.L.def.id, 1 << i);
     this.runDirty = this.runUrgent = true;
     this.runT = 0;
     const s = this.L.feathers[i];
@@ -1196,7 +1203,7 @@ export class Session implements Screen {
     for (let k = 0; k < 3; k++) this.fx.burst(PK.Heart, n.x, n.y - 20, 8, 160, 1.6, 9, ['#ff6f9a', '#ffb3c8', '#ffd75a'][k], -60, 1.5, 40);
     let seeds = 0;
     for (const v of this.seedTaken) seeds += v;
-    if (!this.solo) {
+    if (!this.offRecord) {
       recordClear(this.L.def.id, this.L.index, seeds, this.feathers, time, this.runGen);
       this.flow.shareSave();
     }

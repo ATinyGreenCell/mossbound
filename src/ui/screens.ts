@@ -9,7 +9,7 @@ import { canInstall, install, onInstallable } from '../core/install';
 import { IS_IOS, IS_STANDALONE, IS_XBOX, XBOX_HINT } from '../core/platform';
 import type { Flow } from '../flow';
 import { Bird, BIRD_COLORS } from '../game/bird';
-import { LEVELS } from '../game/levels';
+import { COURSE, COURSE_INDEX, LEVELS } from '../game/levels';
 import { fmtTime } from '../game/session';
 import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type CtrlMsg } from '../net/protocol';
@@ -1019,6 +1019,9 @@ export class LevelSelect implements Screen {
         <span class="num">${i + 1}</span><b>${esc(L.name)}</b><em>${esc(L.subtitle)}</em>
         <span class="feathers">${feathers}</span>${at}${rec?.time ? `<span class="best">⏱ ${fmtTime(rec.time)}</span>` : ''}${locked ? '<span class="lock">🔒</span>' : ''}</div>`;
     }).join('');
+    // the two-player test course comes first, open from the start (it keeps nothing, so it never locks)
+    const course = `<div class="card course t-${COURSE.theme}" ${this.lead ? 'data-act="course"' : ''}>
+        <span class="num">✦</span><b>${esc(COURSE.name)}</b><em>${esc(COURSE.subtitle)}</em></div>`;
     const link = this.flow.link;
     const gone = this.online && link?.status === 'lost';
     let status = '';
@@ -1037,7 +1040,7 @@ export class LevelSelect implements Screen {
     this.el.innerHTML = `
       <div class="panel wide">
         <div class="panel-title">${this.online && !this.lead ? (gone ? `${esc(partner)} left` : `${esc(partner)} is picking…`) : 'pick a level'}</div>
-        <div class="cards">${cont}${cards}</div>
+        <div class="cards">${course}${cont}${cards}</div>
         ${who}
         ${status}
         <div class="btn small" data-act="back">${this.online ? 'LEAVE ROOM' : 'BACK'}</div>
@@ -1051,9 +1054,11 @@ export class LevelSelect implements Screen {
         this.list.arm();
       }
     } else {
-      // the first time CONTINUE, if there's a run to continue (Ⓐ mustn't start that level over)
+      // the first time CONTINUE, if there's a run to continue (Ⓐ mustn't start that level over); on a
+      // journal with nothing in it yet, the test course
       const items = this.list.items();
-      for (const a of [was, run ? 'continue' : '', `lvl:${this.sel}`]) {
+      const fresh = !run && save.unlocked === 0 && !runSlot(LEVELS[0].id);
+      for (const a of [was, run ? 'continue' : '', fresh ? 'course' : '', `lvl:${this.sel}`]) {
         const i = a ? items.findIndex((el) => el.dataset.act === a) : -1;
         if (i >= 0) {
           this.list.sel = i;
@@ -1078,6 +1083,10 @@ export class LevelSelect implements Screen {
     if (a === 'back') {
       if (this.online) this.flow.leaveOnline();
       else this.flow.title();
+      return;
+    }
+    if (a === 'course') {
+      this.flow.enterLevel(COURSE_INDEX);
       return;
     }
     if (a === 'continue') {

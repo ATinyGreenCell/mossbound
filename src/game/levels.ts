@@ -625,3 +625,27 @@ function practice(): LevelDef {
 
 /** The solo practice ground — deliberately not one of LEVELS (see practice()). */
 export const PRACTICE: LevelDef = practice();
+
+// ------------------------------------------------------------------ the test course (two players)
+
+/**
+ * The practice ground's stations played by the two of you, with nobody walked for you: the first
+ * card on the level select, open from the start, on one screen or online. Every move in the game in
+ * a few minutes, and nothing to fail — the quick way to try something out together.
+ *
+ * Like the practice ground it is not one of LEVELS, and it keeps nothing: no run, no fireflies
+ * banked, nothing unlocked (see Session.offRecord). Its level number is COURSE_INDEX, which is also
+ * what a host's `load` says to send a guest here (protocol 7) — and since the level after it is
+ * COURSE_INDEX + 1, its NEXT LEVEL is the first real one.
+ */
+export const COURSE_INDEX = -1;
+export const COURSE: LevelDef = {
+  ...PRACTICE,
+  id: 'course',
+  name: 'The Test Course',
+  subtitle: 'the two of you · every move · nothing to lose',
+  signs: [
+    'The test course: every move in the game, one station after another, and nothing here can be lost. {move} to walk, {jump} to jump. Stand beside each other and {shoot} to tie your vines together; {shoot} again unties them.',
+    ...(PRACTICE.signs ?? []).slice(1),
+  ],
+};
