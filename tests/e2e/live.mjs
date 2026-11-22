@@ -45,7 +45,9 @@ const host = await device(b1, BASE, 'Pip');
 t.check('the page loads and shows the title', (await text(host, '.btn[data-act=online]')) !== null);
 
 // the first press unlocks the sound, which is built in a worker now: that asset has to be served too
-await host.mouse.click(640, 400);
+// (a click on nothing: the middle of the screen is the title's menu, and since 1.6 its INSTALL button sits
+// where this used to click — which took the highlight there and never left the title)
+await host.mouse.click(40, 40);
 await sleep(1500);
 const worker = host.asked.filter((u) => /synth\.worker/.test(u));
 t.check('the sound library’s worker is served and fetched', worker.length === 1, worker.map((u) => u.split('/').pop()));
