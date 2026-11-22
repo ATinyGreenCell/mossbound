@@ -631,15 +631,24 @@ body {
 }
 
 .card.t-garden {
-  background: linear-gradient(#c4eaff, #a9e08e);
+  background: linear-gradient(#c8ecd8, #a6d16a);
 }
 
 .card.t-woods {
-  background: linear-gradient(#ffd59a, #c99063);
+  background: linear-gradient(#ffd59a, #b8b05a);
 }
 
 .card.t-mill {
-  background: linear-gradient(#cdeeff, #d9cfbf);
+  background: linear-gradient(#cdeeff, #b9d6c4);
+}
+
+.card.t-cascade {
+  background: linear-gradient(#ffc9a6, #c48a78);
+}
+
+.card.t-falls {
+  background: linear-gradient(#2f5068, #0b1330);
+  color: var(--cream);
 }
 
 .card.t-paris {

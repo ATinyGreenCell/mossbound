@@ -80,7 +80,7 @@ const SONGS: Record<SongId, Song> = {
       { kind: 'drone', vol: 0.036, oct: -2 },
       { kind: 'melody', inst: 'felt', vol: 0.2, oct: 0, keep: 0.8, bars: ['5 - - - 6 - . .', '3 - - - . . . .', '. . 2 - 3 - 5 -', '6 - - - 5 - - -', '. . . . . . . .'] },
     ],
-    air: { wind: 0.4, leaves: 0.4, creek: 0.5, birds: 1, crickets: 0, owl: 0 },
+    air: { wind: 0.4, leaves: 0.4, creek: 0.7, birds: 1, crickets: 0, owl: 0 },
   },
   woods: {
     bpm: 58,
@@ -94,7 +94,7 @@ const SONGS: Record<SongId, Song> = {
       { kind: 'drone', vol: 0.036, oct: -2 },
       { kind: 'melody', inst: 'felt', vol: 0.19, oct: 0, keep: 0.8, bars: ['1 - - - . . . .', '. . 6, - - - . .', '5, - - - . . 6, -', '1 - - - . . . .', '. . 3 - 2 - - -', '1 - - - . . . .', '. . . . . . . .'] },
     ],
-    air: { wind: 0.9, leaves: 0.9, creek: 0.35, birds: 0.8, crickets: 0, owl: 0 },
+    air: { wind: 0.9, leaves: 0.9, creek: 0.6, birds: 0.8, crickets: 0, owl: 0 },
   },
   mill: {
     bpm: 66,
@@ -122,7 +122,7 @@ const SONGS: Record<SongId, Song> = {
       { kind: 'drone', vol: 0.036, oct: -2 },
       { kind: 'melody', inst: 'felt', vol: 0.19, oct: 1, keep: 0.8, bars: ['5 - - - 7 - . .', "1' - - - . . . .", '. . 7 - 5 - - -', '4 - - - 3 - . .', '1 - - - . . . .', '. . . . . . . .'] },
     ],
-    air: { wind: 0.6, leaves: 0.3, creek: 0, birds: 0.45, crickets: 0, owl: 0 },
+    air: { wind: 0.5, leaves: 0.3, creek: 0.9, birds: 0.5, crickets: 0, owl: 0 },
   },
   tower: {
     bpm: 54,
@@ -136,7 +136,7 @@ const SONGS: Record<SongId, Song> = {
       { kind: 'drone', vol: 0.033, oct: -2 },
       { kind: 'melody', inst: 'felt', vol: 0.17, oct: 0, keep: 0.75, bars: ['3 - - - . . . .', '. . . . 2 - - -', '1 - - - . . . .', '. . 5, - - - . .', '6, - - - . . . .', '. . . . . . . .', '. . . . . . . .'] },
     ],
-    air: { wind: 0.5, leaves: 0.2, creek: 0.3, birds: 0, crickets: 1, owl: 1 },
+    air: { wind: 0.5, leaves: 0.2, creek: 1, birds: 0, crickets: 1, owl: 1 },
   },
 };
 

@@ -111,7 +111,7 @@ await scenario('page gone', async () => {
   await levels(again);
   const discarded = await text(again, '[data-act="continue"]');
   t.check(`a lantern lit just before the tab closed is kept (“${closed}”)`, /lantern 1/.test(closed), closed);
-  t.check(`a lantern lit just before the phone hid (and later dropped) the page is kept (“${discarded}”)`, /Woodland/.test(discarded) && /lantern 1/.test(discarded), discarded);
+  t.check(`a lantern lit just before the phone hid (and later dropped) the page is kept (“${discarded}”)`, /Fern Falls/.test(discarded) && /lantern 1/.test(discarded), discarded);
   errors.push(...again.errors);
 });
 
@@ -251,7 +251,7 @@ await scenario('names and times', async () => {
   const page = await device({ ...OPEN, levels: { garden: { seeds: 20, feathers: 1, time: 100, clears: 1 } }, run: { level: 1, cp: 0, seeds: [], feathers: 0, time: 30, with: 'Marguerite & Bartholomew 🌱' }, runAt: 1 });
   await levels(page);
   const card = await text(page, '[data-act="continue"]');
-  t.check(`both names show on the CONTINUE card (“${card}”)`, card.includes('Marguerite & Bartholomew 🌱') && /Woodland/.test(card), card);
+  t.check(`both names show on the CONTINUE card (“${card}”)`, card.includes('Marguerite & Bartholomew 🌱') && /Fern Falls/.test(card), card);
   await page.evaluate(`(async () => (${saveModule}).recordClear('garden', 0, 5, 1, NaN))()`);
   await sleep(300);
   await reload(page);
@@ -337,7 +337,7 @@ await scenario('carried over', async () => {
   const page = await device({ ...OPEN, run: { level: 1, cp: 1, seeds: [2, 3], feathers: 1, time: 80, with: '' }, runAt: 5 });
   await levels(page);
   const card = await text(page, '[data-act="continue"]');
-  t.check(`a run saved by 1.0.0 is offered (“${card}”)`, /Woodland/.test(card) && /lantern 2/.test(card), card);
+  t.check(`a run saved by 1.0.0 is offered (“${card}”)`, /Fern Falls/.test(card) && /lantern 2/.test(card), card);
   await pick(page, 'continue', 1);
   const run = await where(page);
   await page.evaluate(() => window.__fbSession.togglePause());

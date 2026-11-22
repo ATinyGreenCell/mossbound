@@ -118,7 +118,7 @@ function garden(): LevelDef {
   m.set(140, F - 1, 'N');
   return {
     id: 'garden',
-    name: 'The Garden',
+    name: 'Mossy Creek',
     subtitle: 'morning · learn the ropes',
     theme: 'garden',
     song: 'garden',
@@ -214,7 +214,7 @@ function woods(): LevelDef {
   m.set(160, F - 3, 'N');
   return {
     id: 'woods',
-    name: 'Woodland Rings',
+    name: 'Fern Falls',
     subtitle: 'golden hour · swings and stumps',
     theme: 'woods',
     song: 'woods',
@@ -298,7 +298,7 @@ function mill(): LevelDef {
   return {
     id: 'mill',
     name: 'The Old Mill',
-    subtitle: 'afternoon · plates and gates',
+    subtitle: 'afternoon · by the millrace',
     theme: 'mill',
     song: 'mill',
     map: m.build(),
@@ -317,7 +317,7 @@ function mill(): LevelDef {
   };
 }
 
-// ------------------------------------------------------------------ 4 · rooftops of paris
+// ------------------------------------------------------------------ 4 · the cascades (Paris's rooftops until 1.9.0)
 
 function paris(): LevelDef {
   const m = new Map(190, 26);
@@ -371,24 +371,24 @@ function paris(): LevelDef {
   m.set(176, 5, 'N');
   return {
     id: 'paris',
-    name: 'Rooftops of Paris',
-    subtitle: 'sunset · chimneys and awnings',
-    theme: 'paris',
+    name: 'The Cascades',
+    subtitle: 'sunset · ledges and spray',
+    theme: 'cascade',
     song: 'paris',
     map: m.build(),
     movers: [{ x: 71, y: 6, w: 3, path: [[7, 0]], period: 8 }],
     signs: [
-      'Paris at sunset! The streets are narrow up here — hop across.',
-      'Warm chimney air floats you up. Tied together, ride it as a pair — the tall roof is out of one vine’s reach!',
-      'Hop on the window-washer’s gondola together.',
-      'Café awnings are bouncy!',
-      'Loose tiles! Run across — they come back in a moment.',
-      'Look — the tower. Shall we climb it? ♥',
+      'The cascades at sunset! The gaps between the ledges are narrow up here — hop across.',
+      'Spray off the falls floats you up. Tied together, ride it as a pair — the high ledge is out of one vine’s reach!',
+      'Hop on the lily pad together — it drifts across.',
+      'The big blossoms are bouncy!',
+      'Loose stones! Run across — they come back in a moment.',
+      'Listen — the great falls. Shall we climb beside them? ♥',
     ],
   };
 }
 
-// ------------------------------------------------------------------ 5 · the iron lady (a climb)
+// ------------------------------------------------------------------ 5 · the great falls (a climb; the Eiffel Tower until 1.9.0)
 
 function tower(): LevelDef {
   const W = 46;
@@ -467,18 +467,18 @@ function tower(): LevelDef {
   m.seeds(15, 20, 8, 2);
   return {
     id: 'tower',
-    name: 'The Iron Lady',
+    name: 'The Great Falls',
     subtitle: 'night · up, up, together',
-    theme: 'tower',
+    theme: 'falls',
     song: 'tower',
     map: m.build(),
     vertical: true,
     movers: [{ x: 26, y: 58, w: 3, path: [[0, -22]], period: 11 }],
     signs: [
       'Up, up, together! Whoever slips, the other one catches.',
-      'The fan in the floor blows you up the shaft — ride it together.',
-      'The service lift — ride it up together!',
-      'We made it to the top. Look at all the lights ♥',
+      'The spray off the falls blows you up the shaft — ride it together.',
+      'A log lift on a rope — ride it up together!',
+      'We made it to the top. Look at the falls in the moonlight ♥',
     ],
   };
 }

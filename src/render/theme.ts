@@ -39,6 +39,8 @@ export interface Theme {
   /** string glow strength (brighter at night) */
   glow: number;
   ink: string;
+  /** the creek along the bottom of a level — the pits are water (see Session.drawWater); none if absent */
+  water?: { top: string; bottom: string; light: string };
 }
 
 const hills = (ctx: CanvasRenderingContext2D, W: number, H: number, base: number, amp: number, color: string, seed: number, waves = 3) => {
@@ -150,6 +152,80 @@ function buildings(ctx: CanvasRenderingContext2D, W: number, H: number, r: () =>
   }
 }
 
+/** Colours for a waterfall painted into a backdrop (an empty `rock` paints no shoulder of rock behind it). */
+interface FallPal {
+  rock: string;
+  moss?: string;
+  water: string;
+  light: string;
+  mist: string;
+}
+
+/**
+ * A waterfall in a backdrop layer: the broad shoulder of rock it comes over (broad, or a fall on a
+ * narrow wedge of rock reads as a white pillar), moss along its lip, the falling sheet widening as it
+ * drops with a few streaks in it, and a pool and mist where it lands. Painted once with the layer.
+ */
+const waterfall = (ctx: CanvasRenderingContext2D, x: number, top: number, bottom: number, w: number, o: FallPal) => {
+  const h = bottom - top;
+  if (o.rock) {
+    const span = Math.max(w * 5, h * 0.9);
+    ctx.fillStyle = o.rock;
+    ctx.beginPath();
+    ctx.moveTo(x - span, bottom + h * 0.02);
+    ctx.quadraticCurveTo(x - span * 0.95, top + h * 0.2, x - span * 0.45, top + h * 0.03);
+    ctx.quadraticCurveTo(x, top - h * 0.04, x + span * 0.45, top + h * 0.01);
+    ctx.quadraticCurveTo(x + span * 0.95, top + h * 0.25, x + span, bottom + h * 0.02);
+    ctx.closePath();
+    ctx.fill();
+    if (o.moss) {
+      ctx.strokeStyle = o.moss;
+      ctx.lineWidth = Math.max(2, h * 0.045);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x - span * 0.55, top + h * 0.05);
+      ctx.quadraticCurveTo(x, top - h * 0.03, x + span * 0.55, top + h * 0.03);
+      ctx.stroke();
+    }
+  }
+  const g = ctx.createLinearGradient(0, top, 0, bottom);
+  g.addColorStop(0, o.light);
+  g.addColorStop(1, o.water);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(x - w * 0.55, top);
+  ctx.quadraticCurveTo(x, top - w * 0.25, x + w * 0.55, top);
+  ctx.lineTo(x + w * 0.8, bottom);
+  ctx.lineTo(x - w * 0.8, bottom);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = o.light;
+  ctx.globalAlpha = 0.6;
+  ctx.lineWidth = Math.max(1, w * 0.07);
+  for (let k = 0; k < 5; k++) {
+    const u = (k + 0.5) / 5 - 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x + u * w * 0.95, top + h * 0.04);
+    ctx.lineTo(x + u * w * 1.5, bottom);
+    ctx.stroke();
+  }
+  // the pool it lands in
+  ctx.globalAlpha = 0.75;
+  ctx.fillStyle = o.light;
+  ctx.beginPath();
+  ctx.ellipse(x, bottom, w * 1.5, Math.max(2, w * 0.28), 0, 0, TAU);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  const m = ctx.createRadialGradient(x, bottom, 0, x, bottom, w * 2.4);
+  m.addColorStop(0, o.mist);
+  m.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = m;
+  ctx.fillRect(x - w * 2.4, bottom - w * 2.4, w * 4.8, w * 4.8);
+};
+
+/** A ridge with a rough, rocky top (hills() at a high frequency). */
+const ridge = (ctx: CanvasRenderingContext2D, W: number, H: number, base: number, amp: number, color: string, seed: number) => hills(ctx, W, H, base, amp, color, seed, 7);
+
 export const THEMES: Record<ThemeId, Theme> = {
   // the title: a yellow-green morning over a mossy creek (the creek, the fall and the banks themselves
   // are render/creek.ts — this is the sky and the woods behind them)
@@ -198,21 +274,25 @@ export const THEMES: Record<ThemeId, Theme> = {
     glow: 0.35,
     ink: '#24331c',
   },
+  // 1 · Mossy Creek: a yellow-green morning, the hills streaked with far-off falls
   garden: {
     id: 'garden',
-    sky: ['#86ccff', '#c4eaff', '#fff2d2'],
-    sun: { x: 0.78, y: 0.2, r: 0.07, core: '#fffbe6', glow: 'rgba(255,240,180,0.55)' },
+    sky: ['#9fd6c6', '#d2ecc0', '#f6f2cc'],
+    sun: { x: 0.78, y: 0.18, r: 0.065, core: '#fffbe2', glow: 'rgba(255,246,190,0.55)' },
     moon: false,
     stars: 0,
-    clouds: { color: '#ffffff', alpha: 0.9, count: 7 },
+    clouds: { color: '#fbfff0', alpha: 0.75, count: 6 },
     layers: [
       {
         fx: 0.12,
         fy: 0.05,
         period: 2.4,
         paint(ctx, W, H) {
-          hills(ctx, W, H, 0.6, 0.06, '#bfe1d0', 11, 2);
-          hills(ctx, W, H, 0.68, 0.05, '#a9d8bc', 12, 3);
+          hills(ctx, W, H, 0.58, 0.06, '#cfe5b2', 11, 2);
+          const far = { rock: '#a9bd96', moss: '#bcd98c', water: '#d7efe6', light: '#ffffff', mist: 'rgba(255,255,255,0.5)' };
+          waterfall(ctx, W * 0.28, H * 0.47, H * 0.66, H * 0.036, far);
+          waterfall(ctx, W * 0.72, H * 0.45, H * 0.64, H * 0.03, far);
+          hills(ctx, W, H, 0.66, 0.05, '#b9d99a', 12, 3);
         },
       },
       {
@@ -220,28 +300,30 @@ export const THEMES: Record<ThemeId, Theme> = {
         fy: 0.12,
         period: 2.0,
         paint(ctx, W, H, r) {
-          hills(ctx, W, H, 0.78, 0.06, '#8ccc8f', 21, 2);
+          hills(ctx, W, H, 0.78, 0.06, '#9cc865', 21, 2);
           for (let i = 0; i < 14; i++) {
             const x = r() * W;
-            roundTree(ctx, x, hillY(W, x, 0.78, 0.06, 21, 2) * H + 4, H * (0.08 + r() * 0.05), r() < 0.5 ? '#6bb877' : '#5aa86a', '#8a6a4a');
+            roundTree(ctx, x, hillY(W, x, 0.78, 0.06, 21, 2) * H + 4, H * (0.08 + r() * 0.05), ['#8cc052', '#9dcc5c', '#7ab048'][Math.floor(r() * 3)], '#7a5c3c');
           }
-          hills(ctx, W, H, 0.9, 0.04, '#78bf7c', 22, 4);
+          hills(ctx, W, H, 0.9, 0.04, '#86b94f', 22, 4);
         },
       },
     ],
-    ground: { top: '#7fd25c', topDark: '#58ad43', body: '#b57d4d', bodyDark: '#93603a', speck: '#cf9e6c', speck2: '#7d4f30' },
-    stone: { face: '#d6cfc3', light: '#efe9df', dark: '#aaa195', line: '#8f877c' },
+    ground: { top: '#9fd15a', topDark: '#74a843', body: '#8c6a45', bodyDark: '#6f5234', speck: '#a5c75a', speck2: '#5e4630' },
+    stone: { face: '#9aa592', light: '#b9c3ae', dark: '#727d6b', line: '#5d6757' },
     plank: { top: '#dca36a', side: '#b77c45', dark: '#8c5a2e' },
     spikes: { a: '#3f7d3a', b: '#2b5a28' },
     tint: null,
     ambient: 'petals',
-    ambientColor: ['#ffd1e1', '#ffffff', '#ffe7a8'],
+    ambientColor: ['#f6ffd8', '#ffffff', '#e6f5a0'],
     glow: 0.35,
-    ink: '#2b2140',
+    ink: '#24331c',
+    water: { top: '#6fa88f', bottom: '#3f7d82', light: '#e4f7ee' },
   },
+  // 2 · Fern Falls: golden hour in the pines, a tall fall between them
   woods: {
     id: 'woods',
-    sky: ['#ffbe7d', '#ffd59a', '#fff0c8'],
+    sky: ['#ffc98a', '#ffe2a8', '#f1efbf'],
     sun: { x: 0.2, y: 0.42, r: 0.09, core: '#fff3cf', glow: 'rgba(255,200,120,0.6)' },
     moon: false,
     stars: 0,
@@ -252,25 +334,29 @@ export const THEMES: Record<ThemeId, Theme> = {
         fy: 0.05,
         period: 2.2,
         paint(ctx, W, H, r) {
-          for (let i = 0; i < 70; i++) pine(ctx, r() * W, H * (0.66 + r() * 0.05), H * (0.18 + r() * 0.12), '#e8b090');
-          ctx.fillStyle = '#e8b090';
+          for (let i = 0; i < 60; i++) pine(ctx, r() * W, H * (0.66 + r() * 0.05), H * (0.18 + r() * 0.12), '#d6c58e');
+          waterfall(ctx, W * 0.55, H * 0.36, H * 0.7, H * 0.05, { rock: '#c2a97c', moss: '#cfc480', water: '#fff1d0', light: '#ffffff', mist: 'rgba(255,248,230,0.55)' });
+          ctx.fillStyle = '#d6c58e';
           ctx.fillRect(0, H * 0.7, W, H * 0.3);
         },
       },
       {
         fx: 0.3,
-        fy: 0.1,
+        // Held still vertically. Its trunks and canopy run off the top of the screen, and the old
+        // version of this layer slid down as the camera climbed, which opened a band of sky above a
+        // flat-topped wood (found in the 2026-11-21 review).
+        fy: 0,
         period: 1.8,
         paint(ctx, W, H, r) {
-          for (let i = 0; i < 40; i++) pine(ctx, r() * W, H * (0.8 + r() * 0.04), H * (0.25 + r() * 0.15), '#c47c62');
-          ctx.fillStyle = '#c47c62';
+          for (let i = 0; i < 40; i++) pine(ctx, r() * W, H * (0.8 + r() * 0.04), H * (0.25 + r() * 0.15), '#aaa45e');
+          ctx.fillStyle = '#aaa45e';
           ctx.fillRect(0, H * 0.82, W, H * 0.18);
           for (let i = 0; i < 9; i++) {
             const x = r() * W;
             const w = H * (0.03 + r() * 0.03);
-            ctx.fillStyle = '#9a5a48';
+            ctx.fillStyle = '#7d5a3e';
             ctx.fillRect(x, 0, w, H);
-            ctx.fillStyle = '#a8644f';
+            ctx.fillStyle = '#8fa548';
             ctx.beginPath();
             ctx.arc(x + w / 2, H * 0.12, H * 0.16, 0, TAU);
             ctx.fill();
@@ -287,10 +373,12 @@ export const THEMES: Record<ThemeId, Theme> = {
     ambientColor: ['#f0953f', '#e86f3a', '#f7c45a'],
     glow: 0.45,
     ink: '#2b1a24',
+    water: { top: '#8fae7e', bottom: '#4e7f78', light: '#fff1d8' },
   },
+  // 3 · The Old Mill: an afternoon by the millrace, the fall that turns the wheel behind the village
   mill: {
     id: 'mill',
-    sky: ['#8ccdff', '#cdeeff', '#fffaf0'],
+    sky: ['#8fd2e6', '#d0eee4', '#fbf8e6'],
     sun: { x: 0.62, y: 0.16, r: 0.06, core: '#ffffff', glow: 'rgba(255,250,220,0.5)' },
     moon: false,
     stars: 0,
@@ -301,8 +389,9 @@ export const THEMES: Record<ThemeId, Theme> = {
         fy: 0.05,
         period: 2.4,
         paint(ctx, W, H) {
-          hills(ctx, W, H, 0.62, 0.08, '#b4cfe0', 31, 2);
-          hills(ctx, W, H, 0.7, 0.05, '#a2c7b0', 32, 3);
+          hills(ctx, W, H, 0.62, 0.08, '#bcd8c4', 31, 2);
+          waterfall(ctx, W * 0.36, H * 0.46, H * 0.7, H * 0.04, { rock: '#9fb8a4', moss: '#b4d39a', water: '#e2f3f4', light: '#ffffff', mist: 'rgba(255,255,255,0.5)' });
+          hills(ctx, W, H, 0.7, 0.05, '#a6cf9e', 32, 3);
         },
       },
       {
@@ -329,12 +418,12 @@ export const THEMES: Record<ThemeId, Theme> = {
           }
           for (let i = 0; i < 10; i++) {
             const x = r() * W;
-            roundTree(ctx, x, hillY(W, x, 0.82, 0.04, 41, 2) * H + 4, H * (0.07 + r() * 0.04), '#6aae6c', '#7a5c40');
+            roundTree(ctx, x, hillY(W, x, 0.82, 0.04, 41, 2) * H + 4, H * (0.07 + r() * 0.04), ['#7fb865', '#8cc052'][Math.floor(r() * 2)], '#7a5c40');
           }
         },
       },
     ],
-    ground: { top: '#8fd06a', topDark: '#64aa4a', body: '#bdb6a8', bodyDark: '#98917f', speck: '#d6d0c4', speck2: '#857d6c' },
+    ground: { top: '#9cd15c', topDark: '#6fab45', body: '#bdb6a8', bodyDark: '#98917f', speck: '#d6d0c4', speck2: '#857d6c' },
     stone: { face: '#c98d52', light: '#e3ab72', dark: '#9a6634', line: '#7a4c22' },
     plank: { top: '#cf9c63', side: '#a67340', dark: '#7a5026' },
     spikes: { a: '#7a8090', b: '#4f5462' },
@@ -343,6 +432,116 @@ export const THEMES: Record<ThemeId, Theme> = {
     ambientColor: ['#ffffff', '#fff6c8'],
     glow: 0.35,
     ink: '#2a2238',
+    water: { top: '#6aa6a6', bottom: '#3a7488', light: '#e8f6f6' },
+  },
+  // 4 · The Cascades: a sunset cliff the water comes down in steps
+  cascade: {
+    id: 'cascade',
+    sky: ['#f29a7c', '#ffcf9e', '#f6eebf'],
+    sun: { x: 0.72, y: 0.5, r: 0.1, core: '#fff0c0', glow: 'rgba(255,180,120,0.55)' },
+    moon: false,
+    stars: 0,
+    clouds: { color: '#ffd6c4', alpha: 0.55, count: 5 },
+    layers: [
+      {
+        fx: 0.06,
+        fy: 0.03,
+        period: 2.6,
+        paint(ctx, W, H) {
+          hills(ctx, W, H, 0.5, 0.05, '#dfa58e', 51, 3);
+          ridge(ctx, W, H, 0.58, 0.035, '#c98c74', 52);
+          const fall = { rock: '#a8705e', moss: '#a7a35a', water: '#ffe6d2', light: '#fff8ee', mist: 'rgba(255,240,230,0.55)' };
+          for (const [fx, top, w] of [
+            [0.18, 0.5, 0.04],
+            [0.47, 0.44, 0.055],
+            [0.76, 0.52, 0.036],
+          ]) {
+            waterfall(ctx, W * fx, H * top, H * 0.75, H * w, fall);
+          }
+          ctx.fillStyle = '#b07a64';
+          ctx.fillRect(0, H * 0.75, W, H * 0.25);
+        },
+      },
+      {
+        fx: 0.24,
+        fy: 0.08,
+        period: 2.0,
+        paint(ctx, W, H, r) {
+          hills(ctx, W, H, 0.84, 0.05, '#7f8a52', 61, 3);
+          for (let i = 0; i < 12; i++) {
+            const x = r() * W;
+            roundTree(ctx, x, hillY(W, x, 0.84, 0.05, 61, 3) * H + 4, H * (0.1 + r() * 0.06), ['#7f9a4a', '#8fa852', '#6f8a40'][Math.floor(r() * 3)], '#5e4634');
+          }
+        },
+      },
+    ],
+    ground: { top: '#b4c95a', topDark: '#86a343', body: '#8a6b55', bodyDark: '#6d5243', speck: '#a88a6e', speck2: '#5a4334' },
+    stone: { face: '#a7998a', light: '#c7b9a8', dark: '#7d6f62', line: '#5f544a' },
+    plank: { top: '#d09a62', side: '#a8743f', dark: '#7a5026' },
+    spikes: { a: '#4d6b2f', b: '#34501f' },
+    tint: 'rgba(255,140,90,0.06)',
+    ambient: 'leaves',
+    ambientColor: ['#ffb36b', '#ff8f6b', '#ffd58a'],
+    glow: 0.55,
+    ink: '#3a2230',
+    water: { top: '#c79a8a', bottom: '#5a7a86', light: '#fff0e4' },
+  },
+  // 5 · The Great Falls: a climb by moonlight beside a fall the height of the sky
+  falls: {
+    id: 'falls',
+    sky: ['#0b1330', '#1b2d55', '#2f5068'],
+    sun: null,
+    moon: true,
+    stars: 140,
+    clouds: { color: '#5a6a9a', alpha: 0.3, count: 4 },
+    layers: [
+      {
+        fx: 0.05,
+        // held still vertically, so the fall stays beside you all the way up the climb
+        fy: 0,
+        period: 2.6,
+        paint(ctx, W, H, r) {
+          // the cliff, the height of the screen, with ragged edges
+          ctx.fillStyle = '#1c2a3c';
+          ctx.beginPath();
+          ctx.moveTo(W * 0.22, H);
+          for (let y = H; y >= 0; y -= H / 14) ctx.lineTo(W * (0.24 + (r() - 0.5) * 0.04), y);
+          for (let y = 0; y <= H; y += H / 14) ctx.lineTo(W * (0.76 + (r() - 0.5) * 0.04), y);
+          ctx.closePath();
+          ctx.fill();
+          // moonlit moss on its ledges
+          ctx.fillStyle = '#34503a';
+          for (let i = 0; i < 26; i++) {
+            ctx.beginPath();
+            ctx.ellipse(W * (0.26 + r() * 0.48), H * r(), H * (0.02 + r() * 0.03), H * 0.008, 0, 0, TAU);
+            ctx.fill();
+          }
+          // the fall, pale in the moonlight, and two threads beside it
+          const fall = { rock: '', water: 'rgba(150,196,214,0.92)', light: 'rgba(222,240,248,0.95)', mist: 'rgba(200,225,240,0.35)' };
+          waterfall(ctx, W * 0.5, H * 0.02, H * 1.02, H * 0.09, fall);
+          waterfall(ctx, W * 0.33, H * 0.25, H * 1.02, H * 0.02, fall);
+          waterfall(ctx, W * 0.66, H * 0.4, H * 1.02, H * 0.016, fall);
+        },
+      },
+      {
+        fx: 0.2,
+        fy: 0,
+        period: 2.0,
+        paint(ctx, W, H, r) {
+          for (let i = 0; i < 26; i++) pine(ctx, r() * W, H * (0.98 + r() * 0.04), H * (0.16 + r() * 0.14), '#121d2e');
+        },
+      },
+    ],
+    ground: { top: '#5f8f4a', topDark: '#466e38', body: '#3b3a4a', bodyDark: '#2d2c3a', speck: '#4d4c5e', speck2: '#26252f' },
+    stone: { face: '#4b5563', light: '#667080', dark: '#353d4a', line: '#2a303a' },
+    plank: { top: '#8a6a4a', side: '#6e5236', dark: '#4e3a26' },
+    spikes: { a: '#3a5a3a', b: '#263c26' },
+    tint: 'rgba(80,110,200,0.06)',
+    ambient: 'twinkle',
+    ambientColor: ['#e8f59a', '#c8f0ff', '#ffffff'],
+    glow: 0.85,
+    ink: '#14182e',
+    water: { top: '#3d6680', bottom: '#162a42', light: '#cfe6f2' },
   },
   paris: {
     id: 'paris',

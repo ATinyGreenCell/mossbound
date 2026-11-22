@@ -1432,6 +1432,50 @@ export class Session implements Screen {
     this.cam.follow(dt, pts, w, lead, { w: this.L.w * T, h: bottom }, snap);
   }
 
+  /** The creek's surface, in world px: a tile and a quarter up from the map's bottom edge. */
+  private get waterTop() {
+    return (this.L.h - 1.25) * T;
+  }
+
+  /**
+   * The creek along the bottom of a level, behind the tiles, so a pit is water now. A band of colour
+   * and one stroked path of ripples drifting downstream: a few draw calls a frame, nothing per tile.
+   * Cosmetic only — falling in is the same fall it always was.
+   */
+  private drawWater(ctx: CanvasRenderingContext2D, w: { top: string; bottom: string; light: string }, x0: number, x1: number, y1: number, t: number) {
+    const top = this.waterTop;
+    if (y1 < top) return;
+    const g = ctx.createLinearGradient(0, top, 0, top + 2.5 * T);
+    g.addColorStop(0, w.top);
+    g.addColorStop(1, w.bottom);
+    ctx.fillStyle = g;
+    ctx.fillRect(x0, top, x1 - x0, Math.max(y1, this.L.h * T + 4 * T) - top);
+    // ripples: a fixed pattern of them in the water's own frame, carried downstream (leftward) with it
+    const fract = (v: number) => v - Math.floor(v);
+    const step = 44;
+    const flow = t * 18;
+    ctx.strokeStyle = w.light;
+    ctx.lineWidth = 1.6;
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    for (let i = Math.floor((x0 + flow) / step) - 1; i * step - flow < x1; i++) {
+      const h1 = fract(Math.sin(i * 12.9898) * 43758.5453);
+      const h2 = fract(Math.sin(i * 78.233) * 12345.678);
+      const x = i * step + h1 * 20 - flow;
+      const y = top + 7 + h2 * 22 + Math.sin(t * 1.5 + i) * 1.2;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 8 + h1 * 14, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = w.light;
+    ctx.fillRect(x0, top - 1, x1 - x0, 2);
+    ctx.globalAlpha = 1;
+  }
+
+  /** whether each sprout was above the creek's surface last frame (for the splash going in) */
+  private aboveWater = [true, true];
+
   private spawnAmbient(dt: number) {
     this.ambientT -= dt * this.fx.density;
     const th = this.theme;
@@ -1452,8 +1496,24 @@ export class Session implements Screen {
       if (Math.random() < dt * 14 * this.fx.density) {
         const x = v.x0 + 4 + Math.random() * (v.x1 - v.x0 - 8);
         if (th.id === 'paris') this.fx.add(PK.Smoke, x, v.bottom - 4, (Math.random() - 0.5) * 10, -120, 1.6, 6, 'rgba(240,230,240,0.9)', 0, 0.2);
+        // (by the creek, some of the updraft is spray: a soft puff of mist among the streaks)
+        else if (th.water && Math.random() < 0.4) this.fx.add(PK.Smoke, x, v.bottom - 4, (Math.random() - 0.5) * 12, -150, 1.4, 7, 'rgba(235,248,255,0.55)', 0, 0.2);
         else this.fx.add(PK.Wind, x, v.bottom, 0, -280 - Math.random() * 100, (v.bottom - v.top) / 330, 10 + Math.random() * 10, '#ffffff', 0, 0);
       }
+    }
+    // a splash where a sprout goes into the creek (cosmetic: it is the same fall it always was)
+    const water = th.water;
+    if (water) {
+      const top = this.waterTop;
+      this.birds.forEach((b, i) => {
+        const above = b.ghost || !b.present || b.y + b.h / 2 < top;
+        if (!above && this.aboveWater[i] && b.vy > 0) {
+          this.fx.burst(PK.Dust, b.x, top, 12, 170, 0.55, 4, water.light, 520, 1, 140);
+          this.fx.add(PK.Ring, b.x, top, 0, 0, 0.5, 18, water.light);
+          if (b.local) audio.play('splash', 0.6);
+        }
+        this.aboveWater[i] = above;
+      });
     }
   }
 
@@ -1511,6 +1571,8 @@ export class Session implements Screen {
     const x1 = x0 + cam.viewW + 2 * T;
     const y1 = y0 + cam.viewH + 2 * T;
     const vis = (x: number, y: number, m = 0) => x > x0 - m && x < x1 + m && y > y0 - m && y < y1 + m;
+    // the creek along the bottom of the level: the pits are water (the tiles cover it where there's ground)
+    if (th.water) this.drawWater(ctx, th.water, x0, x1, y1, t);
     // things behind the tiles
     for (const p of this.L.pegs) if (vis(p.x, p.y)) drawPeg(ctx, p.x, p.y, th, t, this.tether.pts.some((w) => w.peg && w.x === p.x && w.y === p.y));
     for (let i = 0; i < this.L.movers.length; i++) {

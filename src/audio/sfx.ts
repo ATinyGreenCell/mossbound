@@ -1,4 +1,5 @@
 export type Sfx =
+  | 'splash'
   | 'jump'
   | 'hop'
   | 'land'
@@ -175,6 +176,7 @@ function normalize(buf: Float32Array<ArrayBuffer>, peak: number) {
 }
 
 const LEN: Record<Sfx, number> = {
+  splash: 0.5,
   jump: 0.16,
   hop: 0.22,
   land: 0.14,
@@ -210,13 +212,18 @@ const LEN: Record<Sfx, number> = {
 };
 
 // (the melodic ones sit under the chill music rather than on top of it)
-const PEAK: Partial<Record<Sfx, number>> = { step: 0.12, flutter: 0.3, seed: 0.42, uiMove: 0.25, land: 0.5, plate: 0.45, clear: 0.5, feather: 0.45, checkpoint: 0.5, join: 0.45, leave: 0.4, nuzzle: 0.45, respawn: 0.45 };
+const PEAK: Partial<Record<Sfx, number>> = { splash: 0.5, step: 0.12, flutter: 0.3, seed: 0.42, uiMove: 0.25, land: 0.5, plate: 0.45, clear: 0.5, feather: 0.45, checkpoint: 0.5, join: 0.45, leave: 0.4, nuzzle: 0.45, respawn: 0.45 };
 
 /** Synthesize one sound at `rate` Hz. */
 export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
   seed = 12345 + name.length * 977;
   const b = new Float32Array(Math.ceil(LEN[name] * rate));
   switch (name) {
+    case 'splash':
+      // into the creek: a burst of water, then a few bubbles coming back up
+      hiss(b, rate, { dur: 0.35, vol: 0.7, lp: 3200, lp1: 500, hp: 200, attack: 0.004, decay: 0.12 });
+      for (let k = 0; k < 4; k++) tone(b, rate, { f0: 500 + k * 140, f1: 1100 + k * 160, dur: 0.05, at: 0.08 + k * 0.06, vol: 0.12, decay: 0.02 });
+      break;
     case 'jump':
       tone(b, rate, { f0: 360, f1: 760, dur: 0.12, vol: 0.5, decay: 0.05 });
       tone(b, rate, { f0: 720, f1: 1500, dur: 0.08, vol: 0.12, decay: 0.03, type: 'tri' });

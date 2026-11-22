@@ -396,14 +396,14 @@ export function drawSpring(ctx: CanvasRenderingContext2D, x: number, y: number, 
     ctx.restore();
     return;
   }
-  if (th.id === 'garden' || th.id === 'woods') {
+  if (th.id === 'garden' || th.id === 'woods' || th.id === 'cascade' || th.id === 'falls') {
     // a bouncy blossom
     ctx.fillStyle = '#5aa84a';
     ctx.fillRect(x - 1.5, base - h, 3, h);
     ctx.save();
     ctx.translate(x, base - h);
     ctx.scale(1 + k * 0.3, 1 - k * 0.3);
-    ctx.fillStyle = th.id === 'woods' ? '#ff9a4a' : '#ff7fb0';
+    ctx.fillStyle = th.id === 'woods' ? '#ff9a4a' : th.id === 'cascade' ? '#ffb86b' : th.id === 'falls' ? '#c7b8ff' : '#ff7fb0';
     ctx.beginPath();
     ctx.moveTo(-13, -1);
     ctx.quadraticCurveTo(-11, -9, -5, -7);
@@ -715,8 +715,9 @@ export function drawMover(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.strokeStyle = th.ink;
   ctx.lineWidth = 1.6;
   switch (th.id) {
-    case 'garden': {
-      // a floating leaf
+    case 'garden':
+    case 'cascade': {
+      // a floating leaf (a lily pad, on the cascades)
       ctx.fillStyle = '#6cc35a';
       ctx.beginPath();
       ctx.moveTo(x - 3, y + 3);

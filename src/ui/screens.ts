@@ -675,7 +675,7 @@ type OnlineState = 'menu' | 'host' | 'join' | 'connecting' | 'connected' | 'erro
 
 export class OnlineScreen implements Screen {
   private readonly el: HTMLDivElement;
-  private readonly scene = new MenuScene(THEMES.tower);
+  private readonly scene = new MenuScene(THEMES.falls);
   private list: ButtonList;
   private state: OnlineState = 'menu';
   private error = '';
@@ -1170,7 +1170,7 @@ export class LevelSelect implements Screen {
 
 export class EndingScreen implements Screen {
   private readonly el: HTMLDivElement;
-  private readonly scene = new MenuScene(THEMES.tower);
+  private readonly scene = new MenuScene(THEMES.falls);
   private readonly fx = new Particles();
   private dt = 0;
   private boomT = 0;

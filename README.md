@@ -89,11 +89,15 @@ a patch of soil, which grows a leaf you can both stand on.
 
 ## Levels
 
-1. **The Garden** — morning · learn the ropes
-2. **Woodland Rings** — golden hour · swings and stumps
-3. **The Old Mill** — afternoon · plates and gates
-4. **Rooftops of Paris** — sunset · chimneys and awnings
-5. **The Iron Lady** — night · up, up, together
+1. **Mossy Creek** — morning · learn the ropes
+2. **Fern Falls** — golden hour · swings and stumps
+3. **The Old Mill** — afternoon · by the millrace
+4. **The Cascades** — sunset · ledges and spray
+5. **The Great Falls** — night · up, up, together
+
+All five are creeks and waterfalls: falls in the hills behind, mossy rock and ferns underfoot, and a
+creek along the bottom of every level, so a pit is water (falling in is the same fall it always was,
+with a splash).
 
 Each level hides three fireflies. Finding all three earns a hat (flower crown, acorn cap,
 straw hat, beret, star).

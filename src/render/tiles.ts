@@ -340,6 +340,27 @@ function paintGround(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, tx:
     ctx.beginPath();
     ctx.ellipse(x + 10 + hash2(tx, ty, 98) * 12, y - 1.5, 4.5, 3, 0, Math.PI, 0);
     ctx.fill();
+  } else if ((th.id === 'cascade' || th.id === 'falls') && d < 0.2) {
+    const fx = x + 6 + hash2(tx, ty, 98) * 20;
+    if (th.id === 'falls' && hash2(tx, ty, 95) < 0.4) {
+      // a toadstool that glows a little in the dark
+      ctx.fillStyle = '#e8f5ff';
+      ctx.fillRect(fx - 1, y - 5, 2, 5);
+      ctx.fillStyle = '#9fe0ff';
+      ctx.beginPath();
+      ctx.ellipse(fx, y - 5, 4, 2.6, 0, Math.PI, 0);
+      ctx.fill();
+    } else {
+      // a little fern
+      ctx.strokeStyle = th.ground.topDark;
+      ctx.lineWidth = 1.2;
+      for (const a of [-0.6, 0, 0.6]) {
+        ctx.beginPath();
+        ctx.moveTo(fx, y + 1);
+        ctx.quadraticCurveTo(fx + a * 6, y - 6, fx + a * 9, y - 9 + Math.abs(a) * 3);
+        ctx.stroke();
+      }
+    }
   }
 }
 
@@ -457,6 +478,33 @@ function paintStone(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, tx: 
       ctx.fillRect(x + 2, y + 2, T - 4, 2);
       break;
     }
+    case 'cascade':
+    case 'falls': {
+      // wet rock: a crack or two, and moss wherever the top is open to the air
+      ctx.strokeStyle = s.line;
+      ctx.lineWidth = 1.2;
+      const h = hash2(tx, ty, 3);
+      ctx.beginPath();
+      ctx.moveTo(x + 4 + h * 10, y + 5);
+      ctx.lineTo(x + 10 + h * 8, y + 15);
+      ctx.lineTo(x + 6 + h * 12, y + T - 4);
+      if (hash2(tx, ty, 5) < 0.5) {
+        ctx.moveTo(x + T - 6, y + 9);
+        ctx.lineTo(x + T - 14, y + 19);
+      }
+      ctx.stroke();
+      ctx.fillStyle = s.light;
+      ctx.fillRect(x + 3, y + 3, 6, 1.5);
+      if (up) {
+        ctx.fillStyle = th.ground.topDark;
+        ctx.beginPath();
+        ctx.ellipse(x + T / 2, y + 2, T / 2 + 2, 5, 0, 0, TAU);
+        ctx.fill();
+        ctx.fillStyle = th.ground.top;
+        ctx.fillRect(x + 3, y, T - 6, 2.5);
+      }
+      break;
+    }
     case 'tower': {
       ctx.fillStyle = s.light;
       ctx.fillRect(x, y, T, 2);
@@ -553,7 +601,7 @@ function paintPlank(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, tx: 
 }
 
 function paintSpikes(ctx: CanvasRenderingContext2D, th: Theme, x: number, y: number, ceiling: boolean) {
-  const thorny = th.id === 'garden' || th.id === 'woods';
+  const thorny = th.id === 'garden' || th.id === 'woods' || th.id === 'cascade' || th.id === 'falls';
   ctx.save();
   if (ceiling) {
     ctx.translate(x + T / 2, y + T / 2);
@@ -617,6 +665,31 @@ function paintVent(ctx: CanvasRenderingContext2D, th: Theme, x: number, y: numbe
       ctx.lineTo(x + T, y + 5 + r * 7);
       ctx.stroke();
     }
+    return;
+  }
+  if (th.id === 'garden' || th.id === 'woods' || th.id === 'cascade' || th.id === 'falls') {
+    // a mossy rock split down the middle: the updraft (spray off the water) breathes out of the crack
+    ctx.fillStyle = th.stone.dark;
+    ctx.beginPath();
+    ctx.roundRect(x, y + 1, T, T - 1, 6);
+    ctx.fill();
+    ctx.fillStyle = th.stone.face;
+    ctx.beginPath();
+    ctx.roundRect(x + 2, y + 3, T - 4, T - 6, 5);
+    ctx.fill();
+    ctx.fillStyle = '#1e2a22';
+    ctx.beginPath();
+    ctx.moveTo(x + T / 2 - 4, y + 3);
+    ctx.lineTo(x + T / 2 + 4, y + 3);
+    ctx.lineTo(x + T / 2 + 1, y + T - 7);
+    ctx.lineTo(x + T / 2 - 2, y + T - 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = th.ground.top;
+    ctx.beginPath();
+    ctx.ellipse(x + 7, y + 4, 6, 3, -0.2, 0, TAU);
+    ctx.ellipse(x + T - 7, y + 4, 6, 3, 0.2, 0, TAU);
+    ctx.fill();
     return;
   }
   ctx.fillStyle = th.stone.dark;
