@@ -86,17 +86,32 @@ await padPress(page, 0, A);
 await waitFor(async () => (await screenName(page)) === 'Session', 5000, 'session');
 await sleep(800);
 
-// player 1 (second controller) walks right while player 2 (first controller) jumps
+// player 1 (second controller) walks right while player 2 (first controller) jumps. The jump is waited
+// for rather than sampled twelve frames on: where a frame is a third of a second (a CI runner drawing in
+// software), the sample could land before the rise showed, and the check failed with nothing wrong
 const s0 = await page.evaluate(() => window.__fbSession.birds.map((b) => ({ x: b.x, y: b.y })));
+// (watched from inside the page, every frame: how high player 2 got, how far player 1 walked)
+await page.evaluate(() => {
+  const s = window.__fbSession;
+  const w = (window.__watch = { minY1: Infinity, maxX0: -Infinity });
+  const tick = () => {
+    if (window.__watch !== w) return;
+    w.minY1 = Math.min(w.minY1, s.birds[1].y);
+    w.maxX0 = Math.max(w.maxX0, s.birds[0].x);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
 await padAxis(page, 1, 1, 0);
 await press(0, A, true);
-await frames(page, 12);
-const mid = await page.evaluate(() => window.__fbSession.birds.map((b) => ({ x: b.x, y: b.y })));
+const moved = await waitFor(() => page.evaluate((s0) => window.__watch.minY1 < s0[1].y - 10 && window.__watch.maxX0 > s0[0].x + 20, s0), 4000, 'both sprouts moving').catch(() => false);
+const mid = await page.evaluate(() => ({ ...window.__watch }));
 await press(0, A, false);
 await padAxis(page, 1, 0, 0);
 await sleep(600);
 const s1 = await page.evaluate(() => window.__fbSession.birds.map((b) => ({ x: b.x, y: b.y })));
-t.check('each controller moves its own sprout', s1[0].x > s0[0].x + 20 && mid[1].y < s0[1].y - 10 && Math.abs(s1[1].x - s0[1].x) < 30, { s0, mid, s1 });
+await page.evaluate(() => { window.__watch = null; });
+t.check('each controller moves its own sprout', !!moved && Math.abs(s1[1].x - s0[1].x) < 30, { s0, mid, s1 });
 
 // ⧉ View opens the menu (Edge may keep ☰ for itself), and on Xbox the menu says how to get the
 // controllers back if they stop
