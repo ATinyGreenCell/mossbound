@@ -1,5 +1,6 @@
+// The weights the game uses: 400 (body text), 600 (labels, and the canvas's name tags) and 700 (titles,
+// buttons, <b>). index.html preloads the same three, so they arrive with the script instead of after it.
 import '@fontsource/fredoka/latin-400.css';
-import '@fontsource/fredoka/latin-500.css';
 import '@fontsource/fredoka/latin-600.css';
 import '@fontsource/fredoka/latin-700.css';
 import './style.css';
@@ -35,7 +36,11 @@ for (const type of ['pointerdown', 'keydown', 'touchend'] as const) {
 // a tab with history) that starts right where the left thumb rests on the stick, and a page can't
 // refuse either. Keep one history entry of our own on top so a stray back is a no-op. It's pushed on
 // the first real input because browsers skip entries a page added without one — on a phone that means
-// the first touch, so a desktop played with a mouse keeps its Back button.
+// the first touch, so a desktop played with a mouse keeps its Back button. On an Xbox a controller's
+// button counts too (it is a gesture to the browser): played on the controller alone, with no click or
+// key press ever, there was no entry at all, and the first "back" — after a reload has handed the
+// controller to Edge's cursor again, say — left the game.
+let armBackGuard = () => {};
 {
   const guard = () => history.pushState({ fb: 1 }, '');
   let armed = false;
@@ -44,6 +49,7 @@ for (const type of ['pointerdown', 'keydown', 'touchend'] as const) {
     armed = true;
     guard();
   };
+  if (IS_XBOX) armBackGuard = arm;
   window.addEventListener('pointerdown', (e) => { if (IS_XBOX || e.pointerType !== 'mouse') arm(); }, { capture: true, passive: true });
   if (IS_XBOX) window.addEventListener('keydown', arm, { capture: true, passive: true });
   window.addEventListener('popstate', () => {
@@ -74,8 +80,12 @@ async function boot() {
     return;
   }
   app.touch = new TouchControls(root, app.input);
-  // a controller is all some players touch (an Xbox in game-controls mode)
-  app.onPadPress = unlockAudio;
+  // a controller is all some players touch (an Xbox in game-controls mode): its button presses start
+  // the sound, and on an Xbox put the back guard in place (see above)
+  app.onPadPress = () => {
+    unlockAudio();
+    armBackGuard();
+  };
   const flow = new Flow(app);
   // invite links look like …/#join=K7QX — drop straight into that room
   if (invite) {
@@ -88,6 +98,8 @@ async function boot() {
     flow.title();
   }
   app.start();
+  // the sound engine is made while the title is up, so the first press is heard and costs nothing (see audio.ts)
+  audio.warm();
   // a newer build on the site is taken at the first moment that costs nothing (see update.ts)
   watchUpdates(app, flow);
   // the worker is what makes the browser willing to install this at all (see core/install.ts)

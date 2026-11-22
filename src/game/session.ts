@@ -1,7 +1,7 @@
 import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
 import { BUTTON_NAMES, makeControls, seatButtonNames, type ControlFrame, type Device, type DeviceId } from '../core/input';
-import { clamp } from '../core/math';
+import { clamp, len } from '../core/math';
 import { IS_XBOX, XBOX_REFOCUS } from '../core/platform';
 import { bankFeathers, freshGen, levelSig, onFlush, recordClear, save, setRun } from '../core/save';
 import { ceremony } from '../core/testmode';
@@ -36,6 +36,7 @@ import { Particles, PK } from '../render/particles';
 import { drawSprout, sproutTop } from '../render/sprouts';
 import { THEMES, type Theme } from '../render/theme';
 import { TileCache } from '../render/tiles';
+import { drawCreekBand } from '../render/water';
 import { ButtonList, esc } from '../ui/menu';
 import { Hud } from '../ui/hud';
 import { Bird, BIRD_COLORS, type BirdFx } from './bird';
@@ -173,6 +174,15 @@ export class Session implements Screen {
   readonly course: boolean;
   /** nothing done here is written to the journal: no run, no fireflies banked, no clear recorded */
   readonly offRecord: boolean;
+  /**
+   * The vine's history on this screen, so both screens settle on the same state: how many times it has
+   * been tied or untied (the larger count wins; see vineFrom), and which bird made the latest change (of
+   * two made at once, the host's stands). -1: nobody yet.
+   */
+  private tieSeq = 0;
+  private tieBy = -1;
+  /** the partner's vine shot over ring `i` while their sprout was still a ghost here: it waits for them */
+  private hookLater: { i: number; until: number } | null = null;
   /** practice: what walks the second sprout, and the frame it last asked for */
   private readonly dummy: Dummy | null;
   private dummyFrame = NEUTRAL;
@@ -208,7 +218,7 @@ export class Session implements Screen {
     this.birds.forEach((b, i) => {
       b.local = this.auth[i];
       b.setKind(kinds[i]);
-      b.place(this.L.spawns[i]);
+      b.placeFree(this.world, this.L.spawns[i]);
       b.facing = i === 0 ? 1 : -1;
     });
     // (the partner's motion between snapshots is guessed with their sprout's body)
@@ -241,7 +251,8 @@ export class Session implements Screen {
       this.checkpoint = r.cp >= 0 && r.cp < this.L.checkpoints.length ? r.cp : -1;
       this.time = r.time;
       this.savedTime = r.time;
-      for (const b of this.birds) b.place(this.home(b.idx));
+      // (somewhere each body fits: a lantern's spot can sit by a rock a bigger sprout would be inside)
+      for (const b of this.birds) b.placeFree(this.world, this.home(b.idx));
       this.tether.reset(this.birds[0], this.birds[1]);
     }
     const id = this.L.def.id;
@@ -269,6 +280,14 @@ export class Session implements Screen {
     this.app.keepAwake(true);
   }
 
+  /**
+   * The practice and debug grounds were started with the sprouts swapped (you the small one) — which
+   * their restarts, AGAIN and SWAP carry on from, rather than whatever Settings says (see kindsFor).
+   */
+  private get swapped() {
+    return this.birds[0].kind === 'small';
+  }
+
   private fitCamera() {
     this.cam.fit(this.app.renderer.width, this.app.renderer.height);
   }
@@ -289,12 +308,19 @@ export class Session implements Screen {
         const n = Math.min(seeds.length, this.seedTaken.length);
         for (let k = 0; k < n; k++) if (Number.isInteger(seeds[k]) && seeds[k] >= 0 && seeds[k] < this.seedTaken.length) this.takeSeed(seeds[k], false);
         for (let i = 0; i < 3; i++) if (m.feathers & (1 << i)) this.takeFeather(i, false);
-        for (const i of Array.isArray(m.grown) ? m.grown : []) this.growSoil(i, false, false);
+        // (the same goes for the plants: never more of them than the level has patches of soil)
+        const grown = Array.isArray(m.grown) ? m.grown : [];
+        for (let k = 0, g = Math.min(grown.length, this.L.soils.length); k < g; k++) this.growSoil(grown[k], false, false);
         if (Number.isInteger(m.cp) && m.cp > this.checkpoint && m.cp < this.L.checkpoints.length) this.light(m.cp, false);
+        // the vine as the partner has it: if theirs is the newer state, it is ours too (a tie or untie
+        // whose own message went astray is taken up here within a couple of seconds)
+        const v = m.tie;
+        if (Array.isArray(v) && Number.isSafeInteger(v[0]) && v[0] > 0 && (v[1] === 0 || v[1] === 1) && (v[2] === 0 || v[2] === 1)) this.vineFrom(v[1] === 1, v[0], v[2]);
         break;
       }
       case 'clear':
-        // (a time garbled on the way mustn't reach the card as "NaN:NaN" — ours timed the same level)
+        // (the host's word — Flow drops it from anyone else — and a time garbled on the way mustn't reach
+        // the card as "NaN:NaN": ours timed the same level)
         if (m.n === this.nonce && this.state === 'play') this.clear(Number.isFinite(m.time) ? clamp(m.time, 0, 360000) : this.time);
         break;
     }
@@ -310,13 +336,60 @@ export class Session implements Screen {
     const s = unpackSnap(raw);
     if (!s || !this.feed || s.n !== this.nonce) return;
     this.feed.push(s);
+    // a hook that came while their sprout was still a ghost on this screen goes on once it is solid here
+    const later = this.hookLater;
+    if (later) {
+      const other = this.birds[1 - this.me];
+      if (performance.now() > later.until) this.hookLater = null;
+      else if (!other.ghost) {
+        this.hookLater = null;
+        this.hookFrom(later.i);
+      }
+    }
+  }
+
+  /**
+   * The vine, as the partner says it is now: `tied` after change number `seq` (none: a build before 1.9.2,
+   * whose change counts as the newest), made by bird `by`. The larger count wins; of two changes made at
+   * once (crossing in flight, the same count) the host's stands. Their word is taken whatever their sprout
+   * looks like on this screen: they decided on theirs, where it was solid and beside ours — here it may
+   * still be a ghost re-forming, a playback delay behind (the vine comes alive once it's back; see
+   * Tether.follow).
+   */
+  private vineFrom(tied: boolean, seq: unknown, by: number) {
+    const n = Number.isSafeInteger(seq) && (seq as number) > 0 ? (seq as number) : this.tieSeq + 1;
+    // (a million changes ahead of ours was never counted: a damaged build's, and it would pin the vine)
+    if (n < this.tieSeq || n > this.tieSeq + 1e6 || (n === this.tieSeq && !(by === 0 && this.tieBy !== 0))) return;
+    this.tieSeq = n;
+    this.tieBy = by;
+    const other = this.birds[1 - this.me];
+    if (tied && !this.tether.tied) this.tieVine(other, false);
+    else if (!tied && this.tether.tied) this.untieVine(other, false);
+  }
+
+  /** The partner's vine went over ring `i` on their screen: it does on this one too. */
+  private hookFrom(i: number) {
+    // (a ring needs a vine to bend: untied here, there is nothing for it to hold)
+    if (!this.tether.tied) return;
+    const other = this.birds[1 - this.me];
+    const mine = this.birds[this.me];
+    if (this.tether.shoot(other.idx, this.L.pegs[i], other, mine, other.traits.shot * T, true)) {
+      other.hooked = true;
+      this.fx.burst(PK.Leaf, this.L.pegs[i].x, this.L.pegs[i].y, 5, 80, 0.5, 6, '#9fd36a', -40, 2.5);
+      audio.play('grab', 0.5, 0, 1.05);
+    }
   }
 
   private handleEvent(e: GameEvent) {
+    // (an event with nothing in it — a damaged build's — is nothing to act on)
+    if (!e || typeof e !== 'object' || typeof (e as { k?: unknown }).k !== 'string') return;
     const mine = this.birds[this.me];
     const other = this.birds[1 - this.me];
     switch (e.k) {
       case 'tug':
+        // (no vine on this screen — never tied, or the untie crossed their tug on the wire — and there
+        // is nothing to be pulled along: the vine's ends would throw us at wherever it last pointed)
+        if (!this.tether.tied) break;
         if (!mine.anchored && !mine.ghost) this.yank(mine, other.idx, tugPower(other, mine));
         this.tether.twang = 1;
         this.tether.twangFrom = other.idx;
@@ -343,25 +416,23 @@ export class Session implements Screen {
       // the partner shot their vine over a ring (or let go of one): the vine bends there on this
       // screen too, so both of us see the same vine and the same swing
       case 'hook':
-        if (Number.isInteger(e.i) && e.i >= 0 && e.i < this.L.pegs.length && !other.ghost) {
-          if (this.tether.shoot(other.idx, this.L.pegs[e.i], other, mine, other.traits.shot * T, true)) {
-            other.hooked = true;
-            this.fx.burst(PK.Leaf, this.L.pegs[e.i].x, this.L.pegs[e.i].y, 5, 80, 0.5, 6, '#9fd36a', -40, 2.5);
-            audio.play('grab', 0.5, 0, 1.05);
-          }
+        if (Number.isInteger(e.i) && e.i >= 0 && e.i < this.L.pegs.length) {
+          // (just back from a fall, their sprout may still be a ghost here, a playback delay behind them:
+          // the hook waits for it to be solid — see onSnap — rather than being lost)
+          if (other.ghost) this.hookLater = { i: e.i, until: performance.now() + 1500 };
+          else this.hookFrom(e.i);
         }
         break;
       case 'unhook':
+        this.hookLater = null;
         // (their vine can only be over a ring while there is a vine; untied, there is nothing to let go of)
         if (this.tether.tied) this.tether.release(other.idx);
         other.hooked = false;
         break;
       // the partner walked up to us and asked for the vine (or let it go)
       case 'tie':
-        if (other.present && !other.ghost && !this.tether.tied) this.tieVine(other, false);
-        break;
       case 'untie':
-        if (this.tether.tied) this.untieVine(other, false);
+        this.vineFrom(e.k === 'tie', e.s, other.idx);
         break;
       // (an index from the partner is checked by World.grow, as the collectables' are here)
       case 'grow':
@@ -436,7 +507,7 @@ export class Session implements Screen {
         this.seedTaken.forEach((v, i) => v && seeds.push(i));
         const grown: number[] = [];
         this.world.grown.forEach((v, i) => v && grown.push(i));
-        this.link.send({ t: 'world', n: this.nonce, seeds, feathers: this.feathers, cp: this.checkpoint, grown });
+        this.link.send({ t: 'world', n: this.nonce, seeds, feathers: this.feathers, cp: this.checkpoint, grown, tie: [this.tieSeq, this.tether.tied ? 1 : 0, this.tieBy] });
       }
     }
     if (this.paused || this.state !== 'play') {
@@ -531,7 +602,7 @@ export class Session implements Screen {
       const to = next < 0 ? this.L.spawns[0] : cps[next];
       for (const b of this.birds) this.teleport(b, to.x + (b.idx ? 22 : -22), to.y);
     };
-    p.onSwap = () => this.flow.debug(this.L.index, this.birds[0].kind !== 'tall');
+    p.onSwap = () => this.flow.debug(this.L.index, !this.swapped);
     p.onRespawn = () => {
       for (const b of this.birds) if (b.local) b.die('fall');
     };
@@ -628,12 +699,13 @@ export class Session implements Screen {
       if (dbg.invuln) for (const b of this.birds) if (b.local) b.invuln = Math.max(b.invuln, 0.5);
     }
     // practice: the game asks for the second sprout's controls, once per step, before anyone moves
-    if (this.dummy) this.dummyFrame = this.dummy.step(dt, this.birds[1], this.birds[0]);
+    if (this.dummy) this.dummyFrame = this.dummy.step(dt, this.birds[1], this.birds[0], this.world);
     this.time += dt;
     // the platforms' clock (online it's also kept in step with the host's, in frame())
     this.sharedT += dt;
     this.world.stepMovers(this.sharedT);
-    const [A, B] = this.birds;
+    const A = this.birds[0];
+    const B = this.birds[1];
     // the partner's sprout is mirrored from their snapshots between frames, not simulated here: when
     // it's riding a moving platform it has to come along with it, or it spends every step a frame of
     // the platform's travel behind — sunk into it, floating over it, or sliding along it
@@ -658,7 +730,7 @@ export class Session implements Screen {
       else b.step(dt, this.controlsFor(i), this.world, other);
     }
     this.tether.follow(A, B);
-    if (this.time >= this.ropeOffUntil) this.tether.solve(this.birds, [this.auth[0], this.auth[1]], dt);
+    if (this.time >= this.ropeOffUntil) this.tether.solve(this.birds, this.auth, dt);
     // the solve just moved the sprouts: bring the vine's own ends with them, so it's drawn tied to
     // them rather than to where they were before it pulled
     this.tether.follow(A, B);
@@ -670,6 +742,11 @@ export class Session implements Screen {
       // onto a ledge, or dying. The bend then unwinds on its own, like any the vine made for itself.
       if (this.auth[i] && (b.droppedVine || b.ghost) && this.tether.hooked(i as 0 | 1)) this.unhook(b);
       b.droppedVine = false;
+      // …and a ring the vine let go of by itself is let go of by its sprout too. Tying the vine afresh
+      // (a partner back from being a seed) or a teleport-sized jump at one end drops every bend, the
+      // shot one included, and a sprout left believing it still held its ring turned UP into reeling
+      // the vine in — along the ground, into its partner, and pinned there.
+      if (b.hooked && !this.tether.hooked(i as 0 | 1)) this.dropHook(b);
     }
     this.world.stepDynamic(dt, this.birds);
     this.creatureSounds();
@@ -822,7 +899,8 @@ export class Session implements Screen {
   }
 
   private checkGoal(dt: number) {
-    const [A, B] = this.birds;
+    const A = this.birds[0];
+    const B = this.birds[1];
     const both = A.inGoal && B.inGoal && !A.ghost && !B.ghost && B.present && A.present;
     this.goalT = both ? this.goalT + dt : 0;
     // online, the host calls it (the guest hears 'clear')
@@ -850,7 +928,13 @@ export class Session implements Screen {
     const o = this.birds[1 - b.idx];
     audio.play('grab', 0.55, 0, 0.95);
     this.fx.burst(PK.Leaf, (b.x + o.x) / 2, (b.y + o.y) / 2 - 4, 7, 90, 0.5, 5, '#9fd36a', -30, 2.5);
-    if (mine && b.local) this.send({ k: 'tie' });
+    if (mine && b.local) this.send({ k: 'tie', s: this.noteVine() });
+  }
+
+  /** This screen tied or untied the vine: the next change in its history, made by us (see vineFrom). */
+  private noteVine() {
+    this.tieBy = this.me;
+    return ++this.tieSeq;
   }
 
   /** Let the vine go. Anyone hanging from it drops, which Tether.untie arranges by itself. */
@@ -859,7 +943,7 @@ export class Session implements Screen {
     for (const sp of this.birds) sp.hooked = false;
     audio.play('uiBack', 0.45, 0, 1.15);
     this.fx.burst(PK.Leaf, b.x, b.y - 4, 4, 70, 0.45, 4, '#9fd36a', 40, 2.5);
-    if (mine && b.local) this.send({ k: 'untie' });
+    if (mine && b.local) this.send({ k: 'untie', s: this.noteVine() });
   }
 
   private shoot(b: Bird) {
@@ -991,8 +1075,24 @@ export class Session implements Screen {
     if (b.local) this.send({ k: 'unhook' });
   }
 
+  /**
+   * The ring a sprout held is no longer on the vine (see update): let go of it as unhook does, minus
+   * the vine's part, which is already done. The partner's screen is told, so its copy of the vine lets
+   * go of the ring as well — it may not have dropped it itself.
+   */
+  private dropHook(b: Bird) {
+    b.hooked = false;
+    if (b.grounded || !b.hanging) {
+      b.hanging = false;
+      b.climbLen = Infinity;
+    }
+    if (b.local) this.send({ k: 'unhook' });
+  }
+
   private tug(b: Bird) {
     if (b.ghost || b.tugCd > 0) return;
+    // no vine, nothing to tug on — the sprouts are two separate creatures until one ties it
+    if (!this.tether.tied) return;
     // a tug needs something to pull against: feet on the ground, a grip on a wall, or a hand on the
     // string. Two sprouts tugging each other in mid-air would make height out of nothing, and climb
     // clean out of the level.
@@ -1023,6 +1123,8 @@ export class Session implements Screen {
 
   /** Throw a bird along the string toward its pivot (the nearest bend, or the partner), `power` times as hard as usual. */
   private yank(b: Bird, _toward: number, power = 1) {
+    // (the vine's ends only point anywhere real while it is tied)
+    if (!this.tether.tied) return;
     const end = this.tether.ends[b.idx];
     const dx = end.pivot.x - b.x;
     const dy = end.pivot.y - b.y;
@@ -1087,7 +1189,7 @@ export class Session implements Screen {
     if (!b.fx.length) return;
     const pan = clamp((b.x - this.cam.x) / (this.cam.viewW / 2), -1, 1) * 0.6;
     const vol = b.local ? 1 : 0.55;
-    for (const e of b.fx) this.onFx(b, e, pan, vol);
+    for (let i = 0; i < b.fx.length; i++) this.onFx(b, b.fx[i], pan, vol);
     b.fx.length = 0;
   }
 
@@ -1225,9 +1327,15 @@ export class Session implements Screen {
       () => {
         if (this.disposed) return;
         const stars = [0, 1, 2].map((i) => `<i class="feather-ico${this.feathers & (1 << i) ? ' on' : ''}"></i>`).join('');
+        // (the debug ground keeps to its own rules after a clear too: its buttons go on on the debug
+        // ground — never a real level's run, and never THE END, which writes the journal)
         const buttons = this.practice
           ? `<div class="btn" data-act="again">AGAIN</div>
              <div class="btn small" data-act="levels">BACK</div>`
+          : this.debug
+          ? `${last ? '' : '<div class="btn" data-act="next">NEXT LEVEL</div>'}
+             <div class="btn${last ? '' : ' small'}" data-act="again">AGAIN</div>
+             <div class="btn small" data-act="levels">LEVELS</div>`
           : lead
           ? `${last ? '<div class="btn" data-act="ending">THE END ♥</div>' : '<div class="btn" data-act="next">NEXT LEVEL</div>'}
              <div class="btn small" data-act="again">PLAY AGAIN</div>
@@ -1238,8 +1346,8 @@ export class Session implements Screen {
            <div class="ov-stats"><span><i class="seed-ico"></i> ${seeds} / ${this.L.seeds.length}</span><span class="feathers">${stars}</span><span>⏱ ${fmtTime(time)}</span></div>
            <div class="ov-buttons">${buttons}</div>`,
           (a) => {
-            if (a === 'next') this.flow.enterLevel(this.L.index + 1);
-            else if (a === 'again') this.practice ? this.flow.practice() : this.flow.playLevel(this.L.index);
+            if (a === 'next') this.debug ? this.flow.debug(this.L.index + 1, this.swapped) : this.flow.enterLevel(this.L.index + 1);
+            else if (a === 'again') this.practice ? this.flow.practice(this.swapped) : this.debug ? this.flow.debug(this.L.index, this.swapped) : this.flow.playLevel(this.L.index);
             else if (a === 'levels') this.practice ? this.flow.title() : this.flow.levels();
             else if (a === 'ending') this.flow.ending();
             else if (a === 'leave') this.flow.leaveOnline();
@@ -1297,8 +1405,8 @@ export class Session implements Screen {
         } else if (a === 'swap') {
           // Just for this ground: swapping here must not decide who's which sprout the next time the
           // two of you play together. (Two alike have nothing to swap, so that button isn't offered.)
-          this.flow.practice(this.birds[0].kind === 'tall');
-        } else if (a === 'restart') this.practice ? this.flow.practice() : this.debug ? this.flow.debug(this.L.index) : this.flow.playLevel(this.L.index);
+          this.flow.practice(!this.swapped);
+        } else if (a === 'restart') this.practice ? this.flow.practice(this.swapped) : this.debug ? this.flow.debug(this.L.index, this.swapped) : this.flow.playLevel(this.L.index);
         else if (a === 'controls') this.flow.showControls();
         else if (a === 'quit') {
           if (this.online && this.me === 1) this.flow.leaveOnline();
@@ -1383,14 +1491,16 @@ export class Session implements Screen {
   // ------------------------------------------------------------------ animation & camera
 
   private animate(dt: number) {
-    const [A, B] = this.birds;
+    const A = this.birds[0];
+    const B = this.birds[1];
     A.animate(dt, B.present ? B : null);
     B.animate(dt, A.present ? A : null);
     // a streak of leaves behind a dash (DASH_TIME is short, so this is a dozen or so particles). Only
     // while the physics is running: `dashT` ticks down in there, so in a pause or a freeze it is stuck
     // where it was and this would pour leaves out of a sprout that is standing perfectly still.
     const moving = !this.paused && !this.frozen && this.state === 'play';
-    for (const b of this.birds) {
+    for (let i = 0; i < 2; i++) {
+      const b = this.birds[i];
       if (!moving || b.dashT <= 0 || !b.present || b.ghost) continue;
       this.fx.add(PK.Leaf, b.x - b.facing * 5, b.y, -b.vx * 0.1, -b.vy * 0.1, 0.24, 4, '#cdee7a', 0, 3);
     }
@@ -1400,36 +1510,73 @@ export class Session implements Screen {
     this.updateHint();
   }
 
+  /**
+   * The camera's focus points and their weights: one sprout or both. Fixed arrays of each size, filled
+   * in place every frame (emptying an array and pushing again gives it a new backing store each time).
+   */
+  private readonly camOne: Pt[] = [{ x: 0, y: 0 }];
+  private readonly camTwo: Pt[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
+  private readonly camOneW: number[] = [1];
+  private readonly camTwoW: number[] = [0.5, 0.5];
+  private readonly camLead: Pt = { x: 0, y: 0 };
+  private readonly camBounds = { w: 0, h: 0 };
+
   private followCamera(dt: number, snap: boolean) {
-    const [A, B] = this.birds;
+    const A = this.birds[0];
+    const B = this.birds[1];
     const me = this.birds[this.me];
     const other = this.birds[1 - this.me];
-    const pts: Pt[] = [];
-    const w: number[] = [];
+    let pts = this.camTwo;
+    let w = this.camTwoW;
+    // (the same points and weights as ever: me then them online, bird 0 then bird 1 on one screen)
+    let first: Pt | null = null;
+    let second: Pt | null = null;
+    let w1 = 1;
+    let w2 = 1;
     if (this.online) {
       if (!me.ghost || !other.present) {
-        pts.push(me);
-        w.push(other.present && !other.ghost ? 0.62 : 1);
+        first = me;
+        w1 = other.present && !other.ghost ? 0.62 : 1;
       }
       if (other.present && !other.ghost) {
-        pts.push(other);
-        w.push(me.ghost ? 1 : 0.38);
+        if (first) {
+          second = other;
+          w2 = me.ghost ? 1 : 0.38;
+        } else {
+          first = other;
+          w1 = me.ghost ? 1 : 0.38;
+        }
       }
     } else {
-      if (!A.ghost) pts.push(A);
-      if (!B.ghost) pts.push(B);
-      for (let i = 0; i < pts.length; i++) w.push(1 / pts.length);
+      if (!A.ghost) first = A;
+      if (!B.ghost) {
+        if (first) second = B;
+        else first = B;
+      }
+      w1 = w2 = second ? 1 / 2 : 1;
     }
-    if (!pts.length) {
-      pts.push(me);
-      w.push(1);
+    if (!first) first = me;
+    if (second) {
+      pts[0] = first;
+      pts[1] = second;
+      w[0] = w1;
+      w[1] = w2;
+    } else {
+      pts = this.camOne;
+      w = this.camOneW;
+      pts[0] = first;
+      w[0] = w1;
     }
-    const lead = { x: this.online ? me.facing * 18 + me.vx * 0.12 : 0, y: 0 };
+    const lead = this.camLead;
+    lead.x = this.online ? me.facing * 18 + me.vx * 0.12 : 0;
+    lead.y = 0;
     // the view stops at the map's bottom edge, unless someone hangs on the string below it
     let low = 0;
-    for (const p of pts) low = Math.max(low, p.y);
-    const bottom = Math.min(this.world.floorY, Math.max(this.L.h * T, low + 3 * T));
-    this.cam.follow(dt, pts, w, lead, { w: this.L.w * T, h: bottom }, snap);
+    for (let i = 0; i < pts.length; i++) low = Math.max(low, pts[i].y);
+    const bounds = this.camBounds;
+    bounds.w = this.L.w * T;
+    bounds.h = Math.min(this.world.floorY, Math.max(this.L.h * T, low + 3 * T));
+    this.cam.follow(dt, pts, w, lead, bounds, snap);
   }
 
   /** The creek's surface, in world px: a tile and a quarter up from the map's bottom edge. */
@@ -1438,39 +1585,11 @@ export class Session implements Screen {
   }
 
   /**
-   * The creek along the bottom of a level, behind the tiles, so a pit is water now. A band of colour
-   * and one stroked path of ripples drifting downstream: a few draw calls a frame, nothing per tile.
-   * Cosmetic only — falling in is the same fall it always was.
+   * The creek along the bottom of a level, behind the tiles, so a pit is water now (see
+   * render/water.ts). Cosmetic only — falling in is the same fall it always was.
    */
   private drawWater(ctx: CanvasRenderingContext2D, w: { top: string; bottom: string; light: string }, x0: number, x1: number, y1: number, t: number) {
-    const top = this.waterTop;
-    if (y1 < top) return;
-    const g = ctx.createLinearGradient(0, top, 0, top + 2.5 * T);
-    g.addColorStop(0, w.top);
-    g.addColorStop(1, w.bottom);
-    ctx.fillStyle = g;
-    ctx.fillRect(x0, top, x1 - x0, Math.max(y1, this.L.h * T + 4 * T) - top);
-    // ripples: a fixed pattern of them in the water's own frame, carried downstream (leftward) with it
-    const fract = (v: number) => v - Math.floor(v);
-    const step = 44;
-    const flow = t * 18;
-    ctx.strokeStyle = w.light;
-    ctx.lineWidth = 1.6;
-    ctx.globalAlpha = 0.45;
-    ctx.beginPath();
-    for (let i = Math.floor((x0 + flow) / step) - 1; i * step - flow < x1; i++) {
-      const h1 = fract(Math.sin(i * 12.9898) * 43758.5453);
-      const h2 = fract(Math.sin(i * 78.233) * 12345.678);
-      const x = i * step + h1 * 20 - flow;
-      const y = top + 7 + h2 * 22 + Math.sin(t * 1.5 + i) * 1.2;
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 8 + h1 * 14, y);
-    }
-    ctx.stroke();
-    ctx.globalAlpha = 0.75;
-    ctx.fillStyle = w.light;
-    ctx.fillRect(x0, top - 1, x1 - x0, 2);
-    ctx.globalAlpha = 1;
+    drawCreekBand(ctx, w, this.waterTop, x0, x1, y1, Math.max(y1, this.L.h * T + 4 * T), t);
   }
 
   /** whether each sprout was above the creek's surface last frame (for the splash going in) */
@@ -1491,7 +1610,9 @@ export class Session implements Screen {
       else this.fx.add(PK.Dust, x, y0 + Math.random() * cam.viewH, 4, -8, 3, 1.4, c, 0, 0);
     }
     // updrafts show as rising streaks (and chimney smoke on the rooftops)
-    for (const v of this.L.vents) {
+    const vents = this.L.vents;
+    for (let i = 0; i < vents.length; i++) {
+      const v = vents[i];
       if (v.x1 < x0 || v.x0 > x0 + cam.viewW) continue;
       if (Math.random() < dt * 14 * this.fx.density) {
         const x = v.x0 + 4 + Math.random() * (v.x1 - v.x0 - 8);
@@ -1505,7 +1626,8 @@ export class Session implements Screen {
     const water = th.water;
     if (water) {
       const top = this.waterTop;
-      this.birds.forEach((b, i) => {
+      for (let i = 0; i < 2; i++) {
+        const b = this.birds[i];
         const above = b.ghost || !b.present || b.y + b.h / 2 < top;
         if (!above && this.aboveWater[i] && b.vy > 0) {
           this.fx.burst(PK.Dust, b.x, top, 12, 170, 0.55, 4, water.light, 520, 1, 140);
@@ -1513,7 +1635,7 @@ export class Session implements Screen {
           if (b.local) audio.play('splash', 0.6);
         }
         this.aboveWater[i] = above;
-      });
+      }
     }
   }
 
@@ -1528,7 +1650,7 @@ export class Session implements Screen {
         const b = this.birds[k];
         // (practice: the second sprout is the game's, and a sign it wanders past is not the player's)
         if (!this.auth[k] || b.ghost || (this.solo && k !== 0)) continue;
-        const d = Math.hypot(b.x - s.x, b.y - s.y);
+        const d = len(b.x - s.x, b.y - s.y);
         if (d < bestD) {
           bestD = d;
           best = i;
@@ -1543,12 +1665,20 @@ export class Session implements Screen {
     }
     const s = this.L.signs[best];
     const last = this.app.input.lastDevice;
-    // online there is only one player here, and every device on this screen is theirs
-    const names = this.online || !this.seats ? BUTTON_NAMES[last] : seatButtonNames(this.seats[who], last);
-    const text = esc(s.text).replace(/\{(\w+)\}/g, (_m, k: string) => `<b>${names[k as keyof typeof names] ?? k}</b>`);
+    // (the words only change with the sign, whose buttons they name, and the device: built once for
+    // those, not every frame you stand there)
+    const seat = this.online || !this.seats ? null : this.seats[who];
+    if (best !== this.hintFor.sign || last !== this.hintFor.device || seat !== this.hintFor.seat) {
+      // online there is only one player here, and every device on this screen is theirs
+      const names = seat === null ? BUTTON_NAMES[last] : seatButtonNames(seat, last);
+      this.hintFor = { sign: best, device: last, seat, text: esc(s.text).replace(/\{(\w+)\}/g, (_m, k: string) => `<b>${names[k as keyof typeof names] ?? k}</b>`) };
+    }
     const p = this.cam.toCss(s.x, s.y - 34, this.app.renderer.pixelRatio);
-    this.hud.hint(text, p.x, p.y);
+    this.hud.hint(this.hintFor.text, p.x, p.y);
   }
+
+  /** the sign words last built, and what they were built for (see updateHint) */
+  private hintFor: { sign: number; device: string; seat: DeviceId | null; text: string } = { sign: -1, device: '', seat: null, text: '' };
 
   // ------------------------------------------------------------------ drawing
 

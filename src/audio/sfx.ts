@@ -1,3 +1,5 @@
+import { finish, pause, type Steps } from './steps';
+
 export type Sfx =
   | 'splash'
   | 'jump'
@@ -60,7 +62,7 @@ interface ToneOpts {
   vib?: [number, number];
 }
 
-function tone(buf: Float32Array, rate: number, o: ToneOpts) {
+function* tone(buf: Float32Array, rate: number, o: ToneOpts): Steps<void> {
   const start = Math.floor((o.at ?? 0) * rate);
   const n = Math.min(buf.length - start, Math.floor(o.dur * rate));
   const vol = o.vol ?? 0.5;
@@ -91,11 +93,12 @@ function tone(buf: Float32Array, rate: number, o: ToneOpts) {
     // a short fade at the very end avoids clicks
     const tail = Math.min(1, (n - i) / (rate * 0.004));
     buf[start + i] += s * vol * env(t, attack, decay) * tail;
+    if (pause(i)) yield;
   }
 }
 
 /** Filtered noise burst; `lp` / `hp` are one-pole cutoffs in Hz (lp may sweep to lp1). */
-function hiss(buf: Float32Array, rate: number, o: { dur: number; at?: number; vol?: number; lp?: number; lp1?: number; hp?: number; attack?: number; decay?: number }) {
+function* hiss(buf: Float32Array, rate: number, o: { dur: number; at?: number; vol?: number; lp?: number; lp1?: number; hp?: number; attack?: number; decay?: number }): Steps<void> {
   const start = Math.floor((o.at ?? 0) * rate);
   const n = Math.min(buf.length - start, Math.floor(o.dur * rate));
   let lp = 0;
@@ -116,11 +119,12 @@ function hiss(buf: Float32Array, rate: number, o: { dur: number; at?: number; vo
     }
     const tail = Math.min(1, (n - i) / (rate * 0.004));
     buf[start + i] += s * (o.vol ?? 0.4) * env(t, o.attack ?? 0.002, o.decay ?? o.dur / 4) * tail;
+    if (pause(i)) yield;
   }
 }
 
 /** Karplus-Strong plucked string (the string's twang). */
-function pluck(buf: Float32Array, rate: number, f: number, o: { at?: number; dur: number; vol?: number; damp?: number; bend?: number }) {
+function* pluck(buf: Float32Array, rate: number, f: number, o: { at?: number; dur: number; vol?: number; damp?: number; bend?: number }): Steps<void> {
   const start = Math.floor((o.at ?? 0) * rate);
   const n = Math.min(buf.length - start, Math.floor(o.dur * rate));
   let N = Math.max(2, Math.round(rate / f));
@@ -141,11 +145,12 @@ function pluck(buf: Float32Array, rate: number, f: number, o: { at?: number; dur
     idx++;
     const tail = Math.min(1, (n - i) / (rate * 0.01));
     buf[start + i] += out * (o.vol ?? 0.5) * tail;
+    if (pause(i)) yield;
   }
 }
 
 /** FM bell (music box / chime). */
-function bell(buf: Float32Array, rate: number, f: number, o: { at?: number; dur: number; vol?: number; ratio?: number; index?: number }) {
+function* bell(buf: Float32Array, rate: number, f: number, o: { at?: number; dur: number; vol?: number; ratio?: number; index?: number }): Steps<void> {
   const start = Math.floor((o.at ?? 0) * rate);
   const n = Math.min(buf.length - start, Math.floor(o.dur * rate));
   const ratio = o.ratio ?? 3.5;
@@ -156,13 +161,14 @@ function bell(buf: Float32Array, rate: number, f: number, o: { at?: number; dur:
     const m = Math.sin(TAU * f * ratio * t) * idx0 * e;
     const tail = Math.min(1, (n - i) / (rate * 0.005));
     buf[start + i] += Math.sin(TAU * f * t + m) * (o.vol ?? 0.4) * e * tail;
+    if (pause(i)) yield;
   }
 }
 
 /** A quick bird chirp: a fast upward FM sweep. */
-function chirp(buf: Float32Array, rate: number, f0: number, f1: number, at: number, dur: number, vol: number) {
-  tone(buf, rate, { f0, f1, dur, at, vol, attack: 0.004, decay: dur * 0.6, vib: [55, 0.03] });
-  tone(buf, rate, { f0: f0 * 2, f1: f1 * 2, dur: dur * 0.8, at, vol: vol * 0.15, attack: 0.004, decay: dur * 0.4 });
+function* chirp(buf: Float32Array, rate: number, f0: number, f1: number, at: number, dur: number, vol: number): Steps<void> {
+  yield* tone(buf, rate, { f0, f1, dur, at, vol, attack: 0.004, decay: dur * 0.6, vib: [55, 0.03] });
+  yield* tone(buf, rate, { f0: f0 * 2, f1: f1 * 2, dur: dur * 0.8, at, vol: vol * 0.15, attack: 0.004, decay: dur * 0.4 });
 }
 
 function normalize(buf: Float32Array<ArrayBuffer>, peak: number) {
@@ -214,148 +220,156 @@ const LEN: Record<Sfx, number> = {
 // (the melodic ones sit under the chill music rather than on top of it)
 const PEAK: Partial<Record<Sfx, number>> = { splash: 0.5, step: 0.12, flutter: 0.3, seed: 0.42, uiMove: 0.25, land: 0.5, plate: 0.45, clear: 0.5, feather: 0.45, checkpoint: 0.5, join: 0.45, leave: 0.4, nuzzle: 0.45, respawn: 0.45 };
 
-/** Synthesize one sound at `rate` Hz. */
-export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
+/** Synthesize one sound at `rate` Hz, a slice at a time (see steps.ts). */
+export function* renderSfxSteps(name: Sfx, rate: number): Steps<Float32Array<ArrayBuffer>> {
   seed = 12345 + name.length * 977;
   const b = new Float32Array(Math.ceil(LEN[name] * rate));
   switch (name) {
     case 'splash':
       // into the creek: a burst of water, then a few bubbles coming back up
-      hiss(b, rate, { dur: 0.35, vol: 0.7, lp: 3200, lp1: 500, hp: 200, attack: 0.004, decay: 0.12 });
-      for (let k = 0; k < 4; k++) tone(b, rate, { f0: 500 + k * 140, f1: 1100 + k * 160, dur: 0.05, at: 0.08 + k * 0.06, vol: 0.12, decay: 0.02 });
+      yield* hiss(b, rate, { dur: 0.35, vol: 0.7, lp: 3200, lp1: 500, hp: 200, attack: 0.004, decay: 0.12 });
+      for (let k = 0; k < 4; k++) yield* tone(b, rate, { f0: 500 + k * 140, f1: 1100 + k * 160, dur: 0.05, at: 0.08 + k * 0.06, vol: 0.12, decay: 0.02 });
       break;
     case 'jump':
-      tone(b, rate, { f0: 360, f1: 760, dur: 0.12, vol: 0.5, decay: 0.05 });
-      tone(b, rate, { f0: 720, f1: 1500, dur: 0.08, vol: 0.12, decay: 0.03, type: 'tri' });
+      yield* tone(b, rate, { f0: 360, f1: 760, dur: 0.12, vol: 0.5, decay: 0.05 });
+      yield* tone(b, rate, { f0: 720, f1: 1500, dur: 0.08, vol: 0.12, decay: 0.03, type: 'tri' });
       break;
     case 'hop':
-      tone(b, rate, { f0: 480, f1: 980, dur: 0.12, vol: 0.5, decay: 0.05 });
-      chirp(b, rate, 2200, 3000, 0.08, 0.08, 0.2);
+      yield* tone(b, rate, { f0: 480, f1: 980, dur: 0.12, vol: 0.5, decay: 0.05 });
+      yield* chirp(b, rate, 2200, 3000, 0.08, 0.08, 0.2);
       break;
     case 'land':
-      tone(b, rate, { f0: 150, f1: 60, dur: 0.1, vol: 0.6, decay: 0.035 });
-      hiss(b, rate, { dur: 0.08, vol: 0.4, lp: 900, decay: 0.02 });
+      yield* tone(b, rate, { f0: 150, f1: 60, dur: 0.1, vol: 0.6, decay: 0.035 });
+      yield* hiss(b, rate, { dur: 0.08, vol: 0.4, lp: 900, decay: 0.02 });
       break;
     case 'flutter':
-      for (let k = 0; k < 4; k++) hiss(b, rate, { dur: 0.05, at: k * 0.05, vol: 0.5, lp: 1600, hp: 300, attack: 0.008, decay: 0.012 });
+      for (let k = 0; k < 4; k++) yield* hiss(b, rate, { dur: 0.05, at: k * 0.05, vol: 0.5, lp: 1600, hp: 300, attack: 0.008, decay: 0.012 });
       break;
     case 'spring':
-      tone(b, rate, { f0: 200, f1: 560, dur: 0.4, vol: 0.5, decay: 0.14, vib: [16, 0.09] });
-      tone(b, rate, { f0: 400, f1: 1120, dur: 0.3, vol: 0.12, decay: 0.09, type: 'tri' });
+      yield* tone(b, rate, { f0: 200, f1: 560, dur: 0.4, vol: 0.5, decay: 0.14, vib: [16, 0.09] });
+      yield* tone(b, rate, { f0: 400, f1: 1120, dur: 0.3, vol: 0.12, decay: 0.09, type: 'tri' });
       break;
     case 'bounce':
-      tone(b, rate, { f0: 300, f1: 700, dur: 0.22, vol: 0.5, decay: 0.08, vib: [20, 0.07] });
-      chirp(b, rate, 1800, 2500, 0.02, 0.06, 0.15);
+      yield* tone(b, rate, { f0: 300, f1: 700, dur: 0.22, vol: 0.5, decay: 0.08, vib: [20, 0.07] });
+      yield* chirp(b, rate, 1800, 2500, 0.02, 0.06, 0.15);
       break;
     case 'bonk':
-      tone(b, rate, { f0: 230, f1: 120, dur: 0.08, vol: 0.6, decay: 0.03 });
-      hiss(b, rate, { dur: 0.02, vol: 0.4, lp: 3000, decay: 0.005 });
+      yield* tone(b, rate, { f0: 230, f1: 120, dur: 0.08, vol: 0.6, decay: 0.03 });
+      yield* hiss(b, rate, { dur: 0.02, vol: 0.4, lp: 3000, decay: 0.005 });
       break;
     case 'die':
-      tone(b, rate, { f0: 640, f1: 150, dur: 0.5, vol: 0.45, decay: 0.2, type: 'tri', vib: [11, 0.05] });
-      hiss(b, rate, { dur: 0.35, at: 0.05, vol: 0.25, lp: 2400, lp1: 400, decay: 0.12 });
+      yield* tone(b, rate, { f0: 640, f1: 150, dur: 0.5, vol: 0.45, decay: 0.2, type: 'tri', vib: [11, 0.05] });
+      yield* hiss(b, rate, { dur: 0.35, at: 0.05, vol: 0.25, lp: 2400, lp1: 400, decay: 0.12 });
       break;
     case 'respawn':
       // a seed taking root again: two soft rising breaths and three quiet notes, no sparkle shower
-      for (let k = 0; k < 2; k++) tone(b, rate, { f0: midi(67 + k * 5), f1: midi(74 + k * 5), dur: 0.4, at: k * 0.08, vol: 0.14, attack: 0.03, decay: 0.15 });
-      [76, 79, 83].forEach((m, k) => bell(b, rate, midi(m), { at: 0.14 + k * 0.09, dur: 0.4, vol: 0.07, ratio: 2, index: 0.4 }));
+      for (let k = 0; k < 2; k++) yield* tone(b, rate, { f0: midi(67 + k * 5), f1: midi(74 + k * 5), dur: 0.4, at: k * 0.08, vol: 0.14, attack: 0.03, decay: 0.15 });
+      for (const [k, m] of [76, 79, 83].entries()) yield* bell(b, rate, midi(m), { at: 0.14 + k * 0.09, dur: 0.4, vol: 0.07, ratio: 2, index: 0.4 });
       break;
     case 'step':
-      hiss(b, rate, { dur: 0.035, vol: 0.6, lp: 2200, hp: 400, decay: 0.008 });
+      yield* hiss(b, rate, { dur: 0.035, vol: 0.6, lp: 2200, hp: 400, decay: 0.008 });
       break;
     case 'grab':
-      pluck(b, rate, 330, { dur: 0.16, vol: 0.4, damp: 0.98 });
-      hiss(b, rate, { dur: 0.04, vol: 0.2, lp: 4000, hp: 1500, decay: 0.01 });
+      yield* pluck(b, rate, 330, { dur: 0.16, vol: 0.4, damp: 0.98 });
+      yield* hiss(b, rate, { dur: 0.04, vol: 0.2, lp: 4000, hp: 1500, decay: 0.01 });
       break;
     case 'mantle':
-      tone(b, rate, { f0: 300, f1: 520, dur: 0.1, vol: 0.45, decay: 0.04 });
+      yield* tone(b, rate, { f0: 300, f1: 520, dur: 0.1, vol: 0.45, decay: 0.04 });
       break;
     case 'tug':
-      pluck(b, rate, 128, { dur: 0.65, vol: 0.75, damp: 0.995, bend: 0.82 });
-      pluck(b, rate, 256, { dur: 0.3, vol: 0.2, damp: 0.99 });
+      yield* pluck(b, rate, 128, { dur: 0.65, vol: 0.75, damp: 0.995, bend: 0.82 });
+      yield* pluck(b, rate, 256, { dur: 0.3, vol: 0.2, damp: 0.99 });
       break;
     case 'zip':
-      hiss(b, rate, { dur: 0.4, vol: 0.45, lp: 500, lp1: 4500, hp: 200, attack: 0.05, decay: 0.15 });
-      pluck(b, rate, 196, { dur: 0.3, vol: 0.35, damp: 0.99 });
+      yield* hiss(b, rate, { dur: 0.4, vol: 0.45, lp: 500, lp1: 4500, hp: 200, attack: 0.05, decay: 0.15 });
+      yield* pluck(b, rate, 196, { dur: 0.3, vol: 0.35, damp: 0.99 });
       break;
     case 'catch':
-      pluck(b, rate, 92, { dur: 0.38, vol: 0.6, damp: 0.993 });
+      yield* pluck(b, rate, 92, { dur: 0.38, vol: 0.6, damp: 0.993 });
       break;
     case 'seed':
-      tone(b, rate, { f0: 1320, dur: 0.2, vol: 0.4, decay: 0.05 });
-      tone(b, rate, { f0: 1980, dur: 0.15, at: 0.035, vol: 0.3, decay: 0.04 });
+      yield* tone(b, rate, { f0: 1320, dur: 0.2, vol: 0.4, decay: 0.05 });
+      yield* tone(b, rate, { f0: 1980, dur: 0.15, at: 0.035, vol: 0.3, decay: 0.04 });
       break;
     case 'feather':
       // a firefly: a glassy shimmer up a major seventh, rolled slowly, not a run up the scale
-      [79, 83, 86, 90].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.08, dur: 0.75, vol: 0.18, ratio: 2, index: 0.5 }));
+      for (const [k, m] of [79, 83, 86, 90].entries()) yield* bell(b, rate, midi(m), { at: k * 0.08, dur: 0.75, vol: 0.18, ratio: 2, index: 0.5 });
       break;
     case 'checkpoint':
       // a lantern catching: a warm open fifth, low and round
-      bell(b, rate, midi(67), { dur: 1.05, vol: 0.32, ratio: 2, index: 0.6 });
-      bell(b, rate, midi(74), { at: 0.14, dur: 0.95, vol: 0.24, ratio: 2, index: 0.5 });
+      yield* bell(b, rate, midi(67), { dur: 1.05, vol: 0.32, ratio: 2, index: 0.6 });
+      yield* bell(b, rate, midi(74), { at: 0.14, dur: 0.95, vol: 0.24, ratio: 2, index: 0.5 });
       break;
     case 'door':
-      hiss(b, rate, { dur: 0.45, vol: 0.5, lp: 260, attack: 0.04, decay: 0.2 });
-      tone(b, rate, { f0: 95, f1: 80, dur: 0.4, vol: 0.18, type: 'saw', vib: [7, 0.05], decay: 0.18 });
+      yield* hiss(b, rate, { dur: 0.45, vol: 0.5, lp: 260, attack: 0.04, decay: 0.2 });
+      yield* tone(b, rate, { f0: 95, f1: 80, dur: 0.4, vol: 0.18, type: 'saw', vib: [7, 0.05], decay: 0.18 });
       break;
     case 'plate':
-      hiss(b, rate, { dur: 0.015, vol: 0.5, lp: 5000, decay: 0.004 });
-      tone(b, rate, { f0: 180, f1: 120, dur: 0.08, at: 0.008, vol: 0.5, decay: 0.03 });
+      yield* hiss(b, rate, { dur: 0.015, vol: 0.5, lp: 5000, decay: 0.004 });
+      yield* tone(b, rate, { f0: 180, f1: 120, dur: 0.08, at: 0.008, vol: 0.5, decay: 0.03 });
       break;
     case 'crumble':
-      for (let k = 0; k < 9; k++) hiss(b, rate, { dur: 0.06, at: k * 0.04 + noise() * 0.01 + 0.01, vol: 0.4, lp: 900 + k * 60, decay: 0.02 });
-      tone(b, rate, { f0: 90, f1: 50, dur: 0.3, vol: 0.3, decay: 0.1 });
+      for (let k = 0; k < 9; k++) yield* hiss(b, rate, { dur: 0.06, at: k * 0.04 + noise() * 0.01 + 0.01, vol: 0.4, lp: 900 + k * 60, decay: 0.02 });
+      yield* tone(b, rate, { f0: 90, f1: 50, dur: 0.3, vol: 0.3, decay: 0.1 });
       break;
     case 'rear':
       // a wet, rising creak: the warning, meant to be heard before it is seen
-      tone(b, rate, { f0: 120, f1: 300, dur: 0.26, vol: 0.34, decay: 0.12, type: 'tri' });
-      hiss(b, rate, { dur: 0.22, vol: 0.2, lp: 1500, hp: 300, attack: 0.08, decay: 0.08 });
+      yield* tone(b, rate, { f0: 120, f1: 300, dur: 0.26, vol: 0.34, decay: 0.12, type: 'tri' });
+      yield* hiss(b, rate, { dur: 0.22, vol: 0.2, lp: 1500, hp: 300, attack: 0.08, decay: 0.08 });
       break;
     case 'snap':
       // the bite: a hard woody clap with a short tail
-      tone(b, rate, { f0: 420, f1: 90, dur: 0.06, vol: 0.75, decay: 0.02 });
-      hiss(b, rate, { dur: 0.05, vol: 0.55, lp: 5200, hp: 700, decay: 0.012 });
-      tone(b, rate, { f0: 150, f1: 70, dur: 0.16, at: 0.03, vol: 0.3, decay: 0.06 });
+      yield* tone(b, rate, { f0: 420, f1: 90, dur: 0.06, vol: 0.75, decay: 0.02 });
+      yield* hiss(b, rate, { dur: 0.05, vol: 0.55, lp: 5200, hp: 700, decay: 0.012 });
+      yield* tone(b, rate, { f0: 150, f1: 70, dur: 0.16, at: 0.03, vol: 0.3, decay: 0.06 });
       break;
     case 'heart':
-      chirp(b, rate, 2300, 3300, 0, 0.07, 0.4);
-      chirp(b, rate, 2500, 3500, 0.12, 0.08, 0.4);
+      yield* chirp(b, rate, 2300, 3300, 0, 0.07, 0.4);
+      yield* chirp(b, rate, 2500, 3500, 0.12, 0.08, 0.4);
       break;
     case 'hey':
-      chirp(b, rate, 1700, 2900, 0, 0.16, 0.45);
+      yield* chirp(b, rate, 1700, 2900, 0, 0.16, 0.45);
       break;
     case 'nuzzle':
-      chirp(b, rate, 2300, 3300, 0, 0.07, 0.3);
-      chirp(b, rate, 2100, 3100, 0.1, 0.07, 0.3);
-      [76, 83].forEach((m, k) => bell(b, rate, midi(m), { at: 0.2 + k * 0.12, dur: 0.6, vol: 0.14, ratio: 2, index: 0.5 }));
+      yield* chirp(b, rate, 2300, 3300, 0, 0.07, 0.3);
+      yield* chirp(b, rate, 2100, 3100, 0.1, 0.07, 0.3);
+      for (const [k, m] of [76, 83].entries()) yield* bell(b, rate, midi(m), { at: 0.2 + k * 0.12, dur: 0.6, vol: 0.14, ratio: 2, index: 0.5 });
       break;
     case 'clear':
       // home: a warm major-ninth chord rolled slowly up from a low root, and a bird answering — not a fanfare
-      tone(b, rate, { f0: midi(48), dur: 1.6, vol: 0.22, attack: 0.04, decay: 0.7, type: 'tri' });
-      [60, 64, 67, 71, 74].forEach((m, k) => bell(b, rate, midi(m), { at: 0.05 + k * 0.1, dur: 1.4, vol: 0.18, ratio: 2, index: 0.45 }));
-      chirp(b, rate, 3000, 4100, 1.0, 0.08, 0.12);
-      chirp(b, rate, 2900, 4000, 1.14, 0.08, 0.1);
+      yield* tone(b, rate, { f0: midi(48), dur: 1.6, vol: 0.22, attack: 0.04, decay: 0.7, type: 'tri' });
+      for (const [k, m] of [60, 64, 67, 71, 74].entries()) yield* bell(b, rate, midi(m), { at: 0.05 + k * 0.1, dur: 1.4, vol: 0.18, ratio: 2, index: 0.45 });
+      yield* chirp(b, rate, 3000, 4100, 1.0, 0.08, 0.12);
+      yield* chirp(b, rate, 2900, 4000, 1.14, 0.08, 0.1);
       break;
     case 'uiMove':
-      tone(b, rate, { f0: 1100, dur: 0.035, vol: 0.4, decay: 0.012 });
+      yield* tone(b, rate, { f0: 1100, dur: 0.035, vol: 0.4, decay: 0.012 });
       break;
     case 'uiSelect':
-      tone(b, rate, { f0: 660, dur: 0.06, vol: 0.4, decay: 0.03 });
-      tone(b, rate, { f0: 990, dur: 0.08, at: 0.05, vol: 0.4, decay: 0.03 });
+      yield* tone(b, rate, { f0: 660, dur: 0.06, vol: 0.4, decay: 0.03 });
+      yield* tone(b, rate, { f0: 990, dur: 0.08, at: 0.05, vol: 0.4, decay: 0.03 });
       break;
     case 'uiBack':
-      tone(b, rate, { f0: 880, dur: 0.06, vol: 0.4, decay: 0.03 });
-      tone(b, rate, { f0: 590, dur: 0.08, at: 0.05, vol: 0.4, decay: 0.03 });
+      yield* tone(b, rate, { f0: 880, dur: 0.06, vol: 0.4, decay: 0.03 });
+      yield* tone(b, rate, { f0: 590, dur: 0.08, at: 0.05, vol: 0.4, decay: 0.03 });
       break;
     case 'join':
       // an open fifth up: someone's here
-      [72, 79].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.11, dur: 0.48, vol: 0.26, ratio: 2, index: 0.5 }));
+      for (const [k, m] of [72, 79].entries()) yield* bell(b, rate, midi(m), { at: k * 0.11, dur: 0.48, vol: 0.26, ratio: 2, index: 0.5 });
       break;
     case 'leave':
-      [79, 72].forEach((m, k) => bell(b, rate, midi(m), { at: k * 0.12, dur: 0.32, vol: 0.24, ratio: 2, index: 0.5 }));
+      for (const [k, m] of [79, 72].entries()) yield* bell(b, rate, midi(m), { at: k * 0.12, dur: 0.32, vol: 0.24, ratio: 2, index: 0.5 });
       break;
   }
   return normalize(b, PEAK[name] ?? 0.7);
 }
 
+/** Synthesize one sound at `rate` Hz, in one go. */
+export function renderSfx(name: Sfx, rate: number): Float32Array<ArrayBuffer> {
+  return finish(renderSfxSteps(name, rate));
+}
+
 renderSfx.names = Object.keys(LEN) as Sfx[];
+
+/** The order the library is made in: the menu's own sounds first, so the first press has them. */
+export const SFX_ORDER: Sfx[] = ['uiSelect', 'uiMove', 'uiBack', ...renderSfx.names.filter((n) => !n.startsWith('ui'))];

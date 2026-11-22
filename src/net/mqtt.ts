@@ -44,8 +44,10 @@ export interface MqttTiming {
   deadAfter: number;
   /** no CONNACK this long after opening (ms): give up on this attempt */
   connectTimeout: number;
+  /** a probe (see probe) that brings nothing back in this long (ms): the socket is dead (default 2000) */
+  probeTimeout?: number;
 }
-const TIMING: MqttTiming = { keepalive: 30, deadAfter: 25000, connectTimeout: 10000 };
+const TIMING: MqttTiming = { keepalive: 30, deadAfter: 25000, connectTimeout: 10000, probeTimeout: 2000 };
 
 /**
  * The smallest useful MQTT 3.1.1 client, over a WebSocket: connect, subscribe, publish at QoS 0,
@@ -69,6 +71,8 @@ export class MqttClient {
   /** when this socket was opened, and when it last brought us anything */
   private openedAt = 0;
   private lastRx = 0;
+  /** a probe waiting for its answer */
+  private probeTimer = 0;
 
   constructor(
     readonly url: string,
@@ -120,16 +124,59 @@ export class MqttClient {
     }
   }
 
-  /** The current socket is gone: tell the relay, and reconnect after a pause. */
-  private drop() {
+  /** The current socket is gone: tell the relay, and reconnect after a pause (`now`: at once). */
+  private drop(now = false) {
     this.ws = null;
     window.clearInterval(this.pingTimer);
     window.clearInterval(this.watchTimer);
+    window.clearTimeout(this.probeTimer);
+    this.probeTimer = 0;
     if (this.connected) {
       this.connected = false;
       this.onState?.(false);
     }
-    this.retry();
+    if (now) {
+      this.backoff = 1000;
+      window.clearTimeout(this.retryTimer);
+      this.retryTimer = window.setTimeout(() => this.connect(), 0);
+    } else this.retry();
+  }
+
+  /**
+   * Is this socket still there? Asked when traffic that should be coming has stopped, or when the network
+   * may have changed under us (back online, the page shown again). The keepalive watchdog takes 25 s to
+   * notice a socket that died without closing; a ping the broker doesn't answer within `probeTimeout` —
+   * with nothing else arriving meanwhile either — says the same in two, and a new socket is opened at
+   * once. A socket still connecting is left to the connect timeout; none at all is tried again now.
+   */
+  probe() {
+    if (this.closed) return;
+    const ws = this.ws;
+    if (!ws) {
+      this.retryNow();
+      return;
+    }
+    if (!this.connected || this.probeTimer) return;
+    const sentAt = performance.now();
+    this.raw(new Uint8Array([0xc0, 0]));
+    this.probeTimer = window.setTimeout(() => {
+      this.probeTimer = 0;
+      if (this.ws !== ws || this.lastRx >= sentAt) return;
+      this.drop(true);
+      try {
+        ws.close();
+      } catch {
+        // already gone
+      }
+    }, this.timing.probeTimeout ?? 2000);
+  }
+
+  /** No socket right now: try again at once rather than after the backoff (the network is back). */
+  retryNow() {
+    if (this.closed || this.ws) return;
+    window.clearTimeout(this.retryTimer);
+    this.backoff = 1000;
+    this.connect();
   }
 
   private retry() {
@@ -216,6 +263,7 @@ export class MqttClient {
   close() {
     this.closed = true;
     window.clearTimeout(this.retryTimer);
+    window.clearTimeout(this.probeTimer);
     window.clearInterval(this.pingTimer);
     window.clearInterval(this.watchTimer);
     const ws = this.ws;

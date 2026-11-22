@@ -10,7 +10,7 @@ import { IS_IOS, IS_STANDALONE, IS_XBOX, XBOX_HINT } from '../core/platform';
 import type { Flow } from '../flow';
 import { Bird, BIRD_COLORS } from '../game/bird';
 import { COURSE, COURSE_INDEX, LEVELS } from '../game/levels';
-import { CREEK_BANK, CreekScene } from '../render/creek';
+import { CREEK_BANK, creekScene } from '../render/creek';
 import { fmtTime } from '../game/session';
 import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type CtrlMsg } from '../net/protocol';
@@ -141,7 +141,6 @@ class MenuScene {
   private hopT = [2, 3.4];
   private heartT = 5;
   private camX = 0;
-  private creek: CreekScene | null = null;
 
   constructor(private theme: Theme = THEMES.creek) {
     this.backdrop = menuBackdrop(theme);
@@ -173,8 +172,9 @@ class MenuScene {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const s = H / 420;
     const ground = H * (creek ? CREEK_BANK : 0.86);
-    // (the creek paints the sky into its own still picture once, rather than every frame)
-    if (creek) (this.creek ??= new CreekScene()).draw(ctx, W, H, t, this.backdrop);
+    // (the creek paints the sky into its own still picture once, rather than every frame — and once for
+    // every visit to the title: it's the same creek each time)
+    if (creek) creekScene().draw(ctx, W, H, t, this.backdrop);
     else {
       this.backdrop.draw(ctx, W, H, this.camX, 0, 0, 1, t);
       ctx.fillStyle = this.theme.ground.body;
@@ -352,79 +352,91 @@ export class TitleScreen implements Screen {
 /** The settings page (used from the title): fills `host` and returns its ButtonList. */
 function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonList {
   const hats = unlockedHats();
+  const hatOpts = ['none', ...hats.map((h) => h.id)];
   const perfLabel: Record<PerfMode, string> = { auto: 'AUTO', high: 'SHARPEST', low: 'BATTERY SAVER' };
   // ◀ ▶ on a row are buttons of their own (a tap on the row itself steps forward)
   const arrows = '<em class="steps"><i data-dir="-1">◀</i><i data-dir="1">▶</i></em>';
-  const render = () => {
-    const sw = BIRD_COLORS.map((c, i) => `<i class="swatch${i === settings.color ? ' on' : ''}" data-act="color:${i}" style="background:${c.body}"></i>`).join('');
-    const hatOpts = ['none', ...hats.map((h) => h.id)];
-    // changing a setting draws the panel again: a section someone opened stays open
-    const wasOpen = [...host.querySelectorAll('details')].map((d) => d.open);
-    host.innerHTML = `
-      <div class="panel settings">
-        <div class="panel-title">settings</div>
-        <label class="field"><span>your name</span><input class="name-input" maxlength="12" value="${esc(settings.name)}" placeholder="a cute name" autocomplete="off" spellcheck="false"></label>
-        <div class="field"><span>your sprout</span><div class="swatches">${sw}</div></div>
-        <div class="row" data-act="hat"><span>hat</span><b>${esc(hats.find((h) => h.id === settings.hat)?.name ?? (settings.hat === 'none' ? 'none' : 'none'))}</b>${hatOpts.length > 1 ? arrows : '<em>find all 3 fireflies in a level</em>'}</div>
-        <div class="row" data-act="even"><span>sprouts</span><b>${settings.even ? 'ALIKE' : 'TALL & SMALL'}</b></div>
-        <div class="row" data-act="music"><span>music</span><b>${Math.round(settings.music * 10)}</b>${arrows}</div>
-        <div class="row" data-act="sfx"><span>sounds</span><b>${Math.round(settings.sfx * 10)}</b>${arrows}</div>
-        <div class="row" data-act="shake"><span>screen shake</span><b>${settings.shake ? 'ON' : 'OFF'}</b></div>
-        <div class="row" data-act="perf"><span>graphics</span><b>${perfLabel[settings.perf]}</b></div>
-        <details class="advanced"><summary>your shared save</summary>
-          <p>Your progress is shared with your partner every time you play together. To move it to a new device, copy the save code here and paste it there.</p>
-          ${canSave() ? '' : `<p class="warn">${SAVE_BLOCKED}</p>`}
-          <div class="btn small" data-act="copysave">COPY SAVE CODE</div>
-          <code class="save-code" hidden></code>
-          <label class="field"><span>paste a code</span><input class="save-input" placeholder="MB1-…" autocomplete="off" spellcheck="false"></label>
-        </details>
-        <details class="advanced"><summary>connection help</summary>
-          <p>Online play connects you directly when it can, and through a relay when your network blocks that. If you still can't connect, add a TURN server here (free ones: metered.ca, expressturn.com).</p>
-          <label class="field"><span>TURN url</span><input class="turn-url" value="${esc(settings.turn.urls)}" placeholder="turn:host:3478" autocomplete="off" spellcheck="false"></label>
-          <label class="field"><span>username</span><input class="turn-user" value="${esc(settings.turn.username)}" autocomplete="off" spellcheck="false"></label>
-          <label class="field"><span>password</span><input class="turn-pass" type="password" value="${esc(settings.turn.credential)}" autocomplete="off"></label>
-        </details>
-        <div class="btn small" data-act="back">BACK</div>
-      </div>`;
-    host.querySelectorAll('details').forEach((d, i) => {
-      d.open = wasOpen[i] ?? false;
-      // a clicked <summary> keeps the keyboard focus, and the next ENTER would both fold the section
-      // and press whatever row is highlighted: let go of it again
-      d.querySelector('summary')?.addEventListener('click', (e) => (e.currentTarget as HTMLElement).blur());
-    });
-    const name = host.querySelector<HTMLInputElement>('.name-input')!;
-    name.addEventListener('input', () => {
-      settings.name = name.value.slice(0, 12);
+  const sw = BIRD_COLORS.map((c, i) => `<i class="swatch" data-act="color:${i}" style="background:${c.body}"></i>`).join('');
+  // Built once: a change is shown where it is made (see show()). Building the card again for every
+  // change scrolled a card taller than a phone's screen back to its top, under the thumb — and the next
+  // tap at the same spot changed the row above.
+  host.innerHTML = `
+    <div class="panel settings">
+      <div class="panel-title">settings</div>
+      <label class="field"><span>your name</span><input class="name-input" maxlength="12" value="${esc(settings.name)}" placeholder="a cute name" autocomplete="off" spellcheck="false"></label>
+      <div class="field"><span>your sprout</span><div class="swatches">${sw}</div></div>
+      <div class="row" data-act="hat"><span>hat</span><b></b>${hatOpts.length > 1 ? arrows : '<em>find all 3 fireflies in a level</em>'}</div>
+      <div class="row" data-act="even"><span>sprouts</span><b></b></div>
+      <div class="row" data-act="music"><span>music</span><b></b>${arrows}</div>
+      <div class="row" data-act="sfx"><span>sounds</span><b></b>${arrows}</div>
+      <div class="row" data-act="shake"><span>screen shake</span><b></b></div>
+      <div class="row" data-act="perf"><span>graphics</span><b></b></div>
+      <details class="advanced"><summary>your shared save</summary>
+        <p>Your progress is shared with your partner every time you play together. To move it to a new device, copy the save code here and paste it there.</p>
+        ${canSave() ? '' : `<p class="warn">${SAVE_BLOCKED}</p>`}
+        <div class="btn small" data-act="copysave">COPY SAVE CODE</div>
+        <code class="save-code" hidden></code>
+        <label class="field"><span>paste a code</span><input class="save-input" placeholder="MB1-…" autocomplete="off" spellcheck="false"></label>
+      </details>
+      <details class="advanced"><summary>connection help</summary>
+        <p>Online play connects you directly when it can, and through a relay when your network blocks that. If you still can't connect, add a TURN server here (free ones: metered.ca, expressturn.com).</p>
+        <label class="field"><span>TURN url</span><input class="turn-url" value="${esc(settings.turn.urls)}" placeholder="turn:host:3478" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>username</span><input class="turn-user" value="${esc(settings.turn.username)}" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>password</span><input class="turn-pass" type="password" value="${esc(settings.turn.credential)}" autocomplete="off"></label>
+      </details>
+      <div class="btn small" data-act="back">BACK</div>
+    </div>`;
+  host.querySelectorAll('details').forEach((d) => {
+    // a clicked <summary> keeps the keyboard focus, and the next ENTER would both fold the section
+    // and press whatever row is highlighted: let go of it again
+    d.querySelector('summary')?.addEventListener('click', (e) => (e.currentTarget as HTMLElement).blur());
+  });
+  const name = host.querySelector<HTMLInputElement>('.name-input')!;
+  name.addEventListener('input', () => {
+    settings.name = name.value.slice(0, 12);
+    saveSettings();
+  });
+  name.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === 'Escape') name.blur();
+  });
+  const saveIn = host.querySelector<HTMLInputElement>('.save-input')!;
+  saveIn.addEventListener('change', () => {
+    const ok = importCode(saveIn.value);
+    saveIn.value = ok ? 'loaded ✓ — merged with this device' : 'that code didn’t work';
+    if (ok) audio.play('join');
+  });
+  saveIn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') saveIn.blur();
+  });
+  for (const [cls, key] of [
+    ['.turn-url', 'urls'],
+    ['.turn-user', 'username'],
+    ['.turn-pass', 'credential'],
+  ] as const) {
+    const inp = host.querySelector<HTMLInputElement>(cls)!;
+    inp.addEventListener('input', () => {
+      settings.turn[key] = inp.value.trim();
       saveSettings();
     });
-    name.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === 'Escape') name.blur();
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === 'Escape') inp.blur();
     });
-    const saveIn = host.querySelector<HTMLInputElement>('.save-input')!;
-    saveIn.addEventListener('change', () => {
-      const ok = importCode(saveIn.value);
-      saveIn.value = ok ? 'loaded ✓ — merged with this device' : 'that code didn’t work';
-      if (ok) audio.play('join');
-    });
-    saveIn.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') saveIn.blur();
-    });
-    for (const [cls, key] of [
-      ['.turn-url', 'urls'],
-      ['.turn-user', 'username'],
-      ['.turn-pass', 'credential'],
-    ] as const) {
-      const inp = host.querySelector<HTMLInputElement>(cls)!;
-      inp.addEventListener('input', () => {
-        settings.turn[key] = inp.value.trim();
-        saveSettings();
-      });
-      inp.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === 'Escape') inp.blur();
-      });
-    }
+  }
+  /** Show every setting's current value on the card. */
+  const show = () => {
+    host.querySelectorAll<HTMLElement>('.swatch').forEach((s) => s.classList.toggle('on', s.dataset.act === `color:${settings.color}`));
+    const val = (act: string, text: string) => {
+      const b = host.querySelector(`.row[data-act="${act}"] > b`);
+      if (b && b.textContent !== text) b.textContent = text;
+    };
+    val('hat', hats.find((h) => h.id === settings.hat)?.name ?? 'none');
+    val('even', settings.even ? 'ALIKE' : 'TALL & SMALL');
+    val('music', String(Math.round(settings.music * 10)));
+    val('sfx', String(Math.round(settings.sfx * 10)));
+    val('shake', settings.shake ? 'ON' : 'OFF');
+    val('perf', perfLabel[settings.perf]);
   };
-  render();
+  show();
   const step = (a: string, dir: number) => {
     if (a.startsWith('color:')) settings.color = Number(a.slice(6));
     else if (a === 'hat') {
@@ -441,10 +453,7 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
     } else return;
     saveSettings();
     audio.setVolumes({ music: settings.music, sfx: settings.sfx });
-    const keep = list.sel;
-    render();
-    list.refresh();
-    list.sel = keep;
+    show();
     list.highlight();
   };
   const list = new ButtonList(
@@ -472,6 +481,13 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
     },
     done,
   );
+  // the highlight starts on your own colour, so an Ⓐ / ENTER straight away changes nothing (it used to
+  // start on the first colour, and that press made you red)
+  const mine = list.items().findIndex((el) => el.dataset.act === `color:${settings.color}`);
+  if (mine >= 0) {
+    list.sel = mine;
+    list.highlight();
+  }
   // a tap on ◀ or ▶ steps that way (before the row's own click, which would step forward)
   const onArrow = (e: Event) => {
     const arrow = (e.target as HTMLElement).closest<HTMLElement>('[data-dir]');
@@ -500,8 +516,7 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
           const c = (settings.color + (m.right ? 1 : -1) + BIRD_COLORS.length) % BIRD_COLORS.length;
           settings.color = c;
           saveSettings();
-          render();
-          list.refresh();
+          show();
           const idx = list.items().findIndex((x) => x.dataset.act === `color:${c}`);
           list.sel = idx >= 0 ? idx : list.sel;
           list.highlight();
@@ -572,10 +587,10 @@ export class LocalScreen implements Screen {
   /**
    * Go back to the title, and stop the countdown on the way out.
    *
-   * `dispose()` stops it too, but a screen is swapped in at the start of the NEXT frame, and the
-   * countdown is a wall-clock timer — 450 ms, and 90 under ?fast. Where a frame lasts longer than
-   * that the timer fires first and the game starts behind the player who just asked to leave, which
-   * is the one thing this screen must not do. Nothing here can be left for the next frame to undo.
+   * `dispose()` stops it too, but a click's screen change is taken up at the start of the NEXT frame,
+   * and the countdown is a wall-clock timer — 450 ms, and 90 under ?fast. Where a frame lasts longer
+   * than that the timer fires first and the game starts behind the player who just asked to leave,
+   * which is the one thing this screen must not do. Nothing here can be left for the next frame to undo.
    */
   private leave() {
     window.clearTimeout(this.startTimer);
@@ -934,7 +949,12 @@ export class OnlineScreen implements Screen {
     } else if (s === 'error' || (s === 'lost' && this.state !== 'connected')) {
       this.error = detail || 'The connection failed.';
       this.go('error');
-    } else if (s === 'waiting' && this.state === 'host') this.go('host');
+    } else if (s === 'waiting' && this.state === 'host') {
+      // news, not a new screen: it changes the one line that says so, rather than build the card again
+      // (and re-arm its guard) under a finger on SEND INVITE LINK
+      const line = this.el.querySelector('.status span:last-child');
+      if (line) line.textContent = 'waiting for your partner…';
+    }
   }
 
   onCtrl(m: CtrlMsg) {
@@ -1120,7 +1140,7 @@ export class LevelSelect implements Screen {
   }
 
   onCtrl(m: CtrlMsg) {
-    if (m.t === 'pick' && !this.lead && m.level >= 0 && m.level < LEVELS.length) {
+    if (m.t === 'pick' && !this.lead && Number.isInteger(m.level) && m.level >= 0 && m.level < LEVELS.length) {
       this.pick(m.level);
       this.build();
     } else if (m.t === 'profile' || m.t === 'kinds') this.build();

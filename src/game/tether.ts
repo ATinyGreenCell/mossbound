@@ -1,3 +1,4 @@
+import { len } from '../core/math';
 import type { Pt } from './level';
 import { CATCH_BOUNCE, ROPE_LEN, ROPE_MIN, SHOT_OWED, SHOT_REEL, T } from './tuning';
 import type { Body, World } from './world';
@@ -71,7 +72,6 @@ export interface RopeBird extends Body {
  * a small one swing, hang and reach exactly as far as the levels were made for.
  */
 const knotY = (b: Pt & { ropeOff?: number }) => b.y + (b.ropeOff ?? 0);
-const knot = (b: Pt & { ropeOff?: number }): Pt => ({ x: b.x, y: knotY(b) });
 
 const cross = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx;
 /** corner points sit this far outside the tile, so the string never lies inside it */
@@ -161,8 +161,10 @@ export class Tether {
     this.ay = knotY(a);
     this.bx = b.x;
     this.by = knotY(b);
-    this.repair();
+    this.repair(true);
     this.measure();
+    // (an untied vine has no length: nothing may read one off it, as a tug used to)
+    if (!this.tied) this.length = 0;
   }
 
   /** Tie the vine between the two sprouts, straight, from here. */
@@ -231,12 +233,15 @@ export class Tether {
     this.regrip(b, by, bend1, this.bendAt(1), a, ay);
   }
 
-  /** The bend this end pivots around, or null when the string runs straight to the other bird. */
+  /**
+   * The bend this end pivots around, or null when the string runs straight to the other bird. (The
+   * bend itself, not a copy: a bend that is replaced or let go of keeps its own x and y, which is all
+   * regrip compares.)
+   */
   private bendAt(end: 0 | 1): Pt | null {
     const n = this.pts.length;
     if (!n) return null;
-    const p = end === 0 ? this.pts[0] : this.pts[n - 1];
-    return { x: p.x, y: p.y };
+    return end === 0 ? this.pts[0] : this.pts[n - 1];
   }
 
   /**
@@ -248,10 +253,12 @@ export class Tether {
   private regrip(me: RopeGrip, ky: number, was: Pt | null, now: Pt | null, other: Pt, otherY: number) {
     if (me.climbLen === undefined || !Number.isFinite(me.climbLen)) return;
     if (!was && !now) return; // straight before and after: the other bird simply moved
-    const from = was ?? { x: other.x, y: otherY };
-    const to = now ?? { x: other.x, y: otherY };
-    if (Math.abs(from.x - to.x) + Math.abs(from.y - to.y) < 0.5) return; // the same bend as before
-    const shift = Math.hypot(me.x - to.x, ky - to.y) - Math.hypot(me.x - from.x, ky - from.y);
+    const fx = was ? was.x : other.x;
+    const fy = was ? was.y : otherY;
+    const tx = now ? now.x : other.x;
+    const ty = now ? now.y : otherY;
+    if (Math.abs(fx - tx) + Math.abs(fy - ty) < 0.5) return; // the same bend as before
+    const shift = len(me.x - tx, ky - ty) - len(me.x - fx, ky - fy);
     // (within the same bounds a climber's own hands keep it to, see Bird.step)
     me.climbLen = Math.min(ROPE_LEN, Math.max(ROPE_MIN, me.climbLen + shift));
   }
@@ -260,10 +267,10 @@ export class Tether {
     let ox = end === 0 ? this.ax : this.bx;
     let oy = end === 0 ? this.ay : this.by;
     // a jump of more than a few tiles in one step is a teleport (respawn): don't sweep the world
-    if (Math.hypot(nx - ox, ny - oy) > 3 * T) {
+    if (len(nx - ox, ny - oy) > 3 * T) {
       this.setEnd(end, nx, ny);
       this.pts.length = 0;
-      this.repair();
+      this.repair(true);
       return;
     }
     for (let iter = 0; iter < 6 && this.pts.length < MAX_WRAPS; iter++) {
@@ -298,10 +305,24 @@ export class Tether {
     }
   }
 
+  /** End 0's and end 1's knots as points, refreshed where they're used (no garbage every step). */
+  private readonly endA: Pt = { x: 0, y: 0 };
+  private readonly endB: Pt = { x: 0, y: 0 };
+  private knotA() {
+    this.endA.x = this.ax;
+    this.endA.y = this.ay;
+    return this.endA;
+  }
+  private knotB() {
+    this.endB.x = this.bx;
+    this.endB.y = this.by;
+    return this.endB;
+  }
+
   private pivotPoint(end: 0 | 1): Pt {
     const n = this.pts.length;
-    if (end === 0) return n ? this.pts[0] : { x: this.bx, y: this.by };
-    return n ? this.pts[n - 1] : { x: this.ax, y: this.ay };
+    if (end === 0) return n ? this.pts[0] : this.knotB();
+    return n ? this.pts[n - 1] : this.knotA();
   }
 
   /** Bends at either end straighten out once the string swings back past them — or fold away. */
@@ -309,7 +330,7 @@ export class Tether {
     for (let guard = 0; guard < MAX_WRAPS && this.pts.length; guard++) {
       const c = this.pts[0];
       if (c.shot !== undefined) break;
-      const q = this.pts[1] ?? { x: this.bx, y: this.by };
+      const q = this.pts[1] ?? this.knotB();
       if (!this.straightened(this.ax, this.ay, c, q) && !this.folded(this.ax, this.ay, c, q)) break;
       if (!this.rebend(0, this.ax, this.ay, c, q.x, q.y)) this.pts.shift();
     }
@@ -317,8 +338,8 @@ export class Tether {
       const n = this.pts.length;
       const c = this.pts[n - 1];
       if (c.shot !== undefined) break;
-      const p = this.pts[n - 2] ?? { x: this.ax, y: this.ay };
-      const q = { x: this.bx, y: this.by };
+      const p = this.pts[n - 2] ?? this.knotA();
+      const q = this.knotB();
       if (!this.straightened(p.x, p.y, c, q) && !this.folded(p.x, p.y, c, q)) break;
       if (!this.rebend(n - 1, p.x, p.y, c, q.x, q.y)) this.pts.pop();
     }
@@ -329,7 +350,9 @@ export class Tether {
    * one can appear between the sprout and its ring while it swings.)
    */
   hooked(end: 0 | 1) {
-    return this.pts.find((w) => w.shot === end) ?? null;
+    const pts = this.pts;
+    for (let i = 0; i < pts.length; i++) if (pts[i].shot === end) return pts[i];
+    return null;
   }
 
   /**
@@ -348,11 +371,23 @@ export class Tether {
     else pts.push(w);
     const [ax, ay] = end === 0 ? [myX, myY] : [other.x, knotY(other)];
     const [bx, by] = end === 0 ? [other.x, knotY(other)] : [myX, myY];
+    // The other leg, from the ring on toward the partner. The shooter's own leg was seen clear, but the
+    // partner may be down below the lip of a ledge this new leg cuts straight through — and no sweep
+    // can move a leg that is already on the far side of a corner. Route it over the corner (one will
+    // do for a lip); where none will, the shot doesn't take.
+    const n = pts.length;
+    const qx = end === 0 ? (n > 1 ? pts[1].x : bx) : n > 1 ? pts[n - 2].x : ax;
+    const qy = end === 0 ? (n > 1 ? pts[1].y : by) : n > 1 ? pts[n - 2].y : ay;
+    if (!this.los(w.x, w.y, qx, qy)) {
+      const c = end === 0 ? this.cornerBetween(w.x, w.y, qx, qy) : this.cornerBetween(qx, qy, w.x, w.y);
+      if (c) pts.splice(end === 0 ? 1 : n - 1, 0, c);
+      else if (!force) return false;
+    }
     // (a hook the partner's screen has already made stands: their sprout is theirs to simulate, and
     // two screens showing the vine over different rings would be worse than one showing a long one)
     if (!force && this.pathLength(pts, ax, ay, bx, by) > ROPE_LEN + reach) return false;
-    if (end === 0) this.pts.unshift(w);
-    else this.pts.push(w);
+    this.pts.length = 0;
+    for (const q of pts) this.pts.push(q);
     // the shot vine is there at once (it's what reached the ring); it's only given back slowly
     this.growWant = Math.max(this.growWant, reach);
     this.grown = this.growWant;
@@ -438,8 +473,8 @@ export class Tether {
     const uy = c.y - py;
     const vx = q.x - c.x;
     const vy = q.y - c.y;
-    const lu = Math.hypot(ux, uy);
-    const lv = Math.hypot(vx, vy);
+    const lu = len(ux, uy);
+    const lv = len(vx, vy);
     if (lu < 0.5 || lv < 0.5) return false;
     if ((ux * vx + uy * vy) / (lu * lv) > FOLD_DOT) return false;
     return this.los(px, py, q.x, q.y);
@@ -450,8 +485,8 @@ export class Tether {
     const uy = c.y - py;
     const vx = q.x - c.x;
     const vy = q.y - c.y;
-    const lu = Math.hypot(ux, uy);
-    const lv = Math.hypot(vx, vy);
+    const lu = len(ux, uy);
+    const lv = len(vx, vy);
     // an end sitting right on its bend: let go, the bend means nothing
     if (lu < 0.5 || lv < 0.5) return true;
     return (cross(ux, uy, vx, vy) / (lu * lv)) * c.s < -UNWRAP_HYST;
@@ -470,25 +505,9 @@ export class Tether {
     if (Math.abs(turn) < 1e-3) return null;
     const sg = Math.sign(turn);
     const L = this.world.L;
-    let best: (Pt & { peg: boolean }) | null = null;
-    let bestA = Infinity;
-    let bestD = Infinity;
-    const consider = (cx: number, cy: number, peg: boolean) => {
-      const rx = cx - px;
-      const ry = cy - py;
-      const dd = rx * rx + ry * ry;
-      if (dd < 1) return;
-      // strictly inside the triangle (pivot, o, n)
-      if (cross(d0x, d0y, rx, ry) * sg <= 0.01) return;
-      if (cross(nx - ox, ny - oy, cx - ox, cy - oy) * sg <= 0.01) return;
-      if (cross(px - nx, py - ny, cx - nx, cy - ny) * sg <= 0.01) return;
-      const a = Math.atan2(Math.abs(cross(d0x, d0y, rx, ry)), d0x * rx + d0y * ry);
-      if (a < bestA - 1e-6 || (Math.abs(a - bestA) <= 1e-6 && dd < bestD)) {
-        bestA = a;
-        bestD = dd;
-        best = { x: cx, y: cy, peg };
-      }
-    };
+    this.hitA = Infinity;
+    this.hitD = Infinity;
+    this.hitFound = false;
     const minX = Math.min(px, ox, nx);
     const maxX = Math.max(px, ox, nx);
     const minY = Math.min(py, oy, ny);
@@ -505,14 +524,46 @@ export class Tether {
         // nudge away from the solid tile
         const ox2 = c === 1 || c === 3 ? CORNER_OFF : -CORNER_OFF;
         const oy2 = c === 1 || c === 2 ? CORNER_OFF : -CORNER_OFF;
-        consider(gx * T + ox2, gy * T + oy2, false);
+        this.consider(gx * T + ox2, gy * T + oy2, false, px, py, ox, oy, nx, ny, d0x, d0y, sg);
       }
     }
-    for (const p of L.pegs) if (p.x >= minX - 1 && p.x <= maxX + 1 && p.y >= minY - 1 && p.y <= maxY + 1) consider(p.x, p.y, true);
-    return best;
+    const pegs = L.pegs;
+    for (let i = 0; i < pegs.length; i++) {
+      const p = pegs[i];
+      if (p.x >= minX - 1 && p.x <= maxX + 1 && p.y >= minY - 1 && p.y <= maxY + 1) this.consider(p.x, p.y, true, px, py, ox, oy, nx, ny, d0x, d0y, sg);
+    }
+    // (the one hit, reused: every caller copies it into a bend of its own straight away)
+    return this.hitFound ? this.hit : null;
   }
 
-  /** Where the ray from p through c crosses segment o→n (null if it doesn't). */
+  /** firstCorner's best so far: the angle from the old segment, the distance², and the point */
+  private hitA = Infinity;
+  private hitD = Infinity;
+  private hitFound = false;
+  private readonly hit: Pt & { peg: boolean } = { x: 0, y: 0, peg: false };
+
+  /** One corner or peg for firstCorner: kept if it's inside the swept triangle and the first one in it. */
+  private consider(cx: number, cy: number, peg: boolean, px: number, py: number, ox: number, oy: number, nx: number, ny: number, d0x: number, d0y: number, sg: number) {
+    const rx = cx - px;
+    const ry = cy - py;
+    const dd = rx * rx + ry * ry;
+    if (dd < 1) return;
+    // strictly inside the triangle (pivot, o, n)
+    if (cross(d0x, d0y, rx, ry) * sg <= 0.01) return;
+    if (cross(nx - ox, ny - oy, cx - ox, cy - oy) * sg <= 0.01) return;
+    if (cross(px - nx, py - ny, cx - nx, cy - ny) * sg <= 0.01) return;
+    const a = Math.atan2(Math.abs(cross(d0x, d0y, rx, ry)), d0x * rx + d0y * ry);
+    if (a < this.hitA - 1e-6 || (Math.abs(a - this.hitA) <= 1e-6 && dd < this.hitD)) {
+      this.hitA = a;
+      this.hitD = dd;
+      this.hitFound = true;
+      this.hit.x = cx;
+      this.hit.y = cy;
+      this.hit.peg = peg;
+    }
+  }
+
+  /** Where the ray from p through c crosses segment o→n (null if it doesn't). The point is reused: copy it. */
   private raySeg(px: number, py: number, cx: number, cy: number, ox: number, oy: number, nx: number, ny: number): Pt | null {
     const rx = cx - px;
     const ry = cy - py;
@@ -522,12 +573,16 @@ export class Tether {
     if (Math.abs(den) < 1e-9) return null;
     const u = cross(ox - px, oy - py, rx, ry) / den;
     if (u < 0 || u > 1) return null;
-    return { x: ox + sx * u, y: oy + sy * u };
+    this.ray.x = ox + sx * u;
+    this.ray.y = oy + sy * u;
+    return this.ray;
   }
+
+  private readonly ray: Pt = { x: 0, y: 0 };
 
   /** Is the straight line between two points clear of static solids? */
   los(x0: number, y0: number, x1: number, y1: number) {
-    const d = Math.hypot(x1 - x0, y1 - y0);
+    const d = len(x1 - x0, y1 - y0);
     const n = Math.max(1, Math.ceil(d / 6));
     for (let i = 1; i < n; i++) {
       const t = i / n;
@@ -536,15 +591,45 @@ export class Tether {
     return true;
   }
 
-  /** After a teleport the straight string may pass through a wall: route it over one corner if that works. */
-  private repair() {
+  /**
+   * The straight string may pass through a wall: after a teleport, or between two sprouts just tied
+   * (respawned, rejoined) with rock between them. Route it over one corner if that works. `deep` (a
+   * fresh tie or a teleport, never the per-step check) also tries two: one sprout on a floor a tile
+   * thick and the other under it need both corners at its end — so long as that way round fits the vine.
+   */
+  private repair(deep = false) {
     if (this.pts.length || this.los(this.ax, this.ay, this.bx, this.by)) return;
+    const best = this.cornerBetween(this.ax, this.ay, this.bx, this.by);
+    if (best) {
+      this.pts.push(best);
+      return;
+    }
+    if (!deep) return;
+    const two = this.twoCornersBetween(this.ax, this.ay, this.bx, this.by, this.limit);
+    if (two) this.pts.push(two[0], two[1]);
+  }
+
+  /** The grid window a route between two points is looked for in: three tiles past either end. */
+  private window(px: number, py: number, qx: number, qy: number) {
+    const L = this.world.L;
+    const w = this.win;
+    w.gx0 = Math.max(0, Math.floor(Math.min(px, qx) / T) - 3);
+    w.gx1 = Math.min(L.w, Math.ceil(Math.max(px, qx) / T) + 3);
+    w.gy0 = Math.max(0, Math.floor(Math.min(py, qy) / T) - 3);
+    w.gy1 = Math.min(L.h, Math.ceil(Math.max(py, qy) / T) + 3);
+    return w;
+  }
+
+  private readonly win = { gx0: 0, gx1: 0, gy0: 0, gy1: 0 };
+
+  /**
+   * The convex corner that takes p → q round whatever is between them, with both legs clear: the
+   * shortest such route (null when no single corner nearby will do). Its winding is for that order.
+   */
+  private cornerBetween(px: number, py: number, qx: number, qy: number): Wrap | null {
     const L = this.world.L;
     const W = L.w + 1;
-    const gx0 = Math.max(0, Math.floor(Math.min(this.ax, this.bx) / T) - 3);
-    const gx1 = Math.min(L.w, Math.ceil(Math.max(this.ax, this.bx) / T) + 3);
-    const gy0 = Math.max(0, Math.floor(Math.min(this.ay, this.by) / T) - 3);
-    const gy1 = Math.min(L.h, Math.ceil(Math.max(this.ay, this.by) / T) + 3);
+    const { gx0, gx1, gy0, gy1 } = this.window(px, py, qx, qy);
     let best: Wrap | null = null;
     let bestLen = Infinity;
     for (let gy = gy0; gy <= gy1; gy++) {
@@ -553,26 +638,66 @@ export class Tether {
         if (!c) continue;
         const x = gx * T + (c === 1 || c === 3 ? CORNER_OFF : -CORNER_OFF);
         const y = gy * T + (c === 1 || c === 2 ? CORNER_OFF : -CORNER_OFF);
-        const len = Math.hypot(x - this.ax, y - this.ay) + Math.hypot(this.bx - x, this.by - y);
-        if (len >= bestLen || !this.los(this.ax, this.ay, x, y) || !this.los(x, y, this.bx, this.by)) continue;
+        const len = Math.hypot(x - px, y - py) + Math.hypot(qx - x, qy - y);
+        if (len >= bestLen || !this.los(px, py, x, y) || !this.los(x, y, qx, qy)) continue;
         bestLen = len;
-        best = { x, y, s: Math.sign(cross(x - this.ax, y - this.ay, this.bx - x, this.by - y)) || 1, peg: false };
+        best = { x, y, s: Math.sign(cross(x - px, y - py, qx - x, qy - y)) || 1, peg: false };
       }
     }
-    if (best) this.pts.push(best);
+    return best;
+  }
+
+  /** The shortest route p → q over two convex corners, all three legs clear, no longer than `max` (null if none). */
+  private twoCornersBetween(px: number, py: number, qx: number, qy: number, max: number): [Wrap, Wrap] | null {
+    const L = this.world.L;
+    const W = L.w + 1;
+    const { gx0, gx1, gy0, gy1 } = this.window(px, py, qx, qy);
+    const cs: { x: number; y: number; fromP: boolean; toQ: boolean }[] = [];
+    for (let gy = gy0; gy <= gy1; gy++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        const c = L.corners[gy * W + gx];
+        if (!c) continue;
+        const x = gx * T + (c === 1 || c === 3 ? CORNER_OFF : -CORNER_OFF);
+        const y = gy * T + (c === 1 || c === 2 ? CORNER_OFF : -CORNER_OFF);
+        cs.push({ x, y, fromP: this.los(px, py, x, y), toQ: this.los(x, y, qx, qy) });
+      }
+    }
+    let best = max;
+    let c1: (typeof cs)[number] | null = null;
+    let c2: (typeof cs)[number] | null = null;
+    for (const a of cs) {
+      if (!a.fromP) continue;
+      const la = Math.hypot(a.x - px, a.y - py);
+      if (la >= best) continue;
+      for (const b of cs) {
+        if (b === a || !b.toQ) continue;
+        const len = la + Math.hypot(b.x - a.x, b.y - a.y) + Math.hypot(qx - b.x, qy - b.y);
+        if (len >= best || !this.los(a.x, a.y, b.x, b.y)) continue;
+        best = len;
+        c1 = a;
+        c2 = b;
+      }
+    }
+    if (!c1 || !c2) return null;
+    return [
+      { x: c1.x, y: c1.y, s: Math.sign(cross(c1.x - px, c1.y - py, c2.x - c1.x, c2.y - c1.y)) || 1, peg: false },
+      { x: c2.x, y: c2.y, s: Math.sign(cross(c2.x - c1.x, c2.y - c1.y, qx - c2.x, qy - c2.y)) || 1, peg: false },
+    ];
   }
 
   private measure() {
-    let len = 0;
+    let total = 0;
     let px = this.ax;
     let py = this.ay;
-    for (const p of this.pts) {
-      len += Math.hypot(p.x - px, p.y - py);
+    const pts = this.pts;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      total += len(p.x - px, p.y - py);
       px = p.x;
       py = p.y;
     }
-    len += Math.hypot(this.bx - px, this.by - py);
-    this.length = len;
+    total += len(this.bx - px, this.by - py);
+    this.length = total;
   }
 
   /** The path from bird 0 to bird 1 (positions as of the last update), into `out` (reused). */
@@ -592,7 +717,9 @@ export class Tether {
    */
   solve(birds: readonly [RopeBird, RopeBird], auth: readonly [boolean, boolean], dt = 1 / 120) {
     if (!this.tied) return;
-    const [A, B] = birds;
+    // (not destructured: an array pattern goes through an iterator, and this runs every step)
+    const A = birds[0];
+    const B = birds[1];
     const active = A.present && B.present && !A.ghost && !B.ghost;
     this.reel(dt);
     const n = this.pts.length;
@@ -606,12 +733,19 @@ export class Tether {
     for (let end = 0 as 0 | 1; end <= 1; end = (end + 1) as 0 | 1) {
       const me = birds[end];
       const e = this.ends[end];
-      const piv = end === 0 ? (n ? this.pts[0] : knot(B)) : n ? this.pts[n - 1] : knot(A);
-      e.pivot.x = piv.x;
-      e.pivot.y = piv.y;
+      // (the pivot: the nearest bend, or the other bird's knot — written straight into the end)
+      if (n) {
+        const w = end === 0 ? this.pts[0] : this.pts[n - 1];
+        e.pivot.x = w.x;
+        e.pivot.y = w.y;
+      } else {
+        const o = end === 0 ? B : A;
+        e.pivot.x = o.x;
+        e.pivot.y = knotY(o);
+      }
       e.pivotIsBird = n === 0;
       e.pivotIsCorner = n > 0 && !(end === 0 ? this.pts[0].peg : this.pts[n - 1].peg);
-      e.seg = Math.hypot(me.x - piv.x, knotY(me) - piv.y);
+      e.seg = len(me.x - e.pivot.x, knotY(me) - e.pivot.y);
       e.limit = Math.min(this.limit - (total - e.seg), me.climbLen);
       e.taut = active && e.seg >= e.limit - 0.75;
       e.active = active;
@@ -663,7 +797,7 @@ export class Tether {
             me.vy = (me.y - me.prevY) / dt;
           }
           const still = !e.pivotIsBird || other.anchored || (other.grounded && Math.abs(other.vx) + Math.abs(other.vy) < 5);
-          const sp = Math.hypot(me.vx, me.vy);
+          const sp = len(me.vx, me.vy);
           if (still && !me.bumped && Number.isFinite(me.swingE) && sp > 1) {
             const v2 = 2 * (me.swingE + me.g * me.y);
             if (v2 > 0) {
@@ -729,6 +863,6 @@ function walkerShare(walker: RopeBird, stander: RopeBird) {
 function outward(b: Body, piv: Pt) {
   const dx = b.x - piv.x;
   const dy = b.y - piv.y;
-  const d = Math.hypot(dx, dy) || 1;
+  const d = len(dx, dy) || 1;
   return Math.max(0, (b.vx * dx + b.vy * dy) / d);
 }

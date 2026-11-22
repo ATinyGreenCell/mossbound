@@ -185,6 +185,57 @@ await sleep(600);
 const after = await page.evaluate(() => JSON.stringify(window.__fb.save.save));
 t.check('nothing done in the debug ground is written to the journal', before === after);
 
+// ---- and everything that starts it again stays on it: the clear card (which used to offer the real
+// levels' buttons — PLAY AGAIN and NEXT LEVEL started real, recorded runs, and THE END wrote the journal)
+// and the pause menu, with the sprout picked by SWAP (which used to swap nothing at all)
+const markOld = () => page.evaluate(() => { if (window.__fbSession) window.__fbSession.__old = true; });
+const fresh = (label) => waitFor(() => page.evaluate(() => { const s = window.__fbSession; return !!s && !s.__old && window.__fb.app.current === s; }), 8000, label);
+const where = () => page.evaluate(() => { const s = window.__fbSession; return { level: s.L.index, debug: s.debug, offRecord: s.offRecord, kinds: s.birds.map((b) => b.kind).join('/') }; });
+const journal = () => page.evaluate(() => JSON.stringify(window.__fb.save.save) + '|' + (localStorage.getItem('mossbound.save.v3') ?? ''));
+/** clear the level outright, and press `act` on its card until it takes */
+const clearAnd = async (act) => {
+  await page.evaluate(() => window.__fbSession.clear(42));
+  await waitFor(() => page.evaluate(() => !!document.querySelector('.ov-buttons .btn')), 8000, 'the clear card');
+  const buttons = await page.evaluate(() => [...document.querySelectorAll('.ov-buttons .btn')].map((b) => b.dataset.act));
+  if (!act) return { buttons };
+  await markOld();
+  await sleep(450);
+  await waitFor(async () => {
+    await page.evaluate((act) => document.querySelector(`.ov-buttons .btn[data-act=${act}]`)?.click(), act);
+    return page.evaluate(() => { const s = window.__fbSession; return !!s && !s.__old && window.__fb.app.current === s; });
+  }, 8000, act);
+  return { buttons, now: await where() };
+};
+const j0 = await journal();
+const k0 = (await where()).kinds;
+await markOld();
+await page.evaluate(() => window.__fbSession.panel.onSwap());
+await fresh('the debug ground, swapped');
+const swapped = await where();
+await markOld();
+await page.evaluate(() => window.__fbSession.togglePause());
+await waitFor(() => page.evaluate(() => !!document.querySelector('.btn[data-act=restart]')), 4000, 'the pause menu');
+await sleep(450);
+await waitFor(async () => {
+  await page.evaluate(() => document.querySelector('.btn[data-act=restart]')?.click());
+  return page.evaluate(() => { const s = window.__fbSession; return !!s && !s.__old && window.__fb.app.current === s; });
+}, 8000, 'the debug ground started over');
+const restarted = await where();
+const again = await clearAnd('again');
+const next = await clearAnd('next');
+await markOld();
+await page.evaluate((sw) => window.__fb.flow.debug(4, sw), swapped.kinds.startsWith('small'));
+await fresh('the last level, on the debug ground');
+const last = await clearAnd(null);
+await sleep(600);
+const j1 = await journal();
+t.check(`SWAP on the panel swaps the sprouts (${k0} → ${swapped.kinds})`, swapped.debug && swapped.kinds !== k0, { k0, swapped });
+t.check('…and the pause menu’s START THE LEVEL OVER keeps you there, as that sprout', restarted.debug && restarted.level === swapped.level && restarted.kinds === swapped.kinds, restarted);
+t.check('the clear card’s AGAIN plays the level again on the debug ground, as the same sprout', again.now.debug && again.now.offRecord && again.now.level === restarted.level && again.now.kinds === swapped.kinds, again);
+t.check('…its NEXT LEVEL goes on to the next level on the debug ground', next.now.debug && next.now.offRecord && next.now.level === again.now.level + 1 && next.now.kinds === swapped.kinds, next);
+t.check('…and the last level’s card offers no THE END (which writes the journal)', !last.buttons.includes('ending') && last.buttons.includes('again'), last);
+t.check('…and none of it touched the journal', j0 === j1);
+
 errors.push(...page.errors);
 await sleep(100);
 await browser.close();

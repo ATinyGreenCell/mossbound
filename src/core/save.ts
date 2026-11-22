@@ -96,7 +96,7 @@ const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 const record = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 const graphemes = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
 /** at most `n` characters — never half an emoji */
-const clip = (s: unknown, n: number) => {
+export const clip = (s: unknown, n: number) => {
   if (typeof s !== 'string') return '';
   const parts = graphemes ? Array.from(graphemes.segment(s), (g) => g.segment) : Array.from(s);
   return parts.slice(0, n).join('');
@@ -233,6 +233,46 @@ function mergeInto(s: Save, o: Save, foreign = false): boolean {
 
 const empty = (): Save => ({ v: 3, unlocked: 0, levels: {}, finished: false, runs: {}, clock: 0 });
 
+/**
+ * What this build writes, laid over the copy it is replacing. The stored copy may be a newer build's —
+ * another tab on another version, or an installed game opened offline on the build it cached — with
+ * levels, fields and run details this build has never heard of. `cleanSave` reads only what it knows,
+ * so writing its result as it stands would wipe all of that; laid over the stored copy, everything
+ * this build doesn't know is carried along untouched. A run's own extras come along only while it is
+ * the same run (the same fresh start of the level): a new start owes nothing to the old one.
+ */
+function overlay(stored: unknown, s: Save): unknown {
+  const base = record(stored);
+  if (!base || !cleanSave(base)) return s;
+  const out: Record<string, unknown> = { ...base, ...s };
+  const levels = record(base.levels);
+  if (levels) {
+    const m: Record<string, unknown> = { ...levels };
+    for (const [id, r] of Object.entries(s.levels)) m[id] = { ...(record(levels[id]) ?? {}), ...r };
+    out.levels = m;
+  }
+  const runs = record(base.runs);
+  if (runs) {
+    const m: Record<string, unknown> = { ...runs };
+    for (const [id, slot] of Object.entries(s.runs)) {
+      const old = record(runs[id]);
+      const oldRun = old && old.gen === slot.gen ? record(old.run) : null;
+      m[id] = old && old.gen === slot.gen ? { ...old, ...slot, run: slot.run && oldRun ? { ...oldRun, ...slot.run } : slot.run } : slot;
+    }
+    out.runs = m;
+  }
+  return out;
+}
+
+const json = (raw: string | null): unknown => {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
 function read(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -279,7 +319,7 @@ function load(): Save {
   for (const o of [cur, parse(read(BACKUP_KEY)), cur ? null : parse(read(V2_KEY))]) if (o) mergeInto(s, o);
   if (storageOk && (cur || s.unlocked || Object.keys(s.levels).length || Object.keys(s.runs).length)) {
     try {
-      localStorage.setItem(BACKUP_KEY, JSON.stringify(s));
+      localStorage.setItem(BACKUP_KEY, JSON.stringify(overlay(json(raw), s)));
     } catch {
       // full: the backup waits
     }
@@ -307,9 +347,10 @@ function write() {
       if (!theirs) stash(stored);
       else if (mergeInto(save, theirs)) changed();
     }
-    const json = JSON.stringify(save);
-    if (json !== stored) localStorage.setItem(KEY, json);
-    written = json;
+    // (over the stored copy: whatever in it this build doesn't know stays — see overlay)
+    const out = JSON.stringify(overlay(json(stored), save));
+    if (out !== stored) localStorage.setItem(KEY, out);
+    written = out;
     if (!storageOk) {
       storageOk = true;
       changed();

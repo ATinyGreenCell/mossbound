@@ -361,6 +361,8 @@ body {
 .screen {
   position: absolute;
   inset: 0;
+  /* over the version badge (see there) */
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -452,12 +454,15 @@ body {
   pointer-events: none;
 }
 
-/* which build this is, and whether it's the newest the site has (see update.ts badge) */
+/* which build this is, and whether it's the newest the site has (see update.ts badge). It keeps to its
+   corner: under the screens, so a card that reaches the corner (the level select on a small phone, BACK
+   and all) is drawn over it rather than under it; over a pause or clear card's veil, so it still shows
+   there; and gone the moment a level is being played (update.ts takes it away too, on its next check). */
 .version-badge {
   position: absolute;
   left: calc(12px + var(--sal, 0px));
   bottom: calc(10px + var(--sab, 0px));
-  z-index: 23;
+  z-index: 0;
   padding: 0.2em 0.7em;
   border-radius: 0.8em;
   background: rgba(20, 16, 36, 0.38);
@@ -470,6 +475,14 @@ body {
 .version-badge.stale {
   background: rgba(150, 60, 20, 0.7);
   opacity: 1;
+}
+
+.ui:has(> .overlay) > .version-badge {
+  z-index: 6;
+}
+
+.ui:has(> .hud):not(:has(> .overlay)) > .version-badge {
+  display: none;
 }
 
 /* an update waiting for a moment that costs nothing, and the note once it has landed (see update.ts) */
@@ -498,6 +511,14 @@ body {
 .update-toast span {
   font-size: 0.85em;
   opacity: 0.8;
+}
+
+/* a screen with a hint along its bottom (the Xbox's, iOS's): the update's note stands above that hint,
+   not on it — on an Xbox the hint is how to get the controllers back, which is just what a reload can
+   need (room for the hint at two lines: 0.85em text, its padding and its 10 px) */
+.ui:has(.xbox-hint, .foot-hint) > .update-toast,
+.ui:has(.xbox-hint, .foot-hint) > .update-pill {
+  bottom: calc(16px + var(--sab, 0px) + 2.6 * var(--u));
 }
 
 .seats {
@@ -662,7 +683,6 @@ body {
 
 .card.sel {
   transform: translateY(-0.25em) scale(1.04);
-  outline: 4px solid var(--gold);
 }
 
 @media (hover: hover) {
@@ -755,16 +775,6 @@ body {
   padding: 0.25em 0.8em;
   border-radius: 99px;
   background: rgba(29, 27, 56, 0.4);
-}
-
-.hud-seeds.pop {
-  animation: pop 0.25s;
-}
-
-@keyframes pop {
-  50% {
-    transform: scale(1.15);
-  }
 }
 
 .hud-right {
@@ -1075,6 +1085,11 @@ body:not(.touch) .ctl-col:last-child {
   border-radius: 4px;
 }
 
+/* (above the version badge where there is one, not over it) */
+#app:has(.version-badge) > .fps-meter {
+  bottom: calc(32px + var(--sab, 0px));
+}
+
 .context-lost {
   position: absolute;
   inset: 0;
@@ -1122,6 +1137,19 @@ body:not(.touch) .ctl-col:last-child {
 /* the two-player test course: a border, not an outline, so it never reads as the highlighted card */
 .card.course {
   border: 2px dashed rgba(43, 33, 64, 0.45);
+}
+
+/* The highlight — the card Ⓐ / ENTER will press — over every other mark a card can wear: the dashed
+   outline of the level the scenery shows, CONTINUE's gold one, the test course's dashed border. Those
+   rules came later at the same specificity and won: a highlighted level card showed only the dashed
+   "picked" outline, and CONTINUE looked highlighted whether it was or not. A white ring outside a gold
+   one, and nothing else on the level select looks like it. */
+.cards .card.sel {
+  outline: 4px solid #fff;
+  outline-offset: 3px;
+  box-shadow:
+    0 0 0 3px var(--gold),
+    0 0.45em 1em rgba(0, 0, 0, 0.35);
 }
 
 /* ---- the debug ground's panel (see core/debug.ts) --------------------------------------------
@@ -1218,6 +1246,8 @@ body:not(.touch) .ctl-col:last-child {
 }
 
 .dbg-out {
+  /* (its text changes ten times a second: its layout stays inside it) */
+  contain: content;
   margin: 0.2em 0 0;
   padding: 0.4em 0.5em;
   border-radius: 6px;
@@ -1241,4 +1271,98 @@ body:not(.touch) .ctl-col:last-child {
 
 .dbg-catch.hidden {
   display: none;
+}
+
+/* ---- thumbs ----------------------------------------------------------------------------------------
+   On a touch screen every menu control answers a touch anywhere in a band at least 44 px across around
+   it, as a thumb needs: an invisible ::after the size of that band, and stacked controls spaced so that
+   no two bands overlap (--hit, with two px to spare for rounding). The controls themselves look the size
+   they always did. (A phone held sideways drew them 18–33 px tall with a few px between; ◀ / ▶ were
+   20 px, and a thumb just beside ◀ landed on the row, which steps the other way.) */
+@media (hover: none) and (pointer: coarse) {
+  :root {
+    --hit: 46px;
+  }
+  .btn,
+  .row,
+  .swatch,
+  .row .steps i {
+    position: relative;
+  }
+  .btn::after,
+  .row::after,
+  .swatch::after,
+  .row .steps i::after {
+    content: '';
+    position: absolute;
+  }
+  /* a row holds controls of its own (◀ ▶): its band goes under them (a stacking context of its own, so
+     under its children but still over the card behind it) */
+  .row {
+    z-index: 0;
+  }
+  .row::after {
+    z-index: -1;
+  }
+  /* a band centred on the control — or the control itself, where that is bigger */
+  .btn::after,
+  .row::after {
+    top: min(0px, calc((100% - var(--hit)) / 2));
+    bottom: min(0px, calc((100% - var(--hit)) / 2));
+    left: min(0px, calc((100% - var(--hit)) / 2));
+    right: min(0px, calc((100% - var(--hit)) / 2));
+  }
+  /* the colours stand 27 px apart: the full height, and sideways only as far as the gap between them */
+  .swatch::after {
+    top: calc((100% - var(--hit)) / 2);
+    bottom: calc((100% - var(--hit)) / 2);
+    left: -3px;
+    right: -3px;
+  }
+  /* ◀ and ▶ touch each other: each is 22 px wide and reaches 22 px outward, away from the other */
+  .row .steps i {
+    min-width: 22px;
+    text-align: center;
+  }
+  .row .steps i::after {
+    top: calc((100% - var(--hit)) / 2);
+    bottom: calc((100% - var(--hit)) / 2);
+  }
+  .row .steps i[data-dir='-1']::after {
+    left: -22px;
+    right: 0;
+  }
+  .row .steps i[data-dir='1']::after {
+    left: 0;
+    right: -22px;
+  }
+  /* stacked controls --hit apart, centre to centre (a button is 2.25em tall with a phone's padding and
+     this line height, SWAP 1.75em, a row 2.1em). In the title's column (a flexbox) the margins of two
+     neighbours add up; in a card's ordinary flow they collapse into one gap, so each margin is all of it. */
+  .btn {
+    line-height: 1.25;
+  }
+  .menu > .btn {
+    margin-block: max(0.22em, calc((var(--hit) - 2.25em) / 2));
+  }
+  .panel .btn:not(.inline),
+  .ov-card .btn {
+    margin-block: max(0.22em, calc(var(--hit) - 2.25em));
+  }
+  .btn.inline {
+    margin-block: calc((var(--hit) - 1.75em) / 2);
+  }
+  .row {
+    line-height: 1.25;
+    margin-block: max(0.15em, calc(var(--hit) - 2.1em));
+  }
+  /* the colours: room for their bands above and below, clear of the neighbouring controls' bands */
+  .settings .field:has(> .swatches),
+  .swatches.small {
+    margin-block: 24px;
+  }
+  /* the title's column is taller now: on the smallest phones it scrolls rather than run off the bottom */
+  .title-screen {
+    overflow-y: auto;
+  }
 }

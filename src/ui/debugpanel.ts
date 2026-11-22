@@ -1,18 +1,23 @@
 import { dbg, dbgReset, type Speed } from '../core/debug';
 
+/** The readout is rewritten no more often than this (ms). */
+const READOUT_MS = 100;
+
 /**
  * The debug ground's panel: a column of toggles over the level, and a readout of what the game
  * thinks is happening. Built for a thumb — every control is a proper tap target, and the whole
  * thing folds away to one button so it never covers the mechanic being looked at.
  *
- * The readout is written once a frame from plain strings; it never touches the DOM unless the text
- * has actually changed, for the same reason the HUD doesn't.
+ * The readout is asked for every frame, from plain strings, but written at most ten times a second:
+ * its clock and distances change every frame, and each write is a style and layout pass — on the phone
+ * whose frame rate the panel is there to look at.
  */
 export class DebugPanel {
   readonly el: HTMLDivElement;
   private body: HTMLElement;
   private readout: HTMLElement;
   private last = '';
+  private wroteAt = -Infinity;
   private open = true;
   /** the panel's own buttons, so a toggle shows its state without a full rebuild */
   private toggles = new Map<string, HTMLElement>();
@@ -140,9 +145,13 @@ export class DebugPanel {
     for (const b of this.el.querySelectorAll<HTMLElement>('[data-speed]')) b.classList.toggle('on', Number(b.dataset.speed) === dbg.speed);
   }
 
-  /** The readout, written only when it says something new. */
+  /** The readout, written only when it says something new — and then no more than every READOUT_MS. */
   setText(s: string) {
     if (s === this.last) return;
+    const now = performance.now();
+    // (asked again next frame with the newest text: that one is written once the wait is over)
+    if (now - this.wroteAt < READOUT_MS) return;
+    this.wroteAt = now;
     this.last = s;
     this.readout.textContent = s;
   }

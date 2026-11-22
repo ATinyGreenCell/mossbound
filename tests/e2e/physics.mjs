@@ -909,6 +909,176 @@ t.check(
   Object.fromEntries(Object.entries(r.fall).map(([k, f]) => [k, { hop: f.hop.v, drop: f.drop.v }])),
 );
 
+// ---- the vine's own state stays honest (the 1.9 gameplay audit), through a REAL Session: what the
+// sprouts believe about the vine must be what the vine is.
+const honest = await page.evaluate(() => {
+  const T = 32;
+  const out = {};
+  // A ring held by a sprout whose partner dies and comes back. The vine is tied afresh then, which drops
+  // every bend it had, the ring too — and the sprout used to go on believing it held one, so pushing UP
+  // while standing reeled it along the ground into its partner and pinned it there (18 px of vine).
+  {
+    const sim = __sim(0, ['tall', 'small']);
+    const [a, b] = sim.birds;
+    const F = 14;
+    // both on the ledge under the branch at (72, F-7), tied
+    sim.place(0, 73, F - 3); sim.place(1, 75, F - 3); sim.reset(); sim.secs(0.3);
+    sim.shoot(0, 0, 1);
+    sim.secs(0.3);
+    const held = a.hooked && !!sim.tether.hooked(0);
+    b.die('fall');
+    sim.until(() => !b.ghost, 6);
+    sim.secs(0.2);
+    const flag = a.hooked;
+    const vine = !!sim.tether.hooked(0);
+    // the partner stands a few tiles off; the sprout pushes up for a second, then walks away
+    b.placeCenter({ x: 78.5 * T, y: (F - 3) * T - b.h / 2 - 0.01 });
+    sim.secs(0.3);
+    const x0 = a.x;
+    sim.c[0].moveY = 1; sim.secs(1); sim.c[0].moveY = 0; sim.secs(0.2);
+    const crept = Math.abs(a.x - x0);
+    const gap0 = Math.abs(a.x - b.x);
+    sim.c[0].moveX = -1; sim.secs(1); sim.c[0].moveX = 0;
+    const gap1 = Math.abs(a.x - b.x);
+    out.staleHook = { held, flag, vine, crept: +crept.toFixed(1), gap0: +gap0.toFixed(1), gap1: +gap1.toFixed(1), climbLen: a.climbLen };
+  }
+  // No vine, no tug. The Great Falls starts its sprouts four tiles apart, further than a tug needs, and
+  // a TUG pressed before anyone had tied the vine threw the partner at the map's top-left corner (the
+  // vine's ends point at 0,0 until it is first tied). A tug arriving from the partner's screen while
+  // this one's vine is untied — never tied, or untied as it crossed on the wire — did the same here.
+  {
+    const sim = __sim(4, ['tall', 'small']);
+    const [a, b] = sim.birds;
+    sim.secs(0.5);
+    const tied = sim.tether.tied;
+    const apart = +(Math.abs(a.x - b.x) / T).toFixed(1);
+    sim.c[0].tugPressed = true;
+    sim.frame();
+    const thrown = Math.round(Math.hypot(b.vx, b.vy));
+    sim.secs(0.5);
+    sim.s.handleEvent({ k: 'tug' });
+    const yankedNeverTied = Math.round(Math.hypot(a.vx, a.vy));
+    // tied, walked apart, untied: the vine's ends still point where the partner was
+    sim.reset();
+    b.placeCenter({ x: a.x + 200, y: a.y + a.h / 2 - b.h / 2 });
+    sim.secs(0.5);
+    sim.s.untieVine(a, false);
+    b.placeCenter({ x: a.x - 30, y: a.y + a.h / 2 - b.h / 2 });
+    sim.secs(0.5);
+    sim.s.handleEvent({ k: 'tug' });
+    const yankedAfterUntie = Math.round(Math.hypot(a.vx, a.vy));
+    out.untiedTug = { tied, apart, thrown, yankedNeverTied, yankedAfterUntie };
+  }
+  // A ring the partner's screen says they shot, arriving while this screen's vine is untied: there is
+  // no vine to bend over it here (it used to grow a bend, and the vine's length, on a vine that wasn't there)
+  {
+    const sim = __sim(0, ['tall', 'small']);
+    sim.secs(0.2);
+    sim.s.handleEvent({ k: 'hook', i: 0 });
+    out.untiedHook = { tied: sim.tether.tied, bends: sim.tether.pts.length, limit: sim.tether.limit, partnerHolds: sim.birds[1].hooked };
+  }
+  // The vine never runs through rock. (How many of its legs cut through a solid tile, and what it is.)
+  const through = (sim) => {
+    const p = sim.tether.path([]);
+    let n = 0;
+    for (let k = 0; k + 1 < p.length; k++) if (!sim.tether.los(p[k].x, p[k].y, p[k + 1].x, p[k + 1].y)) n++;
+    return { legsThroughRock: n, path: p.map((q) => `${(q.x / T).toFixed(2)},${(q.y / T).toFixed(2)}`).join(' → ') };
+  };
+  // A ring shot with the partner down below the lip of the ledge it is shot past: the shooter's own leg
+  // to the ring is clear, but the partner's leg from the ring cut straight through the ledge's corner,
+  // and stayed there (a sweep can't move a leg that's already on the far side of a corner). Found by the
+  // fuzzer on the garden's chasm.
+  {
+    const sim = __sim(0, ['even', 'even']);
+    const [a, b] = sim.birds;
+    a.placeCenter({ x: 70.63 * T, y: 13.97 * T });
+    b.placeCenter({ x: 70.41 * T, y: 11.55 * T });
+    sim.reset();
+    sim.shoot(1, 0.45, 1);
+    out.shotLeg = { hooked: !!sim.tether.hooked(1), ...through(sim) };
+  }
+  // Tying the vine across a floor a tile thick — one on Fern Falls' roots arch, one under it, near
+  // enough to tie — ran it straight through the rock (the route around needs two corners, and only one
+  // was ever tried) until someone happened to drag it round
+  {
+    const sim = __sim(1, ['tall', 'small']);
+    sim.place(0, 131, 16);
+    sim.place(1, 131, 18);
+    sim.secs(0.3);
+    sim.shoot(1);
+    out.tieThrough = { tied: sim.tether.tied, ...through(sim) };
+  }
+  // Holding on ends the step your feet leave the ground. Planted on Fern Falls' cracking bridge as it
+  // gives way, a sprout used to stay "holding on" for the rest of that step — in the air — which the
+  // vine (who takes the stretch), a tug (which way it throws) and the partner's screen all believed.
+  {
+    const sim = __sim(1, ['tall', 'small']);
+    const a = sim.birds[0];
+    sim.place(0, 59, 18);
+    sim.c[0].anchor = true;
+    let steps = 0;
+    let at = null;
+    for (; steps < 120 * 3 && !at; steps++) {
+      sim.s.update(1 / 120);
+      if (!a.grounded && a.cling === 0 && !a.ghost) at = { anchored: a.anchored, afterSecs: +(steps / 120).toFixed(2) };
+    }
+    out.anchorFalls = at ?? { anchored: null, never: true };
+  }
+  return out;
+});
+
+// ---- a seed waiting by its partner with nowhere to land (they're in the air over a wide pit) used to
+// redo its whole search — a few hundred box tests — on every physics step it waited: about a millisecond
+// a frame on a desktop, ten sub-steps' worth a frame on a struggling phone. It looks ten times a second
+// now, and still comes back the moment there's somewhere to come back to.
+const waiting = await page.evaluate(async () => {
+  const { parseLevel } = await import('/src/game/level.ts');
+  const { World } = await import('/src/game/world.ts');
+  const { Bird } = await import('/src/game/bird.ts');
+  const T = 32;
+  const H = 20, W = 60;
+  const map = Array.from({ length: H }, (_, y) => (y >= 14 ? '#'.repeat(15) + ' '.repeat(24) + '#'.repeat(21) : ' '.repeat(W)));
+  map[13] = '  1 2  C' + ' '.repeat(W - 9) + 'N';
+  const L = parseLevel({ id: 'pit', name: 'pit', subtitle: '', theme: 'garden', song: 'garden', map }, 0);
+  const world = new World(L);
+  let calls = 0;
+  const boxFree = world.boxFree.bind(world);
+  world.boxFree = (x, y, w, h) => { calls++; return boxFree(x, y, w, h); };
+  const partner = new Bird(1);
+  partner.setKind('tall');
+  partner.x = 27 * T; partner.y = 8 * T; partner.grounded = false;
+  const home = { x: 7 * T + 16, y: 13 * T + 12 }; // further from the partner than a vine: it waits
+  const g = new Bird(0);
+  g.setKind('tall');
+  g.x = 26 * T; g.y = 16 * T;
+  g.die('fall');
+  for (let k = 0; k < 120 * 1.5; k++) g.stepGhost(1 / 120, world, partner, home); // the drift in, and a little waiting
+  calls = 0;
+  for (let k = 0; k < 120; k++) g.stepGhost(1 / 120, world, partner, home);
+  const perSecond = calls;
+  const stillWaiting = g.ghost;
+  // the partner lands on the far bank: it comes back beside them straight away
+  partner.x = 41 * T; partner.y = 14 * T - partner.h / 2; partner.grounded = true;
+  let k = 0;
+  for (; k < 120 && g.ghost; k++) g.stepGhost(1 / 120, world, partner, home);
+  return { boxTestsPerSecondWaiting: perSecond, stillWaiting, cameBackAfter: +(k / 120).toFixed(3), back: !g.ghost };
+});
+t.check(`a seed waiting for somewhere to land doesn't search every step (${waiting.boxTestsPerSecondWaiting} box tests a second), and comes back as soon as there is somewhere`, waiting.stillWaiting && waiting.boxTestsPerSecondWaiting < 20000 && waiting.back && waiting.cameBackAfter <= 0.15, waiting);
+t.check(
+  'a ring dropped when the vine is tied afresh is let go of by its sprout too: pushing up doesn’t reel it into its partner',
+  honest.staleHook.held && !honest.staleHook.flag && !honest.staleHook.vine && honest.staleHook.crept < 4 && honest.staleHook.gap1 > honest.staleHook.gap0 + 32,
+  honest.staleHook,
+);
+t.check(
+  `a TUG with no vine tied does nothing, on either screen (sprouts ${honest.untiedTug.apart} tiles apart, partner thrown at ${honest.untiedTug.thrown} px/s)`,
+  !honest.untiedTug.tied && honest.untiedTug.apart > 2.2 && honest.untiedTug.thrown < 1 && honest.untiedTug.yankedNeverTied < 1 && honest.untiedTug.yankedAfterUntie < 1,
+  honest.untiedTug,
+);
+t.check('a ring the partner shot, heard while this vine is untied, bends nothing', !honest.untiedHook.tied && honest.untiedHook.bends === 0 && honest.untiedHook.limit === 256 && !honest.untiedHook.partnerHolds, honest.untiedHook);
+t.check('a ring shot past a ledge with the partner below its lip: the vine goes round the corner, not through it', honest.shotLeg.hooked && honest.shotLeg.legsThroughRock === 0, honest.shotLeg);
+t.check('tying the vine across a floor a tile thick takes it round the end, not through the rock', honest.tieThrough.tied && honest.tieThrough.legsThroughRock === 0, honest.tieThrough);
+t.check('holding on lets go the step the ground goes from under you', honest.anchorFalls.anchored === false && honest.anchorFalls.afterSecs > 0.3, honest.anchorFalls);
+
 await browser.close();
 t.finish('physics', page.errors);
 

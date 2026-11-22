@@ -1,6 +1,7 @@
 import { audio } from '../audio/audio';
 import type { MenuInput } from '../core/input';
 import { ceremony } from '../core/testmode';
+import { warmGlyphs } from './glyphs';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -44,8 +45,14 @@ export class ButtonList {
   private armMs = 0;
   /** polls left before confirm counts, counted down in update() — see UNASKED_ARM_POLLS */
   private armPolls = 0;
+  /** the button a pointer went down on (see onUp) */
+  private down: HTMLElement | null = null;
+  /** a press rescued on pointerup, whose own click may yet arrive: that click is the same press */
+  private rescued: { act: string; at: number } | null = null;
   private readonly onClick: (e: Event) => void;
   private readonly onMove: (e: PointerEvent) => void;
+  private readonly onDown: (e: PointerEvent) => void;
+  private readonly onUp: (e: PointerEvent) => void;
 
   constructor(
     private readonly root: HTMLElement,
@@ -53,14 +60,38 @@ export class ButtonList {
     private readonly back: (() => void) | null = null,
     private readonly axis: 'v' | 'h' | 'both' = 'v',
   ) {
-    this.onClick = (e: Event) => {
-      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
-      if (!el || !root.contains(el) || el.classList.contains('off')) return;
-      if (this.guarded()) return;
+    const pressed = (el: HTMLElement) => {
       const i = this.items().indexOf(el);
       if (i >= 0) this.sel = i;
       this.highlight();
       this.press(el);
+    };
+    this.onClick = (e: Event) => {
+      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+      if (!el || !root.contains(el) || el.classList.contains('off')) return;
+      const r = this.rescued;
+      this.rescued = null;
+      if (r && r.act === el.dataset.act && performance.now() - r.at < 1000) return;
+      if (this.guarded()) return;
+      pressed(el);
+    };
+    // A screen rebuilt by news (the partner's save, their profile) between a button going down and
+    // coming up replaces the button under the pointer, and a mouse's click needs both ends on the same
+    // element: it was lost. The new button that the pointer comes up on, doing the same thing as the one
+    // it went down on, is that press. (A touch's click still comes, from where the finger lifted: it is
+    // the same press, and counts once.)
+    this.onDown = (e: PointerEvent) => {
+      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+      this.down = el && root.contains(el) ? el : null;
+    };
+    this.onUp = (e: PointerEvent) => {
+      const was = this.down;
+      this.down = null;
+      if (!was || was.isConnected) return; // (the click comes as usual)
+      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+      if (!el || el.dataset.act !== was.dataset.act || !root.contains(el) || el.classList.contains('off') || this.guarded()) return;
+      this.rescued = { act: el.dataset.act!, at: performance.now() };
+      pressed(el);
     };
     // There is one highlight, and a mouse (or the Xbox browsing cursor) moves it like the arrows do:
     // otherwise a button under a resting pointer looks just as chosen as the highlighted one, and
@@ -76,7 +107,11 @@ export class ButtonList {
     };
     root.addEventListener('click', this.onClick);
     root.addEventListener('pointermove', this.onMove);
+    root.addEventListener('pointerdown', this.onDown);
+    root.addEventListener('pointerup', this.onUp);
     this.highlight();
+    // (the first menu of the session: get the symbols the next ones show ready while nothing's happening)
+    warmGlyphs();
   }
 
   items() {
@@ -168,5 +203,7 @@ export class ButtonList {
   dispose() {
     this.root.removeEventListener('click', this.onClick);
     this.root.removeEventListener('pointermove', this.onMove);
+    this.root.removeEventListener('pointerdown', this.onDown);
+    this.root.removeEventListener('pointerup', this.onUp);
   }
 }

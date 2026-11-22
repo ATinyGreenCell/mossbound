@@ -3,7 +3,7 @@
 // still count as one player; a gentle wobbly push on a stick moves a menu once, not three times; a
 // pad whose first move is the stick keeps that stick; and a stick held when the page loses focus
 // doesn't walk the sprout on by itself.
-import { frames, launch, open, padPress, reporter, screenName, waitFor } from './harness.mjs';
+import { XBOX_UA, frames, launch, open, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -187,6 +187,130 @@ const localLevel = async (page, seats, gen, level = 0) => {
   const pushed = await dev();
   const jp = await page.evaluate(() => window.__jp);
   t.check('it walks again once the stick has come back to centre, and the held Ⓐ never re-presses', back.moveX === 0 && pushed.moveX > 0.5 && jp === 0, { back, pushed, freshJumpPresses: jp });
+  await done(page);
+}
+
+// ---------------------------------------------------------------- one press, arriving twice
+// Edge on an Xbox may hand one controller press to the page twice: as the controller's button and as a
+// key press (Ⓐ as ENTER, the d-pad as the arrows), a frame or so apart and in either order — and Steam
+// Input's desktop layout does the same on a PC. A menu acts on it once, and the hints stay on the
+// controller. A real keyboard beside the controller still works.
+{
+  const page = await open(browser, { ua: XBOX_UA, pads: 1, storage: { 'mossbound.settings.v1': { color: 3, lastRoom: 'K7QX', lastRole: 'guest' } } });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(500);
+  /** The pad's button and its key twin, `gap` frames apart — the key that many frames later, or (negative) earlier. */
+  const twin = (b, code, gap) => page.evaluate((b, code, gap) => new Promise((resolve) => {
+    const pad = (on) => { window.__pads[0].buttons[b] = { pressed: on, touched: on, value: on ? 1 : 0 }; };
+    const key = (type) => window.dispatchEvent(new KeyboardEvent(type, { key: code, code }));
+    const padAt = gap >= 0 ? 0 : -gap;
+    const keyAt = gap >= 0 ? gap : 0;
+    const end = Math.max(padAt, keyAt) + 3;
+    let n = 0;
+    const f = () => {
+      if (n === padAt) pad(true);
+      if (n === keyAt) key('keydown');
+      if (n === end) { pad(false); key('keyup'); }
+      if (++n <= end + 4) requestAnimationFrame(f);
+      else resolve();
+    };
+    requestAnimationFrame(f);
+  }), b, code, gap);
+  const title = () => page.evaluate(() => window.__fbTitle.list.sel);
+  const titleAt = (i) => page.evaluate((i) => { window.__fbTitle.list.sel = i; window.__fbTitle.list.highlight(); }, i);
+  const backToTitle = async () => {
+    await page.evaluate(() => window.__fb.flow.title());
+    await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'TitleScreen' && document.querySelectorAll('.title-screen').length === 1), 4000, 'title');
+    await sleep(450);
+  };
+  // the first press shows the pad to the page (Ⓨ: it does nothing on the title)
+  await padPress(page, 0, 3);
+  await titleAt(0);
+  await twin(13, 'ArrowDown', 1);
+  const padFirst = await title();
+  // (the key half came last: it's what would have named the keyboard as the device in use)
+  await sleep(250);
+  const device = await page.evaluate(() => window.__fb.app.input.lastDevice);
+  await twin(13, 'ArrowDown', -1);
+  const keyFirst = await title();
+  t.check('a d-pad press that also arrives as an arrow key moves the highlight one row, in either order', padFirst === 1 && keyFirst === 2, { padFirst, keyFirst });
+  t.check('…and the hints stay on the controller', device === 'pad', device);
+  // Ⓐ on SETTINGS, with its ENTER a frame behind: the settings open, and that ENTER doesn't also press
+  // the first colour there
+  await titleAt(4);
+  await twin(A, 'Enter', 1);
+  await sleep(200);
+  const colour = () => page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.settings.v1')).color);
+  const settings1 = { open: await page.evaluate(() => !!document.querySelector('.panel.settings')), colour: await colour() };
+  await backToTitle();
+  await titleAt(4);
+  await twin(A, 'Enter', -1);
+  await sleep(200);
+  const settings2 = { open: await page.evaluate(() => !!document.querySelector('.panel.settings')), colour: await colour() };
+  t.check('Ⓐ on SETTINGS that also arrives as ENTER opens the settings and changes nothing there, in either order', settings1.open && settings1.colour === 3 && settings2.open && settings2.colour === 3, { settings1, settings2 });
+  // Ⓐ on JOIN A ROOM: the join page's first button is JOIN, with last time's code already filled in
+  await backToTitle();
+  await page.evaluate(() => window.__fb.flow.online());
+  await waitFor(async () => (await screenName(page)) === 'OnlineScreen', 4000, 'online');
+  await sleep(450);
+  await page.evaluate(() => { const s = window.__fb.app.current; s.list.sel = s.list.items().findIndex((e) => e.dataset.act === 'join'); s.list.highlight(); });
+  await twin(A, 'Enter', 1);
+  await sleep(200);
+  const joined = await page.evaluate(() => ({ state: window.__fb.app.current.state, link: window.__fb.flow.link?.code ?? null }));
+  t.check('Ⓐ on JOIN A ROOM that also arrives as ENTER opens the code box, and joins nothing', joined.state === 'join' && joined.link === null, joined);
+  // a keyboard on the Xbox, with the controller beside it: its own presses still count
+  await backToTitle();
+  await titleAt(0);
+  await page.keyboard.press('ArrowDown');
+  await frames(page, 2);
+  const kbd = await title();
+  // (the hints follow a key ~80 ms after it, once no controller press has matched it: on a slow runner
+  // that lands a frame or two later — waited for, not slept on)
+  await waitFor(() => page.evaluate(() => window.__fb.app.input.lastDevice === 'keyboard'), 2000, 'the hints following the keyboard').catch(() => undefined);
+  const kbdDevice = await page.evaluate(() => window.__fb.app.input.lastDevice);
+  t.check('a key pressed on its own still moves the highlight, and the hints follow the keyboard', kbd === 1 && kbdDevice === 'keyboard', { kbd, kbdDevice });
+  await page.evaluate(() => window.__fb.flow.title());
+  await done(page);
+}
+
+// ---------------------------------------------------------------- a controller alone keeps the game
+// On an Xbox, Ⓑ in Edge's browsing controls is "back a page". The game keeps a history entry of its
+// own on top for that, but it was only put there by a click or a key press — so an Xbox played on the
+// controller alone had none, and the first "back" (after a reload hands the controller to Edge's
+// cursor again, say) left the game.
+{
+  const page = await open(browser, { ua: XBOX_UA, pads: 1 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(400);
+  const len0 = await page.evaluate(() => history.length);
+  await padPress(page, 0, 13);
+  await padPress(page, 0, 12);
+  const len1 = await page.evaluate(() => history.length);
+  await page.evaluate(() => history.back()).catch(() => undefined);
+  await sleep(800);
+  const stayed = await page.evaluate(() => !!window.__fb?.app?.current).catch(() => false);
+  t.check('on an Xbox a controller press puts the back guard in place: "back" stays in the game', len1 === len0 + 1 && stayed, { len0, len1, stayed });
+  errors.push(...page.errors);
+  await page.close().catch(() => undefined);
+}
+
+// ---------------------------------------------------------------- the stick is not a button press
+// A button going down is what lets the browser start the sound (and put the back guard in place); a
+// stick being held is not, and asking again every frame of a walk — sixty times a second — was work for
+// nothing (two audio automation events each time).
+{
+  const page = await open(browser, { pads: 1 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(300);
+  await page.evaluate(() => { window.__padPresses = 0; const app = window.__fb.app; const was = app.onPadPress; app.onPadPress = () => { window.__padPresses++; was?.(); }; });
+  await padPress(page, 0, 3);
+  const afterPress = await page.evaluate(() => window.__padPresses);
+  await page.evaluate(() => { window.__pads[0].axes[0] = 1; });
+  await sleep(1000);
+  const whileHeld = (await page.evaluate(() => window.__padPresses)) - afterPress;
+  const device = await page.evaluate(() => window.__fb.app.input.lastDevice);
+  await page.evaluate(() => { window.__pads[0].axes[0] = 0; });
+  t.check('a button press counts once as a press; holding the stick for a second counts none', afterPress === 1 && whileHeld === 0 && device === 'pad', { afterPress, whileHeld, device });
   await done(page);
 }
 

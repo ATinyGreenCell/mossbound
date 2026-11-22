@@ -2,7 +2,7 @@ import { audio } from './audio/audio';
 import type { App } from './app';
 import { clamp } from './core/math';
 import type { DeviceId } from './core/input';
-import { flushSave, freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
+import { clip, cleanSave, flushSave, freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
 import { saveSettings, settings } from './core/settings';
 import { COURSE, COURSE_INDEX, LEVELS } from './game/levels';
 import { Session } from './game/session';
@@ -22,7 +22,25 @@ export interface NetAware {
   onProfile?(): void;
 }
 
-export const myProfile = (): Profile => ({ name: settings.name.trim().slice(0, 12), color: settings.color, hat: settings.hat });
+/** A name for the wire: at most `n` characters, never half an emoji (nor the half that a cut elsewhere left behind). */
+function nameOf(s: unknown, n: number) {
+  if (typeof s !== 'string') return '';
+  // (by hand rather than a lookbehind, which Safari before 16.4 can't even parse)
+  let whole = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) whole += s[i] + s[++i];
+    } else if (c < 0xdc00 || c > 0xdfff) whole += s[i];
+  }
+  return clip(whole, n);
+}
+
+export const myProfile = (): Profile => ({ name: nameOf(settings.name.trim(), 12), color: settings.color, hat: settings.hat });
+
+/** What only the host says: from the other side, they are ignored (see onCtrl). */
+const HOST_WORDS = new Set<CtrlMsg['t']>(['load', 'lobby', 'pick', 'end', 'kinds', 'clear']);
 
 /** How often the host repeats a level load until the guest confirms it. */
 const LOAD_RETRY_MS = 1000;
@@ -45,6 +63,10 @@ export class Flow {
   private openedAt = 0;
   private loadRetry = 0;
   private saveTimer = 0;
+  /** the copy of our save the partner was last sent (the same copy never goes twice running) */
+  private saveSent = '';
+  /** the partner (peerGen) whose profile we answered with ours (see 'profile') */
+  private profileFor = -1;
   private peerGen = 0;
   /** host: the command counter; guest: the newest command obeyed (see protocol 'c') */
   private cmd = 0;
@@ -121,11 +143,15 @@ export class Flow {
     this.lastSent = null;
     this.hostKinds = null;
     this.kindsSeq = 0;
+    this.profileFor = -1;
+    this.saveSent = '';
     link.onStatus = (s, d) => {
       if (s === 'connected') {
         // a new partner (or the same one after a reload): introduce ourselves and swap saves
         link.send({ t: 'profile', p: myProfile() });
-        link.send({ t: 'save', s: save });
+        // (on every (re)connection: whatever was in flight when the link dropped may never have arrived)
+        this.saveSent = '';
+        this.shareSave(true);
         if (link.peerGen !== this.peerGen) {
           this.peerGen = link.peerGen;
           // a different partner instance (e.g. their page reloaded): their command counter starts over
@@ -147,9 +173,13 @@ export class Flow {
   }
 
   private onCtrl(m: CtrlMsg) {
+    // the host's words, from anyone but the host (a damaged build, or not our partner at all): nothing
+    // they say about where we go, who is which sprout, or whether the level is won changes anything here
+    if (HOST_WORDS.has(m.t) && this.role !== 'guest') return;
+    if (m.t === 'loaded' && this.role !== 'host') return;
     // host commands that arrive out of order (over two paths): only ever obey the newest
     if ((m.t === 'load' || m.t === 'lobby' || m.t === 'pick' || m.t === 'end') && this.role === 'guest') {
-      if (!Number.isInteger(m.c) || m.c <= this.lastCmd) {
+      if (!Number.isSafeInteger(m.c) || m.c <= this.lastCmd) {
         // (a repeat of the load we're in still gets its acknowledgement)
         if (m.t === 'load' && m.n === this.nonce) this.link?.send({ t: 'loaded', n: m.n });
         return;
@@ -159,22 +189,35 @@ export class Flow {
     switch (m.t) {
       case 'profile': {
         const p = m.p as Partial<Profile> | undefined;
-        this.partner = { name: String(p?.name ?? '').slice(0, 12), color: Math.abs(Math.floor(Number(p?.color) || 0)) % 64, hat: String(p?.hat ?? 'none').slice(0, 16) };
+        this.partner = { name: nameOf(p?.name, 12), color: Math.abs(Math.floor(Number(p?.color) || 0)) % 64, hat: nameOf(p?.hat, 16) || 'none' };
+        // the first word from this partner: answer with ours (and, as host, who's which sprout), once —
+        // ours may have gone out while they couldn't take it yet (a page reload and a rejoin, a link
+        // that came back), and both sides have to end up knowing each other
+        if (this.link && this.profileFor !== this.link.peerGen) {
+          this.profileFor = this.link.peerGen;
+          this.link.send({ t: 'profile', p: myProfile() });
+          this.shareKinds();
+        }
         this.screen?.onProfile?.();
         break;
       }
       case 'kinds': {
         // the host's word on who's which sprout (the newest only: it can arrive by either path)
         const k = m.k;
-        if (this.role !== 'guest' || !Number.isInteger(m.c) || m.c <= this.kindsSeq || !Array.isArray(k) || !isKind(k[0]) || !isKind(k[1])) return;
+        if (this.role !== 'guest' || !Number.isSafeInteger(m.c) || m.c <= this.kindsSeq || !Array.isArray(k) || !isKind(k[0]) || !isKind(k[1])) return;
         this.kindsSeq = m.c;
         this.hostKinds = [k[0], k[1]];
         break;
       }
       case 'save': {
-        const changed = mergeSave(m.s);
-        // their copy was missing something of ours: send ours back (stops once both match)
-        if (!sameSave(m.s, save)) this.shareSave(true);
+        // (a save that isn't one: nothing to merge, and nothing owed in return)
+        const theirs = cleanSave(m.s);
+        if (!theirs) return;
+        const changed = mergeSave(theirs);
+        // their copy was missing something of ours: send ours back. Once for each state of ours — two
+        // copies that can't fully agree (one holding a run counted absurdly far ahead, which the other
+        // refuses by design, see save.ts) swap once each and stop instead of answering each other for ever
+        if (!sameSave(theirs, save)) this.shareSave(true);
         if (changed) this.screen?.onSave?.();
         return;
       }
@@ -243,7 +286,12 @@ export class Flow {
   shareSave(now = false) {
     if (this.mode !== 'online' || !this.link?.connected) return;
     window.clearTimeout(this.saveTimer);
-    const send = () => this.link?.send({ t: 'save', s: save });
+    const send = () => {
+      const s = JSON.stringify(save);
+      if (s === this.saveSent || !this.link) return;
+      this.saveSent = s;
+      this.link.send({ t: 'save', s: save });
+    };
     if (now) send();
     else this.saveTimer = window.setTimeout(send, 400);
   }

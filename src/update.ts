@@ -4,26 +4,34 @@
  * Asked for on 2026-11-21: "any updates you push automatically apply to the current game instance
  * seamlessly and don't lose progress or kill the save file". The page asks the site's version.json
  * now and then, and whenever it comes back into view. When the site is serving another build, this
- * waits for a moment that costs nothing, writes everything down (flushSave), notes where the players
- * were, and reloads. The service worker fetches index.html fresh whenever there is a network (see
- * vite.config.ts), so the reload IS the new build, and the new page puts the players back.
+ * waits for a moment that costs nothing, stops the game where it is (`App.halt`), writes everything
+ * down (flushSave), notes where the players were, and reloads. The reload asks for `?u=<version>`,
+ * which tells the service worker to wait for the network however long it takes (see vite.config.ts),
+ * so the reload IS the new build, and the new page puts the players back.
  *
  * A moment that costs nothing:
  *   - the title, the level select or the ending, on one screen — nothing in hand to lose;
- *   - a level's clear card: the clear is recorded, and it comes back to the level select;
+ *   - the first moments of a level begun after the update was found, before anything is found in it:
+ *     NEXT LEVEL or PLAY AGAIN off a clear card lands here, and so the update goes when the players
+ *     leave their clear card — which they get to read first, however long they like;
  *   - in a level on one screen, the moment a lantern is lit: that IS where the level carries on
  *     from, so coming back to it gives up no ground at all. Not on an Xbox, though: Edge may hand the
  *     controllers back to its cursor on a reload ("Use game controls" again), and the middle of a
- *     level is the wrong place to find that out — there it waits for the clear card instead.
+ *     level is the wrong place to find that out — there it waits for the start of the next level, or
+ *     the level select.
  * Never:
  *   - in an online room, which a reload would drop the partner out of: it waits until it is left;
- *   - on the practice ground or the debug ground, in a lobby still taking seats, or in Settings.
+ *   - on the practice ground or the debug ground, in a lobby still taking seats, or in Settings;
+ *   - when this browser keeps nothing for the site (storage blocked or full): the journal then lives
+ *     only in the page, and a reload would take everything played with it. The badge says so.
  *
- * The save is never what's at stake: it is the same localStorage before and after, written out just
- * before the reload and merged as always after it. An update changes the code, not the journal.
+ * The level comes back from the journal (resumeOf), which the old page wrote last, as it went away —
+ * not from the note, which only says which screen and which seats. So whatever reached the journal
+ * comes back, and a level whose map the update changed gets its lantern back but not the old map's
+ * seeds (see resumeOf). The test course keeps no run: it comes back from the note.
  */
 import type { App } from './app';
-import { flushSave } from './core/save';
+import { canSave, flushSave, resumeOf } from './core/save';
 import type { DeviceId } from './core/input';
 import { IS_XBOX } from './core/platform';
 import { cleanResume, type Flow } from './flow';
@@ -41,44 +49,99 @@ const BACK_KEY = 'mossbound.update.back';
 /** sessionStorage: the build last reloaded for, how many times, and when (a stale cache can't loop us) */
 const TRIED_KEY = 'mossbound.update.tried';
 const POLL_MS = 90_000;
+/** a version check that hasn't answered in this long has failed (a stalled connection never answers) */
+const CHECK_TIMEOUT_MS = 10_000;
 /** a note older than this is from some other visit (a tab restored a day later), not from this reload */
 const BACK_FRESH_MS = 120_000;
+/** a level played for less than this (and nothing found in it yet) has nothing in hand to lose */
+const JUST_STARTED_S = 3;
+/** the address parameter that marks the reload as an update's (see vite.config.ts: it waits for the network) */
+const UPDATE_PARAM = 'u';
 
 type Seats = [DeviceId, DeviceId];
-type Back = { to: 'title' } | { to: 'levels'; seats: Seats } | { to: 'level'; level: number; resume: Resume; seats: Seats };
+type Back =
+  | { to: 'title' }
+  | { to: 'levels'; seats: Seats }
+  /** `resume`: where it stood (the course's only record; older builds read it too); `fresh`: a new start of the level */
+  | { to: 'level'; level: number; id: string; resume: Resume; seats: Seats; fresh?: boolean };
 
+/**
+ * The tab's own name: it outlives a reload and needs no storage, so the note and the reload guard live
+ * there when this browser refuses the site sessionStorage (they'd otherwise be forgotten each time —
+ * and a guard that's forgotten reloads for ever).
+ */
+const NAME_PREFIX = 'mossbound:';
+function nameStore(): Record<string, unknown> {
+  try {
+    return window.name.startsWith(NAME_PREFIX) ? (JSON.parse(window.name.slice(NAME_PREFIX.length)) as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
 const read = (k: string): unknown => {
   try {
     const s = sessionStorage.getItem(k);
     return s ? JSON.parse(s) : null;
   } catch {
-    return null;
+    return nameStore()[k] ?? null;
   }
 };
-const write = (k: string, v: unknown) => {
+/** Remember `v` (null forgets it) for this tab, across the reload. False if there's nowhere to keep it. */
+const write = (k: string, v: unknown): boolean => {
   try {
     if (v === null) sessionStorage.removeItem(k);
     else sessionStorage.setItem(k, JSON.stringify(v));
+    return true;
   } catch {
-    // private window or blocked storage: the update still happens, it just comes back to the title
+    try {
+      const all = nameStore();
+      if (v === null) delete all[k];
+      else all[k] = v;
+      window.name = Object.keys(all).length ? NAME_PREFIX + JSON.stringify(all) : '';
+      return true;
+    } catch {
+      return false;
+    }
   }
 };
 
 const isSeat = (s: unknown): s is DeviceId => typeof s === 'string' && /^(keys|keysL|keysR|pad\d)$/.test(s);
 const seatsOf = (v: unknown): Seats | null => (Array.isArray(v) && v.length === 2 && isSeat(v[0]) && isSeat(v[1]) ? [v[0], v[1]] : null);
 
+/** A level that has only just begun, with nothing found in it yet: NEXT LEVEL / PLAY AGAIN just landed here. */
+function justStarted(s: Session) {
+  const r = s.opts.resume;
+  if (s.time - (r?.time ?? 0) > JUST_STARTED_S || s.checkpoint !== (r?.cp ?? -1)) return false;
+  let seeds = 0;
+  for (const v of s.seedTaken) seeds += v;
+  let grown = 0;
+  for (const v of s.world.grown) grown += v;
+  return seeds === (r?.seeds.length ?? 0) && grown === (r?.grown?.length ?? 0) && s.feathers === (r?.feathers ?? 0);
+}
+
+/** What the update watches: the screen it was found on, and the level (and its lantern) it then sat in. */
+type Watch = { on: unknown; s: Session | null; cp: number };
+
 /**
  * Is now a moment the update costs nothing — and if so, where do the players come back to?
  * `lit` remembers the level being watched and the lantern it was at when the update was found.
  */
-function moment(app: App, flow: Flow, lit: { s: Session | null; cp: number }): Back | null {
+function moment(app: App, flow: Flow, lit: Watch): Back | null {
   // an online room, even one the partner has left for now: they would lose it
   if (flow.link) return null;
+  // nothing is kept for this site: a reload would take everything played this session with it
+  if (!canSave()) return null;
   const cur = app.next;
   if (cur instanceof TitleScreen || cur instanceof EndingScreen) return { to: 'title' };
-  if (cur instanceof LevelSelect) return { to: 'levels', seats: [flow.seats[0], flow.seats[1]] };
+  const seats: Seats = [flow.seats[0], flow.seats[1]];
+  if (cur instanceof LevelSelect) return { to: 'levels', seats };
   if (!(cur instanceof Session) || cur.online || cur.solo) return null;
-  if (cur.state === 'clear') return { to: 'levels', seats: [flow.seats[0], flow.seats[1]] };
+  // the clear card is theirs to read: the update goes when they leave it (the level select, or the start
+  // of whatever they pick next — both of which are moments of their own)
+  if (cur.state === 'clear') return null;
+  const here = () => ({ to: 'level' as const, level: cur.L.index, id: cur.L.def.id, resume: cur.resumeState(), seats });
+  // a level begun since the update was found (NEXT LEVEL off a clear card), with nothing in it yet
+  if (cur !== lit.on && cur.state === 'play' && justStarted(cur)) return { ...here(), fresh: !cur.opts.resume };
   if (IS_XBOX) return null;
   if (lit.s !== cur) {
     lit.s = cur;
@@ -86,7 +149,7 @@ function moment(app: App, flow: Flow, lit: { s: Session | null; cp: number }): B
     return null;
   }
   if (cur.checkpoint === lit.cp || cur.checkpoint < 0) return null;
-  return { to: 'level', level: cur.L.index, resume: cur.resumeState(), seats: [flow.seats[0], flow.seats[1]] };
+  return here();
 }
 
 /** Reloading for `v` again would be a loop: the site says it's there, but the reload keeps landing on this one. */
@@ -128,6 +191,8 @@ function badge(app: App) {
   }
   let text = `v${VERSION}`;
   if (import.meta.env.DEV && !seen.site && !seen.want) text += ' · dev';
+  // (nothing is kept for this site, so it won't reload by itself: say what reloading would cost)
+  else if (seen.want && !canSave()) text += ` · v${seen.want} is out — reloading would lose this session`;
   else if (seen.want) text += ` · v${seen.want} is out — loading it`;
   else if (seen.site === VERSION) text += ' · latest ✓';
   else if (seen.site) text += ` · v${seen.site} is out — reload to get it`;
@@ -144,7 +209,7 @@ function badge(app: App) {
 
 async function siteVersion(): Promise<string | null> {
   try {
-    const res = await fetch(new URL('version.json', document.baseURI).href, { cache: 'no-store' });
+    const res = await fetch(new URL('version.json', document.baseURI).href, { cache: 'no-store', signal: timeout(CHECK_TIMEOUT_MS) });
     if (!res.ok) return null;
     const v = ((await res.json()) as { version?: unknown })?.version;
     return typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v) ? v : null;
@@ -153,31 +218,69 @@ async function siteVersion(): Promise<string | null> {
   }
 }
 
+function timeout(ms: number): AbortSignal | undefined {
+  if (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) return AbortSignal.timeout(ms);
+  if (typeof AbortController === 'undefined') return undefined;
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
+/** This page's address, asking for build `v` (the service worker waits for the network for it). */
+function updateUrl(v: string) {
+  const u = new URL(location.href);
+  u.searchParams.set(UPDATE_PARAM, v);
+  return u.href;
+}
+
 /** Keep an eye on the site for a newer build, and take it at the first moment that costs nothing. */
 export function watchUpdates(app: App, flow: Flow) {
   let want: string | null = null;
   let timer = 0;
-  const lit = { s: null as Session | null, cp: -1 };
+  const lit: Watch = { on: null, s: null, cp: -1 };
+  /** how long the new page may take before this try is given up (tests shorten it) */
+  let giveUpMs = 20_000;
   const tryNow = () => {
     if (!want) return;
     const back = moment(app, flow, lit);
     if (!back) {
-      const inLevel = app.next instanceof Session && !(app.next as Session).online && !(app.next as Session).solo;
+      const inLevel = app.next instanceof Session && !(app.next as Session).online && !(app.next as Session).solo && canSave();
       pill(app, inLevel ? `<b>✦ a new version is ready</b><span>${IS_XBOX ? 'it loads when this level is done' : 'it loads at the next lantern'}</span>` : null);
       return;
     }
+    // the guard against reloading for ever has to survive the reload, or it guards nothing
+    const t = read(TRIED_KEY) as { v?: string; n?: number } | null;
+    if (!write(TRIED_KEY, { v: want, n: t?.v === want ? (t.n ?? 0) + 1 : 1, at: Date.now() })) return;
     window.clearInterval(timer);
+    // From here on nothing moves: the next page can take seconds to arrive on a slow network, and
+    // anything done meanwhile would be done on a page that's about to go.
+    app.halt();
     pill(app, null);
+    pill(app, '<b>✦ loading the new version…</b>');
     // everything in hand goes into the journal first (a level hands over its run: see onFlush)
     flushSave();
     write(BACK_KEY, { from: VERSION, at: Date.now(), back });
-    const t = read(TRIED_KEY) as { v?: string; n?: number } | null;
-    write(TRIED_KEY, { v: want, n: t?.v === want ? (t.n ?? 0) + 1 : 1, at: Date.now() });
-    location.reload();
+    location.replace(updateUrl(want));
+    // …and if the new page never comes (a network that takes the request and never answers), the game
+    // can't stay frozen on "loading" for ever: give up on this try, cancel the navigation, carry on where
+    // we were, and let a later look find the update again (the tries are counted: see tooSoon)
+    window.setTimeout(() => {
+      try {
+        window.stop();
+      } catch {
+        // nothing to stop
+      }
+      write(BACK_KEY, null);
+      pill(app, null);
+      want = seen.want = null;
+      app.resume();
+      badge(app);
+    }, giveUpMs);
   };
   const found = (v: string) => {
     if (v === VERSION || v === want || tooSoon(v)) return;
     want = seen.want = v;
+    lit.on = app.next;
     lit.s = null;
     window.clearInterval(timer);
     timer = window.setInterval(tryNow, 400);
@@ -211,6 +314,9 @@ export function watchUpdates(app: App, flow: Flow) {
       __fbUpdate: {
         found,
         version: VERSION,
+        giveUpAfter: (ms: number) => {
+          giveUpMs = ms;
+        },
         /** what a check of the site would have said (a version, or null for a failed check) */
         checked: (v: string | null) => {
           seen.failed = !v;
@@ -224,6 +330,18 @@ export function watchUpdates(app: App, flow: Flow) {
     });
 }
 
+/** The update's mark on the address (`?u=`) has done its job by the time the page runs: take it off. */
+function plainAddress() {
+  try {
+    const u = new URL(location.href);
+    if (!u.searchParams.has(UPDATE_PARAM)) return;
+    u.searchParams.delete(UPDATE_PARAM);
+    history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+  } catch {
+    // an address that can't be rewritten keeps its mark: harmless
+  }
+}
+
 /**
  * The page has just reloaded for an update: put the players back where they were — the level from
  * its lantern, or the level select — rather than at the title. True if it did.
@@ -234,7 +352,8 @@ export function watchUpdates(app: App, flow: Flow) {
  * its player's, with no "controller disconnected" to answer first.
  */
 export function comeBack(app: App, flow: Flow): boolean {
-  const note = read(BACK_KEY) as { from?: unknown; at?: unknown; back?: { to?: unknown; level?: unknown; resume?: unknown; seats?: unknown } } | null;
+  plainAddress();
+  const note = read(BACK_KEY) as { from?: unknown; at?: unknown; back?: { to?: unknown; level?: unknown; id?: unknown; resume?: unknown; seats?: unknown; fresh?: unknown } } | null;
   write(BACK_KEY, null);
   if (VERSION === (read(TRIED_KEY) as { v?: string } | null)?.v) write(TRIED_KEY, null);
   if (!note || typeof note.at !== 'number' || Math.abs(Date.now() - note.at) > BACK_FRESH_MS || !note.back) return false;
@@ -253,8 +372,23 @@ export function comeBack(app: App, flow: Flow): boolean {
       return d?.connected ? d.generation : (d?.generation ?? 0) + 1;
     }) as [number, number];
     const level = b.level;
-    if (b.to === 'level' && Number.isInteger(level) && (level === COURSE_INDEX || ((level as number) >= 0 && (level as number) < LEVELS.length))) {
-      flow.playLevel(level as number, cleanResume(b.resume));
+    if (b.to === 'level' && level === COURSE_INDEX) {
+      // the test course keeps no run: the note is all there is of where it stood
+      flow.playLevel(COURSE_INDEX, b.fresh === true ? undefined : cleanResume(b.resume));
+      went = true;
+    } else if (b.to === 'level' && Number.isInteger(level)) {
+      // by its name rather than its place in the list, which an update may change (notes from 1.9.1 and
+      // before carry only the place)
+      const byId = typeof b.id === 'string' ? LEVELS.findIndex((L) => L.id === b.id) : -1;
+      const i = byId >= 0 ? byId : typeof b.id === 'string' ? -1 : (level as number);
+      if (i >= 0 && i < LEVELS.length) {
+        // a fresh start (NEXT LEVEL / PLAY AGAIN had just landed there) starts fresh again; a run carries
+        // on from the journal — the last thing the old page wrote — and if there's no run left to carry on
+        // (it was finished), the level select it is
+        if (b.fresh === true) flow.playLevel(i);
+        else if (resumeOf(i)) flow.enterLevel(i);
+        else flow.levels();
+      } else flow.levels();
       went = true;
     } else if (b.to === 'levels') {
       flow.levels();

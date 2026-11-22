@@ -130,8 +130,9 @@ npm run test:e2e   # end-to-end suite in headless Chrome (online tests need inte
 
 The e2e suite (`tests/e2e/`) drives the real game: physics and swing-energy checks, a scripted run
 through every level, a fuzzed input soak, two-browser online play over both paths, outages and
-reloads, packet loss and jitter, local multiplayer, two controllers on an (emulated) Xbox, touch, menus, resizing, rendering (tile cache,
-GPU resets, the quality governor), saves, the debug ground, and quitting and coming back. Creature behaviour is checked separately in
+reloads, packet loss and jitter, network faults over a relay the test runs itself, local multiplayer, two controllers on an (emulated) Xbox, touch, menus, resizing, rendering (tile cache,
+GPU resets, the quality governor), saves, the debug ground, quitting and coming back, and the service worker across a
+deploy (two production builds, served as GitHub Pages serves them). Creature behaviour is checked separately in
 `tests/e2e/creatures.mjs`, which is pure logic bundled through Vite and so needs no browser at all:
 it asserts the two properties that keep two screens showing the same world — a beetle is a function
 of the shared clock and never integrated, and a snaptrap's round always comes back to dormant — and
@@ -172,11 +173,13 @@ fails twice blocks it. The built site serves `version.json`, so what's live can 
 
 An open game picks up a new version by itself. It checks `version.json` at boot and every 90 seconds,
 and when the site has moved on it waits for a moment that costs nothing — the title, the level select,
-a clear card, or (playing on one screen) the moment a lantern is lit — saves, reloads, and puts you
-back where you were: the same screen, or the same level at that lantern. Never in an online room (it
-waits until the room is left), and on an Xbox never mid-level. The corner of every menu says which
-version is running and whether it's the latest; if a reload keeps landing on an old copy, it says so
-instead of trying again.
+the start of the level you go on to from a clear card (which you get to read first), or (playing on
+one screen) the moment a lantern is lit — stops the game, saves, reloads, and puts you back where you
+were: the same screen, or the same level from its journal entry, at that lantern. Never in an online
+room (it waits until the room is left), never in a browser that keeps nothing for the site (a reload
+would lose the session — the badge says so), and on an Xbox never mid-level. The corner of every menu
+says which version is running and whether it's the latest; if a reload keeps landing on an old copy,
+it says so instead of trying again.
 
 ## The `mb` command
 

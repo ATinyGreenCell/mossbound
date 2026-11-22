@@ -55,6 +55,13 @@ const TESTS = [
   { name: 'practice', file: 'practice.mjs', est: 25, pass: passed('practice') },
   { name: 'course', file: 'course.mjs', est: 20, pass: passed('course') },
   { name: 'update', file: 'update.mjs', est: 30, pass: passed('update') },
+  // the journal and the partner's messages on scripted links (no network): newer builds' saves, the save
+  // exchange, a partner on a damaged build, the vine on both screens, a quiet direct path
+  { name: 'netsave', file: 'netsave.mjs', est: 45, pass: passed('netsave') },
+  // online over a relay the test runs itself (a local MQTT broker): rejoins, silent sockets, two brokers
+  { name: 'local-relay', file: 'localrelay.mjs', est: 75, pass: passed('local-relay') },
+  // two production builds served as GitHub Pages serves them: the service worker across a deploy
+  { name: 'sw', file: 'sw.mjs', est: 70, pass: passed('sw') },
   { name: 'debug', file: 'debug.mjs', est: 30, pass: passed('debug') },
   { name: 'xbox', file: 'xbox.mjs', est: 25, pass: passed('xbox') },
   { name: 'units', file: 'units.mjs', est: 20, pass: passed('units') },
@@ -62,6 +69,8 @@ const TESTS = [
   // with no Chrome, which is where creature changes get written.
   { name: 'creatures', file: 'creatures.mjs', est: 10, pass: passed('creatures') },
   { name: 'render', file: 'render.mjs', est: 25, pass: passed('render') },
+  // draws, pixels and repaints counted rather than timed, so it holds on a runner with no GPU
+  { name: 'paint', file: 'paint.mjs', est: 60, pass: passed('paint') },
   { name: 'pads', file: 'pads.mjs', est: 45, pass: passed('pads') },
   { name: 'frames', file: 'frames.mjs', est: 25, pass: passed('frames') },
   // times the sound library's build: run alone so a busy machine can't look like a hitch

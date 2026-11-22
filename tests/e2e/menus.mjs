@@ -1,7 +1,7 @@
 // Menus with every kind of input: keyboard through the title and settings (which persist), a
 // controller through the controls card and out of the room-code and name boxes, phone layout, Xbox,
 // the level select's CONTINUE, a fresh room code over an old one, and guards against a stray Ⓐ.
-import { XBOX_UA, frames, launch, open, padPress, reporter, screenName, slowFrames, sleep, waitFor } from './harness.mjs';
+import { SLOW, XBOX_UA, frames, launch, open, padPress, reporter, screenName, slowFrames, sleep, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -571,6 +571,344 @@ const guestRoom = (page) => page.evaluate(() => {
   const up = await page.evaluate(() => !!document.querySelector('.controls-panel'));
   t.check('a double-click on HOW TO PLAY leaves the card open', up, { up });
   t.check('no errors (controls card)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- a key or controller press that changes screen shows the new screen in the very frame that
+// handled it — and never a frame with the old menu and the new one painted on top of each other
+{
+  const page = await open(browser, { pads: 1 });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(450);
+  // a watcher that runs after the game's own frame, so what it sees is what that frame paints
+  await page.evaluate(() => {
+    const s = (window.__seen = { frame: 0, two: 0, ev: null, to: null, want: null });
+    const f = () => {
+      s.frame++;
+      if (document.querySelectorAll('.ui > .screen').length > 1) s.two++;
+      if (s.want && s.ev !== null && s.to === null && window.__fb.app.current?.constructor.name === s.want && document.querySelectorAll('.ui > .screen').length === 1) s.to = s.frame - s.ev;
+      requestAnimationFrame(f);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(f));
+    addEventListener('keydown', () => { if (s.want && s.ev === null) s.ev = s.frame; }, true);
+  });
+  const expect = (want) => page.evaluate((want) => Object.assign(window.__seen, { want, ev: null, to: null }), want);
+  const took = async (label) => {
+    const to = await waitFor(() => page.evaluate(() => window.__seen.to), 4000, label).catch(() => null);
+    return to;
+  };
+  await key(page, 'ArrowDown');
+  await expect('LocalScreen');
+  await page.keyboard.press('Enter');
+  const enter = await took('the lobby');
+  await sleep(450);
+  await expect('TitleScreen');
+  await page.keyboard.press('Escape');
+  const esc = await took('the title');
+  await sleep(450);
+  await page.evaluate(() => { window.__fbTitle.list.sel = 0; window.__fbTitle.list.highlight(); });
+  await expect('OnlineScreen');
+  // the controller's Ⓐ goes down between two frames, as a real one does
+  await page.evaluate(() => requestAnimationFrame(() => { window.__seen.ev = window.__seen.frame; window.__pads[0].buttons[0] = { pressed: true, touched: true, value: 1 }; }));
+  const pad = await took('the online menu');
+  await page.evaluate(() => { window.__pads[0].buttons[0] = { pressed: false, touched: false, value: 0 }; });
+  const two = await page.evaluate(() => window.__seen.two);
+  t.check('a press that changes screen shows the new one in the frame that handled it, never two at once', enter === 1 && esc === 1 && pad === 1 && two === 0, { framesTo: { enter, esc, pad }, framesWithTwoScreens: two });
+  t.check('no errors (same-frame screen change)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- the level select's highlight is unmistakable. Whatever else a card wears — the dashed outline of
+// the level the scenery shows, CONTINUE's gold one, the test course's dashed border — the card Ⓐ will
+// press looks like the highlighted card, and no other card does.
+{
+  const page = await open(browser);
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  const looks = () => page.evaluate(() => [...document.querySelectorAll('.levels-screen .card')].map((c) => {
+    const s = getComputedStyle(c);
+    return { act: c.dataset.act ?? 'locked', sel: c.classList.contains('sel'), look: `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor} ${s.outlineOffset}` };
+  }));
+  const toLevels = async () => {
+    await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.levels(); });
+    await waitFor(() => page.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 5000, 'level select');
+    await sleep(300);
+  };
+  await toLevels();
+  const fresh = await looks();
+  const highlight = fresh.find((c) => c.sel)?.look;
+  // a run under way in Fern Falls (from its first lantern): CONTINUE is what Ⓐ picks
+  await page.evaluate(() => { const s = window.__fb.save.save; s.unlocked = 2; s.levels.garden = { clears: 1, feathers: 1, time: 90 }; window.__fb.flow.enterLevel(1); });
+  await waitFor(() => page.evaluate(() => window.__fbSession?.L.index === 1 && window.__fb.app.current === window.__fbSession), 8000, 'Fern Falls');
+  await sleep(300);
+  await page.evaluate(() => window.__fbSession.light(0, true));
+  await toLevels();
+  const run = await looks();
+  await key(page, 'ArrowRight');
+  await key(page, 'ArrowRight');
+  const moved = await looks();
+  const plain = (state) => {
+    const on = state.find((c) => c.sel);
+    return !!on && on.look === highlight && state.filter((c) => c.look === highlight).length === 1;
+  };
+  t.check('the highlighted level card looks highlighted — over CONTINUE, the picked level and the test course — and no other card does', !!highlight && plain(fresh) && plain(run) && plain(moved), { highlight, fresh, run, moved });
+  t.check('no errors (level select highlight)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- the symbols the menus draw (✦ ▶ ⏱ 🔒 Ⓐ ☰ …) aren't in the game's font, and the first time one is
+// laid out the browser looks through the system's fonts for it — inside the layout of whatever screen
+// shows it first, in the frame of the press that asked for that screen. They are laid out once ahead
+// of time, while the title is idle, so a symbol laid out for the first time after that costs no more
+// than one laid out again. (A clock, on a machine that may be busy: up to three fresh pages, and one
+// clean measurement is the answer — the cost it looks for is there every time, or not at all.)
+{
+  const tries = [];
+  let errs = [];
+  for (let i = 0; i < 3; i++) {
+    const page = await open(browser);
+    await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+    await sleep(2500);
+    const layout = () => page.evaluate((s) => {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;left:-10000px;top:0;white-space:nowrap';
+      el.innerHTML = ['400', '600', '700'].map((w) => `<span style="font-weight:${w}">${s}</span>`).join('');
+      document.body.appendChild(el);
+      const t0 = performance.now();
+      void el.offsetWidth;
+      const ms = performance.now() - t0;
+      el.remove();
+      return +ms.toFixed(2);
+    }, '✦▶◀⏱🔒Ⓐ Ⓑ Ⓧ Ⓨ ☰ ⧉ ✓ ♥ ← → ↑ ↓');
+    const first = await layout();
+    const again = await layout();
+    tries.push({ first, again, ok: first <= 3 * again + 6 * SLOW });
+    errs = errs.concat(page.errors);
+    await page.close();
+    if (tries.at(-1).ok) break;
+  }
+  const last = tries.at(-1);
+  t.check(`the menus' symbols are ready before any screen needs them (first layout ${last.first} ms, again ${last.again} ms)`, last.ok, tries);
+  t.check('no errors (symbols ready)', !errs.length, errs.join('\n'));
+}
+
+// ---- settings on a phone: a change is made where it's shown. The card used to be built again for
+// every tap of ◀ / ▶, which scrolled it back to the top under the thumb — so the next tap at the same
+// spot changed the row above.
+{
+  // (settings seeded after the page is up: the harness's storage seeding meets about:blank on a phone viewport)
+  const page = await open(browser, { viewport: { width: 667, height: 375, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: true } });
+  await page.evaluate(() => localStorage.setItem('mossbound.settings.v1', JSON.stringify({ sfx: 0.5, music: 0.7 })));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await page.touchscreen.tap(330, 5);
+  await sleep(300);
+  await page.evaluate(() => window.__fbTitle.act('settings'));
+  await waitFor(() => page.evaluate(() => !!document.querySelector('.panel.settings')), 3000, 'settings');
+  // a section open (so the card scrolls), scrolled so that the sounds row sits mid-card
+  await page.evaluate(() => {
+    document.querySelector('.settings details').open = true;
+    const p = document.querySelector('.panel.settings');
+    p.scrollTop = document.querySelector('[data-act="sfx"]').offsetTop - p.clientHeight / 2;
+  });
+  await sleep(500);
+  const where = () => page.evaluate(() => {
+    const row = document.querySelector('[data-act="sfx"]');
+    const up = row.querySelector('[data-dir="1"]').getBoundingClientRect();
+    return { rowY: Math.round(row.getBoundingClientRect().y), scroll: document.querySelector('.panel.settings').scrollTop, x: up.x + up.width / 2, y: up.y + up.height / 2 };
+  });
+  const before = await where();
+  await page.touchscreen.tap(before.x, before.y);
+  await sleep(250);
+  const between = await where();
+  await page.touchscreen.tap(before.x, before.y);
+  await sleep(250);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.settings.v1')));
+  const stillOpen = await page.evaluate(() => document.querySelector('.settings details').open);
+  t.check('two taps on a setting’s ▶ on a phone change that setting twice — the card stays where it was', saved.sfx === 0.7 && saved.music === 0.7 && between.rowY === before.rowY && between.scroll === before.scroll && stillOpen, { before, between, sfx: saved.sfx, music: saved.music, stillOpen });
+  t.check('no errors (settings on a phone)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+
+// ---- settings open with the highlight on your own colour, so an Ⓐ / ENTER right away changes nothing
+{
+  const page = await open(browser, { storage: { 'mossbound.settings.v1': { color: 3 } } });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(450);
+  await page.evaluate(() => window.__fbTitle.act('settings'));
+  await waitFor(() => page.evaluate(() => !!document.querySelector('.panel.settings')), 3000, 'settings');
+  const on = await page.evaluate(() => document.querySelector('.settings .sel')?.dataset.act ?? null);
+  await key(page, 'Enter');
+  const colour = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.settings.v1')).color);
+  t.check('settings open on your own colour, and ENTER there leaves it as it is', on === 'color:3' && colour === 3, { on, colour });
+  t.check('no errors (settings start)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+// ---- after an update lands on an Xbox's title, its note and the hint that says how to hand the
+// controllers back are both readable: the note used to sit on top of the hint for nine seconds
+{
+  const page = await open(browser, { ua: XBOX_UA, viewport: { width: 1920, height: 1080 } });
+  await page.evaluate(() => sessionStorage.setItem('mossbound.update.back', JSON.stringify({ from: '1.9.0', at: Date.now(), back: { to: 'title' } })));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitFor(() => page.evaluate(() => window.__fb?.app?.current?.constructor.name === 'TitleScreen' && !!document.querySelector('.update-toast')), 8000, 'the title, updated');
+  await sleep(300);
+  const r = await page.evaluate(() => {
+    const box = (sel) => { const b = document.querySelector(sel).getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right }; };
+    const a = box('.update-toast');
+    const b = box('.xbox-hint');
+    const apart = a.bottom <= b.top || b.bottom <= a.top || a.right <= b.left || b.right <= a.left;
+    return { apart, toast: a, hint: b, onScreen: a.top >= 0 && a.bottom <= innerHeight && b.top >= 0 && b.bottom <= innerHeight };
+  });
+  t.check('an Xbox title just updated shows the update note and the controller hint without one over the other', r.apart && r.onScreen, r);
+  t.check('no errors (updated on an Xbox)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+// ---- the version badge keeps to its corner: never drawn over a card (the level select's, BACK and all, on
+// a small phone), never under the frame-rate meter, and gone the moment a level is being played
+{
+  const page = await open(browser, { viewport: { width: 667, height: 375 } });
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(700);
+  // the badge ignores the pointer; let it answer for a moment, to ask what is drawn on top where it meets BACK
+  const onTop = () => page.evaluate(() => {
+    const badge = document.querySelector('.version-badge');
+    const back = document.querySelector('.levels-screen .panel');
+    const a = badge.getBoundingClientRect();
+    const b = back.getBoundingClientRect();
+    const x = (Math.max(a.left, b.left) + Math.min(a.right, b.right)) / 2;
+    const y = (Math.max(a.top, b.top) + Math.min(a.bottom, b.bottom)) / 2;
+    const meet = Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
+    badge.style.pointerEvents = 'auto';
+    const hit = document.elementFromPoint(x, y);
+    badge.style.pointerEvents = '';
+    return { meet, top: hit === badge ? 'badge' : hit?.closest('.panel') ? 'panel' : hit?.className ?? null };
+  });
+  await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.levels(); });
+  await waitFor(() => page.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 5000, 'levels');
+  await sleep(700);
+  const atBack = await onTop();
+  // the frame-rate meter (the backquote key) and the badge
+  await page.keyboard.press('Backquote');
+  await sleep(700);
+  const meter = await page.evaluate(() => {
+    const a = document.querySelector('.fps-meter').getBoundingClientRect();
+    const b = document.querySelector('.version-badge').getBoundingClientRect();
+    return Math.min(a.right, b.right) <= Math.max(a.left, b.left) || Math.min(a.bottom, b.bottom) <= Math.max(a.top, b.top);
+  });
+  await page.keyboard.press('Backquote');
+  // into a level: the badge is gone in the first frame the level is on screen
+  const gone = await page.evaluate(() => new Promise((done) => {
+    window.__fb.flow.enterLevel(0);
+    const f = () => {
+      if (window.__fb.app.current?.constructor.name !== 'Session') return requestAnimationFrame(f);
+      const b = document.querySelector('.version-badge');
+      done(!b || getComputedStyle(b).display === 'none');
+    };
+    requestAnimationFrame(f);
+  }));
+  t.check('the version badge is never drawn over a card (the level select at 667×375), nor under the frame-rate meter, and leaves with the level', atBack.meet && atBack.top === 'panel' && meter && gone, { atBack, meterClear: meter, goneInLevel: gone });
+  t.check('no errors (version badge)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+// ---- a click that the partner's news rebuilds the level select under (between the button going down and
+// coming up) still presses what it was on — once; and the room's own status news rebuilds nothing
+{
+  const page = await open(browser);
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  // the host of an online room, with a stand-in for the link
+  await page.evaluate(() => {
+    const l = { role: 'host', code: 'K7QX', status: 'connected', detail: '', rtt: 40, via: 'direct', peerId: 'p', peerGen: 1, myId: 'me', connected: true,
+      send() {}, sendSnap() {}, close() {}, sharedNow: () => performance.now(), onStatus: null, onCtrl: null, onSnap: null };
+    window.__fb.flow.adopt(l);
+    window.__fb.flow.levels();
+  });
+  await waitFor(() => page.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 5000, 'levels');
+  await sleep(450);
+  const swapped = () => page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.settings.v1') ?? '{}').swap === true);
+  const at = () => page.evaluate(() => { const r = document.querySelector('[data-act="swap"]').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
+  const before = await swapped();
+  let p = await at();
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  await sleep(60);
+  await page.evaluate(() => window.__fb.app.current.onSave()); // the partner's half of the save arrives
+  await sleep(60);
+  await page.mouse.up();
+  await sleep(300);
+  const byMouse = await swapped();
+  // a touch: the browser still sends its own click after a rebuild, so it mustn't count twice
+  const cdp = await page.createCDPSession();
+  p = await at();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p.x, y: p.y, id: 1 }] });
+  await sleep(60);
+  await page.evaluate(() => window.__fb.app.current.onSave());
+  await sleep(60);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await sleep(300);
+  const byTouch = await swapped();
+  t.check('a click or a tap that the partner’s news rebuilds the level select under presses its button once', byMouse !== before && byTouch === before, { before, byMouse, byTouch });
+  // the room waiting for a partner: its status changing doesn't rebuild the card (nor re-arm its guard)
+  await page.evaluate(() => window.__fb.flow.title());
+  await page.evaluate(() => window.__fb.flow.online());
+  await waitFor(async () => (await screenName(page)) === 'OnlineScreen', 4000, 'online');
+  await sleep(400);
+  const kept = await page.evaluate(() => {
+    const s = window.__fb.app.current;
+    const l = { role: 'host', code: 'AB2C', status: 'connecting', detail: '', rtt: 0, via: null, peerId: null, peerGen: 0, myId: 'me', connected: false,
+      send() {}, sendSnap() {}, close() {}, sharedNow: () => performance.now(), onStatus: null, onCtrl: null, onSnap: null };
+    window.__fb.flow.adopt(l);
+    s.go('host');
+    const share = document.querySelector('[data-act="share"]');
+    l.status = 'waiting';
+    s.onLinkStatus('waiting', '');
+    return { same: share === document.querySelector('[data-act="share"]'), status: document.querySelector('.status')?.textContent.trim() };
+  });
+  t.check('the room’s status changing ("waiting for your partner…") rebuilds nothing under the finger', kept.same && /waiting for your partner/.test(kept.status), kept);
+  t.check('no errors (rebuilt mid-click)', !page.errors.length, page.errors.join('\n'));
+  await page.evaluate(() => window.__fb.flow.title());
+  await page.close();
+}
+// ---- building a level forces no layout: the HUD's seed counter restarted its pop with a forced reflow even
+// for the level's first figure, in the frame of the press, with the screen being left still in the page
+{
+  const page = await open(browser);
+  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
+  await sleep(300);
+  const reads = await page.evaluate(() => {
+    const was = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+    let n = 0;
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { n++; return was.get.call(this); } });
+    try {
+      const f = window.__fb.flow;
+      f.mode = 'local';
+      f.seats = ['keysL', 'keysR'];
+      f.enterLevel(0);
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'offsetWidth', was);
+    }
+    return n;
+  });
+  await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'), 8000, 'level');
+  await sleep(300);
+  const pops = await page.evaluate(() => { window.__fbSession.hud.setSeeds(5, 43); return document.querySelector('.hud-seeds').getAnimations().length > 0; });
+  t.check('building a level reads no layout for its HUD, and a seed still makes the counter pop', reads === 0 && pops, { offsetWidthReads: reads, pops });
+  t.check('no errors (HUD build)', !page.errors.length, page.errors.join('\n'));
+  await page.close();
+}
+// ---- the debug ground's readout is rewritten ten times a second at most, not every frame (each rewrite
+// is a style and layout pass, on the phone whose frame rate the panel is there to look at)
+{
+  const page = await open(browser, { query: { hash: 'debug=1' } });
+  await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session' && !!document.querySelector('.dbg-out')), 8000, 'the debug ground');
+  await sleep(1000);
+  const perSecond = await page.evaluate(() => new Promise((done) => {
+    let n = 0;
+    const mo = new MutationObserver((list) => { n += list.length; });
+    mo.observe(document.querySelector('.dbg-out'), { childList: true, characterData: true, subtree: true });
+    setTimeout(() => { mo.disconnect(); done(n / 2); }, 2000);
+  }));
+  const text = await page.evaluate(() => document.querySelector('.dbg-out').textContent);
+  t.check(`the debug readout is rewritten at most ten times a second (${perSecond}/s)`, perSecond <= 11 && /fps/.test(text), { perSecond });
+  t.check('no errors (debug readout)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
 await browser.close();

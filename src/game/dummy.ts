@@ -1,6 +1,7 @@
 import { makeControls, type ControlFrame } from '../core/input';
 import type { Bird } from './bird';
 import { T } from './tuning';
+import type { World } from './world';
 
 /**
  * Where it likes to stand: a pace and a half to one side of you, never at your feet. Walking at the
@@ -21,6 +22,8 @@ const STOP = 0.25 * T;
 const HOP_TIME = 0.35;
 /** it only climbs a wall it has got stuck on while you are at least this far above it */
 const CLIMB_UP = 8;
+/** a rise this small at your feet is walked up (Bird.stepUp), so it doesn't make a spot unreachable */
+const LIP = 10;
 
 /**
  * The practice partner: the second sprout, driven by the game rather than a second player, so one
@@ -38,9 +41,14 @@ export class Dummy {
   private hopT = 0;
   /** true while it is walking somewhere: kept between frames so it doesn't shuffle on the spot */
   private walking = false;
+  /** the wall it last let go of (you weren't above it): not walked back into until it has landed */
+  private offWall: -1 | 0 | 1 = 0;
 
-  /** The controls for `me` this frame, following `you`. */
-  step(dt: number, me: Bird, you: Bird): ControlFrame {
+  /**
+   * The controls for `me` this frame, following `you`. `world` lets it see whether the spot it wants
+   * beside you is somewhere it can stand (without one it keeps to its side, whatever is there).
+   */
+  step(dt: number, me: Bird, you: Bird, world?: World): ControlFrame {
     const c = this.c;
     c.moveX = 0;
     c.moveY = 0;
@@ -50,6 +58,7 @@ export class Dummy {
     c.tugPressed = c.dashPressed = c.shootPressed = c.heartPressed = c.heyPressed = false;
     this.hopT -= dt;
     if (me.ghost || !you.present) return c;
+    if (me.grounded || me.hanging) this.offWall = 0;
     // the vine is tight and they're off the ground: plant roots and be their anchor
     const rope = me.rope;
     if (rope?.taut && !you.grounded) {
@@ -67,23 +76,33 @@ export class Dummy {
         c.moveY = 1;
       } else {
         c.moveX = -me.cling;
+        // (and it stays let go: walking on toward its spot would push it straight back into the wall
+        // in mid-air — a grip again the very next step, let go, grip, for as long as you stood there)
+        this.offWall = me.cling;
       }
       return c;
     }
-    // keep to whichever side of them we're already on, and stand off a pace and a half from it
-    const side = me.x <= you.x ? -1 : 1;
-    // if we've ended up on top of them anyway (a fall, a bounce, a lift), step off sideways
-    if (me.y + me.h / 2 < you.y - you.h / 2 + 6 && Math.abs(you.x - me.x) < T) {
+    // Keep to whichever side of them we're already on, and stand off a pace and a half from it — unless
+    // that spot is no place to stand: you're up against a wall or a step on that side, and the spot is
+    // inside it. Pressing on toward it is what put the partner over your head, hopping at the block.
+    const off = you.inGoal ? STAND_IN_POT : STAND_OFF;
+    let side = me.x <= you.x ? -1 : 1;
+    if (world && you.grounded && !standable(world, me, you, side * off) && standable(world, me, you, -side * off)) side = -side;
+    // If we've ended up on top of them anyway (a fall, a bounce, a lift), step off sideways. Not on the
+    // way up, though: rising past their head is a hop of our own beside them, and stepping off here let
+    // go of jump — cutting the hop short, under the top of whatever it was hopping onto.
+    if (!(me.vy < 0) && me.y + me.h / 2 < you.y - you.h / 2 + 6 && Math.abs(you.x - me.x) < T) {
       c.moveX = side;
       this.walking = true;
       return c;
     }
-    const dx = you.x + side * (you.inGoal ? STAND_IN_POT : STAND_OFF) - me.x;
+    const dx = you.x + side * off - me.x;
     const far = Math.abs(dx);
     if (far > START) this.walking = true;
     else if (far < STOP) this.walking = false;
     if (!this.walking) return c;
     c.moveX = Math.sign(dx);
+    if (c.moveX === this.offWall) c.moveX = 0;
     // Walked into a step, or they're well above us: hop. (A hop it doesn't need costs nothing — it
     // lands straight back where it was.) `blockedX`, not `bumped`: a bird resting on the ground falls
     // a hair and lands again every step, so `bumped` is true the whole time it is standing there —
@@ -95,4 +114,16 @@ export class Dummy {
     }
     return c;
   }
+}
+
+/**
+ * Could `me` stand `off` px to the side of `you`, on their level, and get there along it? The box is
+ * `me`'s own, a lip's height above their feet (a lip that small is walked up), tested at that spot and
+ * at every half-tile on the way to it — so a step or a wall between you and the spot rules it out too.
+ */
+function standable(world: World, me: Bird, you: Bird, off: number) {
+  const y = you.y + you.h / 2 - me.h / 2 - LIP;
+  const n = Math.max(1, Math.ceil(Math.abs(off) / (T / 2)));
+  for (let k = 1; k <= n; k++) if (!world.boxFree(you.x + (off * k) / n, y, me.w, me.h)) return false;
+  return true;
 }

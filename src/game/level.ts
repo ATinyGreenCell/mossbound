@@ -446,14 +446,25 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
  * each end to turn round. Like moverPos this is worked out from the clock alone — never stepped —
  * so it is identical on both screens however differently their frames fall.
  */
-export function beetlePos(c: CreatureSpec, t: number): { x: number; face: number } {
-  if (c.span <= 0) return { x: c.x, face: 1 };
+export function beetlePos(c: CreatureSpec, t: number, out: { x: number; face: number } = { x: 0, face: 1 }): { x: number; face: number } {
+  // (written into `out`, as moverPos does: the world asks this for every beetle on every step)
+  out.face = 1;
+  if (c.span <= 0) {
+    out.x = c.x;
+    return out;
+  }
   const walk = c.span / BEETLE_SPEED;
   const u = ((((t / c.period + c.phase) % 1) + 1) % 1) * c.period;
-  if (u < walk) return { x: c.x0 + BEETLE_SPEED * u, face: 1 };
-  if (u < walk + BEETLE_TURN) return { x: c.x0 + c.span, face: 1 };
-  if (u < 2 * walk + BEETLE_TURN) return { x: c.x0 + c.span - BEETLE_SPEED * (u - walk - BEETLE_TURN), face: -1 };
-  return { x: c.x0, face: -1 };
+  if (u < walk) out.x = c.x0 + BEETLE_SPEED * u;
+  else if (u < walk + BEETLE_TURN) out.x = c.x0 + c.span;
+  else if (u < 2 * walk + BEETLE_TURN) {
+    out.x = c.x0 + c.span - BEETLE_SPEED * (u - walk - BEETLE_TURN);
+    out.face = -1;
+  } else {
+    out.x = c.x0;
+    out.face = -1;
+  }
+  return out;
 }
 
 const smooth = (u: number) => u * u * (3 - 2 * u);

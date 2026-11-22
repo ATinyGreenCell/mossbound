@@ -35,7 +35,9 @@ const jx = 130, jy = 300;
 const b0 = await bird();
 await touch('touchStart', [[jx, jy, 1]]);
 await touch('touchMove', [[jx + 50, jy, 1]]);
-await sleep(500);
+// (waited for, not slept on: half a second of wall time is one frame, or none, on a runner drawing in
+// software — the check flaked on the gate that way with the stick working perfectly)
+await waitFor(async () => (await bird()).x > b0.x + 30, 3000, 'the bird walking').catch(() => undefined);
 const b1 = await bird();
 t.check('the stick walks the bird', b1.x > b0.x + 30, { from: b0.x, to: b1.x });
 // JUMP while walking (second finger)
@@ -134,5 +136,62 @@ await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile
 const rotate = await waitFor(() => page.evaluate(() => getComputedStyle(document.querySelector('.tc-rotate')).display !== 'none'), 3000, 'rotate prompt');
 const lockHint = await page.evaluate(() => document.querySelector('.tc-rotate').textContent);
 t.check('portrait asks to turn the phone (and mentions rotation lock)', rotate && /rotation lock/.test(lockHint), lockHint);
+
+// ---- the menus under a thumb: every control answers a touch anywhere in a 44 px band around it —
+// mostly invisible, the controls look the size they did — and a thumb that lands just beside ◀ is on ◀
+// (it used to be on the row, which steps the other way). Two phone sizes held sideways.
+const errors = [...page.errors];
+for (const viewport of [{ width: 844, height: 390 }, { width: 667, height: 375 }]) {
+  const p = await open(browser, { viewport: { ...viewport, deviceScaleFactor: 2, isMobile: true, hasTouch: true, isLandscape: true } });
+  await waitFor(() => p.evaluate(() => window.__fb.app.current?.constructor.name === 'TitleScreen'), 8000, 'title');
+  await sleep(500);
+  /** each control matching `sel`: does a touch `d` px out from its centre, in each direction asked, still land on it? */
+  const reach = (sel, dirs, d = 21) => p.evaluate((sel, dirs, d) => [...document.querySelectorAll(sel)].filter((el) => el.offsetParent !== null && !el.hidden).map((el) => {
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    const cx = r.x + r.width / 2;
+    const cy = r.y + r.height / 2;
+    const miss = dirs.map(([dx, dy]) => [cx + dx * d, cy + dy * d]).filter(([x, y]) => { const h = document.elementFromPoint(x, y); return !(h === el || el.contains(h)); });
+    return { el: (el.dataset.act ?? el.dataset.dir ?? el.className).toString(), h: Math.round(r.height), miss: miss.length };
+  }), sel, dirs, d);
+  const UPDOWN = [[0, -1], [0, 1]];
+  const title = await reach('.title-screen .menu > .btn', UPDOWN);
+  await p.evaluate(() => window.__fbTitle.act('settings'));
+  await waitFor(() => p.evaluate(() => !!document.querySelector('.panel.settings')), 3000, 'settings');
+  await sleep(400);
+  const rows = await reach('.settings .row[data-act]', UPDOWN);
+  const less = await reach('.settings .steps [data-dir="-1"]', [[-1, 0], [0, -1], [0, 1]]);
+  const more = await reach('.settings .steps [data-dir="1"]', [[1, 0], [0, -1], [0, 1]]);
+  const swatches = await reach('.settings .swatch', UPDOWN);
+  const back = await reach('.settings [data-act="back"]', UPDOWN);
+  // the controls themselves are the size they were (rows ~25 px, small buttons ~26 px)
+  const looks = await p.evaluate(() => ({ row: Math.round(document.querySelector('.settings .row').getBoundingClientRect().height), btn: Math.round(document.querySelector('.settings [data-act="back"]').getBoundingClientRect().height) }));
+  // a thumb just left of the music row's ◀ turns the music down
+  const music = () => p.evaluate(() => JSON.parse(localStorage.getItem('mossbound.settings.v1') ?? '{}').music ?? 0.7);
+  const m0 = await music();
+  const beside = await p.evaluate(() => { const el = document.querySelector('[data-act="music"] [data-dir="-1"]'); el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: r.x - 4, y: r.y + r.height / 2 }; });
+  await sleep(450);
+  await p.touchscreen.tap(beside.x, beside.y);
+  await sleep(300);
+  const m1 = await music();
+  // the level select's SWAP, and the buttons of the pause card
+  await p.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keys', 'keysR']; f.levels(); });
+  await waitFor(() => p.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 5000, 'levels');
+  await sleep(300);
+  const swap = await reach('.levels-screen [data-act="swap"]', UPDOWN);
+  await p.evaluate(() => window.__fb.flow.enterLevel(0));
+  await waitFor(() => p.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'), 8000, 'level');
+  await sleep(300);
+  await p.evaluate(() => window.__fbSession.togglePause());
+  await sleep(300);
+  const pause = await reach('.overlay [data-act]', UPDOWN);
+  const all = { title, rows, less, more, swatches, back, swap, pause };
+  const misses = Object.entries(all).flatMap(([k, list]) => list.filter((x) => x.miss).map((x) => `${k}:${x.el}`));
+  const counted = Object.values(all).every((list) => list.length > 0);
+  t.check(`${viewport.width}×${viewport.height}: every menu control answers a thumb anywhere in a 44 px band around it`, counted && misses.length === 0, { misses, counts: Object.fromEntries(Object.entries(all).map(([k, v]) => [k, v.length])) });
+  t.check(`${viewport.width}×${viewport.height}: …while looking the size it did, and a thumb just beside ◀ turns the music down`, looks.row <= 30 && looks.btn <= 30 && Math.abs(m1 - (m0 - 0.1)) < 1e-9, { looks, music: [m0, m1] });
+  errors.push(...p.errors);
+  await p.close();
+}
 await browser.close();
-t.finish('touch', page.errors);
+t.finish('touch', errors);

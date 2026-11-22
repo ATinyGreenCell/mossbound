@@ -12,6 +12,17 @@ const BROKERS: { url: string; hz: number }[] = [
 
 export type RelayKind = 'c' | 's' | 'p';
 
+/** A broker the partner has been heard through within this long (ms) is a live path for the bird stream. */
+const LIVE_MS = 1500;
+/** Even the live broker quiet this long (ms): the stream goes through the one heard from last as well. */
+const SHAKY_MS = 400;
+/** A connected broker that has brought nothing from anyone for this long (ms) while paired is asked if it's still there. */
+const PROBE_AFTER_MS = 2000;
+/** …but not more often than this (ms). */
+const PROBE_EVERY_MS = 3000;
+
+type Client = { mqtt: MqttClient; hz: number; lastSnap: number; heard: number; probed: number };
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -25,12 +36,14 @@ async function sha256Hex(s: string) {
  * WebRTC link can't be made (hotel Wi-Fi, some cellular carriers). Payloads are AES-GCM encrypted
  * with a key derived from the room code, so the broker only ever sees noise on an opaque topic.
  * Control messages go to every connected broker (the receiver drops duplicates); the snapshot
- * stream goes through the best broker only, at that broker's rate.
+ * stream goes through the best broker the partner is being heard through, at that broker's rate.
+ * A broker that stops bringing anything is asked whether it's still there (see check) rather than
+ * trusted for the 25 s its keepalive would take to notice.
  */
 export class Relay {
   onMessage: ((kind: RelayKind, data: unknown, from: string) => void) | null = null;
   onState: (() => void) | null = null;
-  private clients: { mqtt: MqttClient; hz: number; lastSnap: number }[] = [];
+  private clients: Client[] = [];
   private topic = '';
   private key: CryptoKey | null = null;
   private closed = false;
@@ -61,11 +74,12 @@ export class Relay {
     const list = BROKERS_OVERRIDE ? BROKERS_OVERRIDE.map((url, i) => ({ url, hz: i === 0 ? 30 : 6 })) : BROKERS;
     for (const b of list) {
       const mqtt = new MqttClient(b.url);
-      mqtt.onMessage = (_t, payload) => void this.recv(payload);
+      const client: Client = { mqtt, hz: b.hz, lastSnap: 0, heard: 0, probed: 0 };
+      mqtt.onMessage = (_t, payload) => void this.recv(payload, client);
       mqtt.onState = () => this.onState?.();
       mqtt.subscribe(this.topic);
       mqtt.connect();
-      this.clients.push({ mqtt, hz: b.hz, lastSnap: 0 });
+      this.clients.push(client);
     }
   }
 
@@ -79,12 +93,14 @@ export class Relay {
     return this.clients.find((c) => c.mqtt.connected)?.hz ?? 0;
   }
 
-  private async recv(payload: Uint8Array) {
+  private async recv(payload: Uint8Array, client: Client) {
     if (!this.key || payload.length < 13) return;
     try {
       const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: payload.slice(0, 12) }, this.key, payload.slice(12));
       const m = JSON.parse(dec.decode(plain)) as { f: string; k: RelayKind; q: number; d: unknown };
       if (!m || typeof m.f !== 'string' || m.f === this.myId) return;
+      // (someone else heard through this broker — a copy that turns out to be a duplicate too: it's alive)
+      client.heard = performance.now();
       // the same control message can arrive through two brokers
       const id = `${m.f}:${m.q}`;
       if (this.seen.has(id)) return;
@@ -116,16 +132,48 @@ export class Relay {
     return ok;
   }
 
-  /** A snapshot through the best connected broker, if its rate allows one now. */
+  /**
+   * A snapshot through the best broker the partner is being heard through (the list is best first) — and,
+   * while even that one has gone quiet for a moment, through the one they were heard through last as well
+   * (the receiver drops whichever copy comes second) — if their rates allow one now.
+   */
   async sendSnap(data: unknown) {
     if (!this.key) return false;
-    const c = this.clients.find((x) => x.mqtt.connected);
-    if (!c) return false;
+    const live = this.clients.filter((x) => x.mqtt.connected);
+    if (!live.length) return false;
     const now = performance.now();
-    if (now - c.lastSnap < 1000 / c.hz - 2) return false;
-    c.lastSnap = now;
+    const last = live.reduce((a, c) => (c.heard > a.heard ? c : a));
+    const best = live.find((c) => now - c.heard < LIVE_MS) ?? last;
+    const to = (now - best.heard > SHAKY_MS && last !== best ? [best, last] : [best]).filter((c) => now - c.lastSnap >= 1000 / c.hz - 2);
+    if (!to.length) return false;
+    for (const c of to) c.lastSnap = now;
     const p = await this.seal('s', data);
-    return c.mqtt.publish(this.topic, p, true);
+    let ok = false;
+    for (const c of to) if (c.mqtt.publish(this.topic, p, true)) ok = true;
+    return ok;
+  }
+
+  /**
+   * Paired, once a second: a connected broker that has brought nothing from anyone for a couple of seconds
+   * — the partner pings through every broker every second — is asked whether it's still there (a socket
+   * can die without closing: a phone changing networks, a NAT that forgot us). See MqttClient.probe.
+   */
+  check() {
+    const now = performance.now();
+    for (const c of this.clients) {
+      if (!c.mqtt.connected || now - c.heard < PROBE_AFTER_MS || now - c.probed < PROBE_EVERY_MS) continue;
+      c.probed = now;
+      c.mqtt.probe();
+    }
+  }
+
+  /** The network may have changed (back online, the page shown again, the partner gone quiet): check every broker now. */
+  wake() {
+    const now = performance.now();
+    for (const c of this.clients) {
+      c.probed = now;
+      c.mqtt.probe();
+    }
   }
 
   close() {

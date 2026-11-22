@@ -26,21 +26,38 @@ function versionFile() {
  * made it, and then says the app is already installed. That is the whole of why installing was
  * broken, and it is why this file exists at all. Playing offline comes free with it.
  *
- * What it caches, and what it refuses to:
+ * What it caches, and how:
  *
  *   the hashed files (assets/index-A1b2C3.js and friends) are immutable by construction — a changed
- *   file gets a different name — so they are served from the cache and never checked again.
+ *   file gets a different name — so they are served from the cache and never checked again. A file
+ *   that isn't cached (yet) is fetched and kept.
  *
- *   index.html and version.json are NOT, and this is the part worth getting right. A phone that
- *   cached index.html would keep loading the build it first saw, for ever, however many times the
- *   site was published; the game would be frozen at whatever version happened to be live the day it
- *   was installed, with no way in from the outside to tell. So those two go to the network first and
- *   fall back to the cache only when there is no network. An installed Mossbound is a build behind
- *   at worst, and only while offline.
+ *   index.html is NOT, and this is the part worth getting right. A phone that cached it would keep
+ *   loading the build it first saw, for ever. So the page is asked of the server every time — past
+ *   the browser's own cache too, which GitHub Pages lets keep it for ten minutes (max-age=600): a
+ *   launch soon after a deploy would otherwise boot the build before and reload a few seconds later.
+ *   But the network gets three seconds: past that, on hotel Wi-Fi or a stalled connection, the copy
+ *   this worker installed opens the game (the updater brings the new build in once it can). The
+ *   update's own reload (?u=, see update.ts) waits for the network however long it takes: that
+ *   reload is the new build. version.json is never touched here: a cached answer to "which build is
+ *   live" would only ever be a stale one.
  *
- * The cache is named for the version, and activating drops every other one, so an update cannot
- * leave a half-and-half mixture of two builds behind. `skipWaiting` and `claim` hand the new worker
- * the open pages at once rather than waiting for every tab to close, which on a phone is never.
+ * Installing is all or nothing. The page (which must be this build's own: it names this build's
+ * script), its scripts, styles and fonts are all in the cache before this worker takes over, or it
+ * doesn't take over — the one before stays in charge with everything it needs, and the browser tries
+ * the update again later. (A worker that took over with a file missing threw away the old build's
+ * complete cache for a new one with a hole in it, and the installed game no longer opened offline.)
+ * Nothing is downloaded twice: a file the build before had (the same name is the same file) is taken
+ * from its cache, and the rest is fetched through the browser's cache, which on a first visit already
+ * holds what the page just loaded. The .woff fonts — the fallback for browsers too old to run this
+ * game — are never fetched at all.
+ *
+ * Activating keeps the build before's cache for one more round, and drops anything older. A page
+ * still open on that build (an online room waits for its players to leave before it updates) can
+ * still load its own lazy files — the networking code, the synth worker — after this worker has
+ * taken the pages over. Only caches named for Mossbound are ever touched: the github.io origin is
+ * shared with every other project on it. `skipWaiting` and `claim` hand the new worker the open
+ * pages at once rather than waiting for every tab to close, which on a phone is never.
  */
 function serviceWorker() {
   return {
@@ -48,56 +65,113 @@ function serviceWorker() {
     generateBundle(
       this: { emitFile: (f: { type: 'asset'; fileName: string; source: string }) => void },
       _opts: unknown,
-      bundle: Record<string, unknown>,
+      bundle: Record<string, { type?: string; isEntry?: boolean; fileName?: string }>,
     ) {
-      // every file this build emitted, plus the page and the icons that are not part of the bundle
-      const built = Object.keys(bundle).filter((f) => f !== 'sw.js');
-      const shell = ['./', './index.html', './manifest.webmanifest', './favicon.svg', './icon-180.png', './icon-192.png', './icon-512.png'];
-      const precache = [...new Set([...shell, ...built.map((f) => `./${f}`)])].filter((f) => !f.endsWith('version.json'));
+      const built = Object.keys(bundle).filter((f) => f !== 'sw.js' && f !== 'version.json' && f !== 'index.html');
+      // what the game can't run without: every script (the lazy ones too), style and font it loads
+      const core = built.filter((f) => /\.(js|css|woff2)$/.test(f)).map((f) => `./${f}`);
+      // nice to have: the install's icons and manifest (an older browser's .woff fonts: never)
+      const extra = ['./manifest.webmanifest', './favicon.svg', './icon-180.png', './icon-192.png', './icon-512.png'];
+      const entry = Object.values(bundle).find((c) => c.type === 'chunk' && c.isEntry)?.fileName;
+      if (!entry) throw new Error('mossbound-sw: no entry chunk in the bundle');
       const src = `// Generated by vite.config.ts for Mossbound ${version}. Do not edit.
-const CACHE = 'mossbound-${version}';
-const PRECACHE = ${JSON.stringify(precache)};
-// these must never be answered from the cache while there is a network: see vite.config.ts
-const FRESH = [/\\/$/, /index\\.html$/, /version\\.json$/];
+const PREFIX = 'mossbound-';
+const CACHE = PREFIX + '${version}';
+const CORE = ${JSON.stringify(core)};
+const EXTRA = ${JSON.stringify(extra)};
+// this build's page names this script: a page that doesn't is another build's
+const ENTRY = ${JSON.stringify(entry)};
+// the network's turn for the page, before the copy installed here opens the game instead
+const PAGE_WAIT_MS = 3000;
+
+const versionOf = (k) => (/^mossbound-(\\d+)\\.(\\d+)\\.(\\d+)$/.exec(k) || []).slice(1).map(Number);
+const newer = (a, b) => {
+  const x = versionOf(a);
+  const y = versionOf(b);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
 
 self.addEventListener('install', (e) => {
-  // a single file failing to cache must not fail the install and leave the page uninstallable
-  e.waitUntil(caches.open(CACHE).then((c) => Promise.allSettled(PRECACHE.map((u) => c.add(new Request(u, { cache: 'reload' }))))).then(() => self.skipWaiting()));
+  e.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE);
+      // the page, asked of the server itself — and it has to be this build's. (As ./, the address it is
+      // opened at, so a first visit's copy is only checked, not fetched again; kept as ./index.html)
+      const page = await fetch(new Request('./', { cache: 'no-cache' }));
+      if (!page.ok) throw new Error('index.html: ' + page.status);
+      if (!(await page.clone().text()).includes(ENTRY)) throw new Error('index.html is another build\\'s');
+      // the rest: from the build before when it had it, else through the browser's cache
+      const keep = async (u, fresh) => {
+        const had = await caches.match(u);
+        if (had && u.indexOf('./assets/') === 0) return cache.put(u, had);
+        const res = await fetch(new Request(u, { cache: fresh ? 'no-cache' : 'default' }));
+        if (!res.ok) throw new Error(u + ': ' + res.status);
+        return cache.put(u, res);
+      };
+      await Promise.all(CORE.map((u) => keep(u, false)));
+      await cache.put('./index.html', page);
+      await Promise.allSettled(EXTRA.map((u) => keep(u, true)));
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(
+    (async () => {
+      // only Mossbound's own caches (the origin is shared); the newest of the older builds stays a round
+      const ours = (await caches.keys()).filter((k) => k.indexOf(PREFIX) === 0 && k !== CACHE);
+      const before = ours.reduce((a, k) => (a === null || newer(k, a) ? k : a), null);
+      await Promise.all(ours.filter((k) => k !== before).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    })(),
+  );
 });
+
+/** this build's own page, as installed */
+const installed = () => caches.open(CACHE).then((c) => c.match('./index.html'));
+
+async function page(req, url) {
+  let net;
+  try {
+    // (past the browser's cache: it may keep the page ten minutes, and that may be the build before)
+    net = fetch(new Request(req, { cache: 'no-cache' }));
+  } catch (err) {
+    net = fetch(req.url, { cache: 'no-cache', credentials: 'same-origin', redirect: 'manual' });
+  }
+  const usable = (res) => res && (res.ok || res.type === 'opaqueredirect');
+  // the update's own reload waits for the network however long it takes: that reload is the new build
+  if (url.searchParams.has('u')) return net.catch(() => installed().then((hit) => hit || Response.error()));
+  const res = await Promise.race([net.catch(() => null), new Promise((r) => setTimeout(r, PAGE_WAIT_MS, null))]);
+  if (usable(res)) return res;
+  const hit = await installed();
+  if (hit) return hit;
+  return res || net;
+}
+
+async function asset(req) {
+  // this build's cache, or the build before's (a page still open on it loading its own lazy files)
+  const hit = await caches.match(req);
+  if (hit) return hit;
+  const res = await fetch(req);
+  if (res.ok && res.type === 'basic') {
+    // (copied before the page reads it: once its body has been read, it can't be)
+    const copy = res.clone();
+    caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => undefined);
+  }
+  return res;
+}
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-  const fresh = FRESH.some((re) => re.test(url.pathname));
-  if (fresh) {
-    // network first: an installed copy still picks up a new build the next time it has a signal
-    e.respondWith(
-      fetch(req)
-        .then((res) => {
-          if (res && res.ok) caches.open(CACHE).then((c) => c.put(req, res.clone()));
-          return res;
-        })
-        .catch(() => caches.match(req).then((hit) => hit ?? caches.match('./index.html'))),
-    );
-    return;
-  }
-  // everything else is hashed, so a hit is the right answer and needs no revalidation
-  e.respondWith(
-    caches.match(req).then(
-      (hit) =>
-        hit ??
-        fetch(req).then((res) => {
-          if (res && res.ok) caches.open(CACHE).then((c) => c.put(req, res.clone()));
-          return res;
-        }),
-    ),
-  );
+  // which build is live: only the network can say
+  if (/\\/version\\.json$/.test(url.pathname)) return;
+  if (req.mode === 'navigate' || /\\/(index\\.html)?$/.test(url.pathname)) e.respondWith(page(req, url));
+  else e.respondWith(asset(req));
 });
 `;
       this.emitFile({ type: 'asset', fileName: 'sw.js', source: src });

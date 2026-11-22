@@ -67,17 +67,6 @@ function clearMenu(m: MenuInput) {
   m.up = m.down = m.left = m.right = m.confirm = m.back = m.pause = m.any = false;
 }
 
-function orMenu(into: MenuInput, m: MenuInput) {
-  into.up ||= m.up;
-  into.down ||= m.down;
-  into.left ||= m.left;
-  into.right ||= m.right;
-  into.confirm ||= m.confirm;
-  into.back ||= m.back;
-  into.pause ||= m.pause;
-  into.any ||= m.any;
-}
-
 /**
  * A control source a local player can own: the whole keyboard, one half of it (two players sharing a
  * laptop), or one gamepad.
@@ -208,6 +197,8 @@ class Pad implements Device {
   generation = 0;
   /** a button went down (or the left stick was pushed) this poll */
   active = false;
+  /** a button went down this poll (the stick doesn't count: it's no gesture to the browser) */
+  buttonDown = false;
   /** identity of the pad the axis mask below was taken from */
   private key = '';
   /** axes that rested far from center when a non-standard pad appeared (triggers reported as axes) */
@@ -239,7 +230,7 @@ class Pad implements Device {
     const it = this.intent;
     clearIntent(it);
     clearMenu(this.menu);
-    this.active = false;
+    this.active = this.buttonDown = false;
     if (!pad || !pad.connected) {
       if (this.connected) this.drop();
       return;
@@ -307,6 +298,7 @@ class Pad implements Device {
     // either small button: Edge on Xbox may keep ☰ for itself (held, it opens Edge's own menu)
     m.pause = bp(9) || bp(8);
     m.any = any;
+    this.buttonDown = any;
     this.active = any || Math.abs(ax(0)) + Math.abs(ax(1)) > 0.5;
 
     this.prev.length = pad.buttons.length;
@@ -425,6 +417,30 @@ const ALL: KeyMap = {
   pause: ['Escape', 'KeyP'],
 };
 
+/** A menu move, as a key or a controller makes it. */
+type MenuEdge = 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'pause';
+const MENU_EDGES: readonly MenuEdge[] = ['up', 'down', 'left', 'right', 'confirm', 'back', 'pause'];
+/** The menu moves each key makes (on the whole keyboard): what a controller's echo would look like. */
+const KEY_EDGES = new Map<string, MenuEdge[]>();
+for (const e of MENU_EDGES) for (const code of ALL[e]) KEY_EDGES.set(code, [...(KEY_EDGES.get(code) ?? []), e]);
+
+/**
+ * One controller press can reach the page twice. Edge on an Xbox may send a controller's button as a
+ * key press as well (Ⓐ as ENTER, the d-pad as the arrows), and Steam Input's desktop layout does the
+ * same on a PC; the two halves land up to a frame or so apart, in either order. On a menu that took
+ * the first half, the second used to be a second press: the d-pad walked two rows, and Ⓐ on SETTINGS
+ * opened them and pressed the first colour there. A key press that makes the same menu move as a
+ * controller press within this long — or within the next poll, where frames are longer than that — is
+ * that press again, and counts once. Two different presses that close together are beyond a hand.
+ */
+const ECHO_MS = 80;
+
+/** When something happened: the clock, and which poll (update()) it was. */
+interface Stamp {
+  at: number;
+  poll: number;
+}
+
 /** A keyboard (or half of one) as a device. */
 class Keys implements Device {
   readonly menu = makeMenu();
@@ -510,6 +526,18 @@ export class Input {
   private touchTap = false;
   /** the gamepad that last had input (its disconnect raises a notice) */
   private lastPad = -1;
+  /** update() calls so far */
+  private polls = 0;
+  /** the latest menu move of each kind from a controller, and from a key (see ECHO_MS) */
+  private readonly padEdge: Partial<Record<MenuEdge, Stamp>> = {};
+  private readonly keyEdge: Partial<Record<MenuEdge, Stamp>> = {};
+  /** keys pressed (really typed, not injected) since the last update */
+  private readonly typed = new Set<string>();
+  /**
+   * A key press made while a controller is connected, which may yet turn out to be that controller's
+   * echo: it names the keyboard as the device in use once no controller press has matched it.
+   */
+  private keyClaim: (Stamp & { edges: MenuEdge[] }) | null = null;
 
   constructor(target: HTMLElement) {
     window.addEventListener('keydown', (e) => {
@@ -519,9 +547,13 @@ export class Input {
       // itself is read as a gamepad, and they mustn't make the hints name keyboard keys
       if (!e.code) return;
       if (BLOCK_DEFAULT.has(e.code)) e.preventDefault();
-      if (!e.repeat) this.pressed.set(e.code, (this.pressed.get(e.code) ?? 0) + 1);
+      if (!e.repeat) {
+        this.pressed.set(e.code, (this.pressed.get(e.code) ?? 0) + 1);
+        this.typed.add(e.code);
+      }
       this.down.add(e.code);
-      this.lastDevice = 'keyboard';
+      // (with a controller connected, update() decides: this may be one of its presses arriving twice)
+      if (!this.padConnected) this.lastDevice = 'keyboard';
     });
     window.addEventListener('keyup', (e) => {
       this.down.delete(e.code);
@@ -618,15 +650,49 @@ export class Input {
     return this.pressed.has(code);
   }
 
+  /** Did `s` happen just now — within ECHO_MS, or no further back than the last poll? */
+  private recent(s: Stamp | null | undefined, now: number) {
+    return !!s && (now - s.at <= ECHO_MS || this.polls - s.poll <= 1);
+  }
+
   update() {
+    const now = performance.now();
+    this.polls++;
     const k = (code: string) => this.down.has(code);
     const kp = (code: string) => (this.pressed.get(code) ?? 0) > 0;
+
+    // --- gamepads first: this poll's controller presses, so that a key press that is only one of them
+    // arriving a second time can be told apart (see ECHO_MS) ---
+    const list = readPads();
+    const n = Math.max(list.length, this.pads.length);
+    for (let i = 0; i < n; i++) {
+      const pad = (this.pads[i] ??= new Pad(i));
+      pad.read(list[i] ?? null);
+      if (pad.connected) for (const e of MENU_EDGES) if (pad.menu[e]) this.padEdge[e] = { at: now, poll: this.polls };
+    }
+    // A key press that makes the same menu move as a controller press just made is that press again:
+    // spent here, unseen. With a controller connected, any other key press names the keyboard as the
+    // device in use — at once if no controller could have sent it, else once none has matched it.
+    for (const code of this.typed) {
+      const edges = KEY_EDGES.get(code);
+      if (edges?.some((e) => this.recent(this.padEdge[e], now))) {
+        const left = (this.pressed.get(code) ?? 0) - 1;
+        if (left > 0) this.pressed.set(code, left);
+        else this.pressed.delete(code);
+        continue;
+      }
+      if (!this.padConnected) continue; // (named the keyboard as it came in)
+      if (edges) this.keyClaim = { at: now, poll: this.polls, edges };
+      else this.lastDevice = 'keyboard';
+    }
+    this.typed.clear();
 
     // --- keyboard: the whole of it, and each half on its own (two players, one laptop) ---
     for (const keys of [this.keysAll, this.keysL, this.keysR]) {
       keys.read(k, kp);
       keys.shaper.shape(keys.intent);
     }
+    for (const e of MENU_EDGES) if (this.keysAll.menu[e]) this.keyEdge[e] = { at: now, poll: this.polls };
 
     // --- gamepads: each slot on its own, and all of them merged for a one-player screen. Sticks merge
     // by whichever is pushed furthest, not summed: a pad some drivers expose twice must not double its
@@ -636,27 +702,38 @@ export class Input {
     const m = this.menu;
     Object.assign(m, this.keysAll.menu);
     m.any ||= this.touchTap;
-    const list = readPads();
-    const n = Math.max(list.length, this.pads.length);
     let connected = false;
     let px = 0;
     let py = 0;
     this.padPressed = false;
     for (let i = 0; i < n; i++) {
-      const pad = (this.pads[i] ??= new Pad(i));
-      pad.read(list[i] ?? null);
+      const pad = this.pads[i];
       if (!pad.connected) continue;
       connected = true;
       px = stronger(px, pad.intent.mx);
       py = stronger(py, pad.intent.my);
       addButtons(all, pad.intent);
-      orMenu(m, pad.menu);
+      // the key half of this press arrived first and has already moved the menu: this is it again
+      // (each controller's own `menu` keeps it — on its own, a controller is a player of its own)
+      for (const e of MENU_EDGES) {
+        if (!pad.menu[e]) continue;
+        if (this.keyClaim?.edges.includes(e)) this.keyClaim = null; // (that key was this controller)
+        const key = this.keyEdge[e];
+        if (key && key.poll < this.polls && this.recent(key, now)) continue;
+        m[e] = true;
+      }
+      m.any ||= pad.menu.any;
       pad.shaper.shape(pad.intent);
       if (pad.active) {
         this.lastDevice = 'pad';
         this.lastPad = i;
-        this.padPressed = true;
       }
+      // (a button: a gesture the browser counts, which a stick held over many frames is not)
+      if (pad.buttonDown) this.padPressed = true;
+    }
+    if (this.keyClaim && !this.recent(this.keyClaim, now)) {
+      this.lastDevice = 'keyboard';
+      this.keyClaim = null;
     }
     this.padConnected = connected;
     all.mx += px;

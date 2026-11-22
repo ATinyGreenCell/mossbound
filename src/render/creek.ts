@@ -111,8 +111,19 @@ function bumpy(x0: number, x1: number, y: number, amp: number, step: number, r: 
 
 /** Something that can paint the sky and the woods behind the creek (a Backdrop). */
 interface Sky {
-  draw(ctx: Ctx, W: number, H: number, camX: number, camY: number, rise: number, scale: number, t: number): void;
+  draw(ctx: Ctx, W: number, H: number, camX: number, camY: number, rise: number, scale: number, t: number, exact?: boolean): void;
+  /** done with it: give its canvases back (`now`: at once, not kept for later) */
+  release?(now?: boolean): void;
 }
+
+let scene: CreekScene | null = null;
+
+/**
+ * The title's creek — one for every visit to the title, so coming back to it (after a level, from the
+ * pause menu) doesn't paint the still picture again: that was 70–120 ms on a laptop's GPU and 0.7 s on
+ * a software renderer, every time. It is painted again only for a new shape of screen or a GPU reset.
+ */
+export const creekScene = () => (scene ??= new CreekScene());
 
 export class CreekScene {
   /** everything that doesn't move — sky, woods, rock, banks — with holes where the water shows through */
@@ -305,8 +316,11 @@ export class CreekScene {
     const c = still.getContext('2d')!;
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, W, H);
-    // ---- the sky and the woods (held still: only the water moves on this screen)
-    sky.draw(c, W, H, 0, 0, 0, 1, 0);
+    // ---- the sky and the woods (held still: only the water moves on this screen). Painted for exactly
+    // this size, then let go of: they live on in this picture, and a whole second copy of them (10–50 MB
+    // by the size of the screen) would otherwise be kept for nothing all through play.
+    sky.draw(c, W, H, 0, 0, 0, 1, 0, true);
+    sky.release?.(true);
     // ---- the rock: the cliff on the right with the fall's channel cut through it, and boulders on the left
     c.save();
     const ridge: [number, number][] = [

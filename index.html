@@ -12,6 +12,10 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="apple-touch-icon" href="./icon-180.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
+    <!-- the three Fredoka weights the game uses (see main.ts), fetched alongside the script rather than after it has run -->
+    <link rel="preload" href="/node_modules/@fontsource/fredoka/files/fredoka-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/node_modules/@fontsource/fredoka/files/fredoka-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/node_modules/@fontsource/fredoka/files/fredoka-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
     <title>Mossbound</title>
   </head>
   <body>

@@ -1,4 +1,11 @@
 export const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+
+/**
+ * The length of (x, y). Not Math.hypot: V8's hypot boxes its arguments into a fresh array and its
+ * answer into a fresh number on every call — garbage, a few times over, on every physics step — and
+ * runs about six times slower. Lengths here are pixels and tile-scale speeds, nowhere near overflow.
+ */
+export const len = (x: number, y: number) => Math.sqrt(x * x + y * y);
 export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 export const sign = (v: number) => (v > 0 ? 1 : v < 0 ? -1 : 0);
 

@@ -152,6 +152,8 @@ export class App {
   frameNow = 0;
   private screen: Screen | null = null;
   private pending: Screen | null = null;
+  /** a screen took over at the end of the last frame: its first frame starts on a clean slate of input */
+  private freshInput = false;
   private last = 0;
   private governor = new Governor();
   private errors: number[] = [];
@@ -213,10 +215,39 @@ export class App {
     return this.governor.level < 0.75 ? 0.6 : 1;
   }
 
-  /** Swap screens at the start of the next frame, so a screen can request a change mid-update. */
+  /**
+   * Hand over to another screen. It takes over at a moment no screen is mid-update: at the end of the
+   * frame that asked for it (a key or controller press, which a frame handles), or at the start of the
+   * next one (a click, a timer, the network — which come between frames). Either way the frame that is
+   * painted next shows the new screen, and only it.
+   */
   setScreen(s: Screen) {
     this.pending?.dispose();
     this.pending = s;
+  }
+
+  /**
+   * The pending screen takes over: the old one is disposed and the new one entered. The presses that
+   * asked for it were spent on the screen it replaces, so it starts with none — at once, or (`later`,
+   * for a swap at the end of a frame) at the start of its first frame, before input is read.
+   */
+  private swap(later = false) {
+    const old = this.screen;
+    this.screen = this.pending;
+    this.pending = null;
+    try {
+      old?.dispose();
+    } catch (err) {
+      console.error('[mossbound] dispose failed', err);
+    }
+    try {
+      this.screen?.enter?.();
+    } catch (err) {
+      console.error('[mossbound] enter failed', err);
+    }
+    this.governor.newScene();
+    if (later) this.freshInput = true;
+    else this.input.flush();
   }
 
   /** Keep the phone's screen on while playing (no-op where unsupported). */
@@ -257,7 +288,28 @@ export class App {
     requestAnimationFrame(this.frame);
   }
 
+  /**
+   * Stop the game where it stands: no more input, steps or frames, ever, on this page. An update is
+   * replacing it (see update.ts), and the next page can take seconds to arrive on a slow network —
+   * anything played meanwhile would be played on a page that's about to go.
+   */
+  halt() {
+    this.halted = true;
+    this.input.flush();
+  }
+
+  /** The new page never came (see update.ts): carry on where we were, as if nothing had happened. */
+  resume() {
+    if (!this.halted) return;
+    this.halted = false;
+    this.input.flush();
+    this.last = performance.now();
+    requestAnimationFrame(this.frame);
+  }
+  private halted = false;
+
   private frame = (now: number) => {
+    if (this.halted) return;
     requestAnimationFrame(this.frame);
     const rawMs = now - this.last;
     this.last = now;
@@ -266,21 +318,10 @@ export class App {
     const dt = Math.min(0.1, Math.max(0, rawMs / 1000) || 0);
     this.time += dt;
     if (IS_XBOX) this.watchFocus(dt);
-    if (this.pending) {
-      const old = this.screen;
-      this.screen = this.pending;
-      this.pending = null;
-      try {
-        old?.dispose();
-      } catch (err) {
-        console.error('[mossbound] dispose failed', err);
-      }
-      try {
-        this.screen.enter?.();
-      } catch (err) {
-        console.error('[mossbound] enter failed', err);
-      }
-      this.governor.newScene();
+    // (a change asked for between frames: a click, a timer, the network)
+    if (this.pending) this.swap();
+    if (this.freshInput) {
+      this.freshInput = false;
       this.input.flush();
     }
     this.renderer.flush();
@@ -313,6 +354,10 @@ export class App {
           if (i === 0) this.input.clearEdges();
         }
       } else this.input.clearEdges();
+      // A press handled in this frame asked for another screen. It takes over now, so this frame shows
+      // it: the new screen's menu went into the page when it was built, and leaving the swap to the next
+      // frame painted it over the old screen for a frame — then showed it a frame late.
+      if (this.pending) this.swap(true);
       if (!this.pending && !NO_RENDER) this.screen.render();
     } catch (err) {
       this.handleError(err, now);

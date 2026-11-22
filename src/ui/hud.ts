@@ -1,3 +1,4 @@
+import { warmGlyphs } from './glyphs';
 import { esc } from './menu';
 
 export interface PartnerStatus {
@@ -52,16 +53,21 @@ export class Hud {
     this.noticeEl = this.el.querySelector('.hud-notice')!;
     this.el.querySelector('[data-menu]')!.addEventListener('click', () => this.onMenu?.());
     setTimeout(() => this.bannerEl.classList.add('gone'), 3200);
+    // (a page that opens straight into a level — an invite, an update, the debug ground — has had no
+    // menu to get the symbols ready: see glyphs.ts)
+    warmGlyphs();
   }
 
   setSeeds(n: number, total: number) {
     const s = `${n} / ${total}`;
     if (s === this.last.seeds) return;
+    const first = !this.last.seeds;
     this.last.seeds = s;
     this.seedsEl.textContent = s;
-    this.seedsEl.parentElement!.classList.remove('pop');
-    void this.seedsEl.parentElement!.offsetWidth;
-    this.seedsEl.parentElement!.classList.add('pop');
+    // A seed pops the counter. The level's first figure (set while the level is being built, in the frame
+    // of the press that started it) just appears; and the pop restarts through the animation API, not
+    // the class toggle and forced reflow it used to need.
+    if (!first) this.seedsEl.parentElement!.animate?.([{ transform: 'scale(1)' }, { transform: 'scale(1.15)' }, { transform: 'scale(1)' }], { duration: 250 });
   }
 
   setFeathers(mask: number) {

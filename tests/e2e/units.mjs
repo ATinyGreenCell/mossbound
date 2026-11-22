@@ -753,6 +753,98 @@ const juice = await page.evaluate(async () => {
 });
 for (const [k, v] of Object.entries(juice)) t.check(k, v === true, v);
 
+// ---- the simulation's every-step work makes next to no garbage. 120 physics steps a second for as long
+// as a level lasts: whatever a step allocates is a minor collection every few seconds on a phone or an
+// Xbox, and a frame that takes one is a frame that hitches. Counted with the heap profiler, objects
+// already collected included, over 200 000 calls of each after warming them up (so they are optimised).
+// The vine's step made ~400 bytes straight and ~1 KB round a corner, every step (Math.hypot's boxes, a
+// closure and points made and thrown away each call); a beetle cost an object a step. What is left is
+// numbers boxed where they cross into a function V8 didn't inline — the limits keep it there.
+const cdp = await page.createCDPSession();
+await page.evaluate(async () => {
+  const { LEVELS } = await import('/src/game/levels.ts');
+  const { parseLevel } = await import('/src/game/level.ts');
+  const { World } = await import('/src/game/world.ts');
+  const { Bird } = await import('/src/game/bird.ts');
+  const { Tether } = await import('/src/game/tether.ts');
+  const { makeControls } = await import('/src/core/input.ts');
+  const T = 32;
+  // Fern Falls: three beetles, a crumbling bridge, rings
+  const L = parseLevel(LEVELS[1], 1);
+  const w = new World(L);
+  const birds = [new Bird(0), new Bird(1)];
+  birds[0].setKind('tall');
+  birds[1].setKind('small');
+  birds[0].place(L.spawns[0]);
+  birds[1].place(L.spawns[1]);
+  const tt = new Tether(w);
+  tt.tie(birds[0], birds[1]);
+  const walk = makeControls();
+  walk.moveX = 1;
+  const idle = makeControls();
+  // a bent vine: one end each side of the trunk at columns 12-13 (rows 12-13), the vine over its top —
+  // carried there a few pixels a step, so the vine wraps the way it does in play
+  const bent = [new Bird(0), new Bird(1)];
+  bent.forEach((b) => b.setKind('even'));
+  const ground = 14 * T - bent[0].h / 2 - 0.01;
+  bent[0].placeCenter({ x: 10.5 * T, y: ground });
+  bent[1].placeCenter({ x: 11 * T, y: ground });
+  const tb = new Tether(w);
+  tb.tie(bent[0], bent[1]);
+  const via = (x, y) => { while (Math.abs(bent[1].x - x) + Math.abs(bent[1].y - y) > 0.5) { bent[1].x += Math.max(-4, Math.min(4, x - bent[1].x)); bent[1].y += Math.max(-4, Math.min(4, y - bent[1].y)); tb.follow(bent[0], bent[1]); } };
+  via(11 * T, 10.5 * T);
+  via(15.5 * T, 10.5 * T);
+  via(15.5 * T, ground);
+  window.__bends = tb.pts.length;
+  // (the harness mustn't allocate either: a clock kept in an object field, not a captured variable that a
+  // double has to be boxed into, and one auth pair for every call)
+  const clock = { t: 0.5 };
+  const auth = [true, true];
+  window.__allocCases = {
+    'world.stepMovers (beetles walking)': () => { for (let i = 0; i < 1000; i++) { clock.t += 1 / 120; w.stepMovers(clock.t); } },
+    'world.stepDynamic': () => { for (let i = 0; i < 1000; i++) w.stepDynamic(1 / 120, birds); },
+    'bird.step, standing': () => { for (let i = 0; i < 1000; i++) { birds[1].rope = tt.ends[1]; birds[1].step(1 / 120, idle, w, birds[0]); } },
+    'bird.step, walking into a wall and back': () => {
+      for (let i = 0; i < 1000; i++) {
+        walk.moveX = (i >> 7) & 1 ? 1 : -1;
+        birds[0].rope = tt.ends[0];
+        birds[0].step(1 / 120, walk, w, birds[1]);
+      }
+    },
+    'tether.follow + solve, straight': () => { for (let i = 0; i < 1000; i++) { tt.follow(birds[0], birds[1]); tt.solve(birds, auth, 1 / 120); } },
+    'tether.follow + solve, round a corner': () => {
+      for (let i = 0; i < 1000; i++) {
+        bent[1].x = 15.5 * T + Math.sin(i * 0.05) * 20;
+        tb.follow(bent[0], bent[1]);
+        tb.solve(bent, auth, 1 / 120);
+      }
+    },
+  };
+  for (let k = 0; k < 300; k++) for (const f of Object.values(window.__allocCases)) f();
+});
+const allocs = {};
+for (const name of await page.evaluate(() => Object.keys(window.__allocCases))) {
+  // (the better of two runs: a deopt landing mid-run is the JIT's doing, not the step's)
+  for (let run = 0; run < 2; run++) {
+    await cdp.send('HeapProfiler.startSampling', { samplingInterval: 64, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+    await page.evaluate((name) => { const f = window.__allocCases[name]; for (let k = 0; k < 200; k++) f(); }, name);
+    const { profile } = await cdp.send('HeapProfiler.stopSampling');
+    let bytes = 0;
+    const walk = (n) => { bytes += n.selfSize; n.children.forEach(walk); };
+    walk(profile.head);
+    allocs[name] = Math.min(allocs[name] ?? Infinity, +(bytes / 200000).toFixed(1));
+  }
+}
+const bends = await page.evaluate(() => window.__bends);
+// (limits with room for a Chrome update to box a number or two differently — the gate runs whatever
+// Chrome the runner has — while still well under the old code: creatures 97 B, the vine 307 / 934 B)
+const allocLimits = { 'world.stepMovers (beetles walking)': 32, 'world.stepDynamic': 32, 'bird.step, standing': 96, 'bird.step, walking into a wall and back': 96, 'tether.follow + solve, straight': 200, 'tether.follow + solve, round a corner': 640 };
+t.check(
+  `a physics step makes next to no garbage (bytes per call: ${Object.entries(allocs).map(([k, v]) => `${k} ${v}`).join(', ')}; the bent vine has ${bends} bends)`,
+  bends > 0 && Object.entries(allocs).every(([k, v]) => v < allocLimits[k]),
+  { allocs, allocLimits },
+);
+
 const errs = [...page.errors];
 await browser.close();
 t.finish('units', errs);

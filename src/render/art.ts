@@ -40,6 +40,78 @@ export function glow(ctx: CanvasRenderingContext2D, x: number, y: number, r: num
   ctx.globalAlpha = 1;
 }
 
+// ------------------------------------------------------------------ props painted once
+
+interface Stamp {
+  c: HTMLCanvasElement;
+  /** where its top left goes, in device px from the whole pixel its anchor falls in */
+  x: number;
+  y: number;
+  used: number;
+  epoch: number;
+}
+const stamps = new Map<string, Stamp>();
+const MAX_STAMPS = 48;
+let stampClock = 0;
+/** the camera's scale the last prop was drawn at, and how many props have been drawn at it since */
+let stampScale = 0;
+let atScale = 0;
+
+/**
+ * Draw a part of a prop that never changes — a sign, a lantern's body, the flower pot — from a picture
+ * of it rather than as its paths: a GPU's canvas pays for every anti-aliased path every frame (a
+ * software renderer ~1 ms for a sign), and a picture is one image. The picture is painted for the
+ * camera's scale and for where the prop falls within a pixel (the camera moves in whole pixels, so that
+ * stays put), with its pixels on the screen's — so it's the same picture, in the same place, crisp. While
+ * the scale is still changing (the camera easing in or out) the paths are drawn as they are until it
+ * settles: a picture a frame would be no saving, and a stretched one would be soft.
+ *
+ * `box` bounds everything `paint` draws, in world px around (x, y).
+ */
+function stamp(ctx: CanvasRenderingContext2D, key: string, x: number, y: number, box: readonly [number, number, number, number], paint: (g: CanvasRenderingContext2D) => void) {
+  const m = ctx.getTransform();
+  const s = m.a;
+  if (m.b !== 0 || m.c !== 0 || m.d !== s || !(s > 0)) return paint(ctx);
+  if (s !== stampScale) {
+    stampScale = s;
+    atScale = 0;
+  }
+  if (atScale++ < 12) return paint(ctx);
+  const dx = x * s + m.e;
+  const dy = y * s + m.f;
+  const ix = Math.floor(dx);
+  const iy = Math.floor(dy);
+  const fx = dx - ix;
+  const fy = dy - iy;
+  const k = `${key}|${s}|${fx.toFixed(3)}|${fy.toFixed(3)}`;
+  let st = stamps.get(k);
+  if (!st || st.epoch !== canvasEpoch) {
+    const x0 = Math.floor(box[0] * s + fx) - 1;
+    const y0 = Math.floor(box[1] * s + fy) - 1;
+    const c = st?.c ?? document.createElement('canvas');
+    c.width = Math.ceil(box[2] * s + fx) + 1 - x0;
+    c.height = Math.ceil(box[3] * s + fy) + 1 - y0;
+    const g = c.getContext('2d')!;
+    g.setTransform(s, 0, 0, s, fx - x0 - x * s, fy - y0 - y * s);
+    paint(g);
+    // (its use counted before anything is let go of: the newest must never be the one that goes)
+    st = { c, x: x0, y: y0, used: ++stampClock, epoch: canvasEpoch };
+    stamps.set(k, st);
+    while (stamps.size > MAX_STAMPS) {
+      let oldest = '';
+      let age = Infinity;
+      for (const [kk, v] of stamps) if (v.used < age) [age, oldest] = [v.used, kk];
+      const v = stamps.get(oldest)!;
+      v.c.width = v.c.height = 0;
+      stamps.delete(oldest);
+    }
+  }
+  st.used = ++stampClock;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(st.c, ix + st.x, iy + st.y);
+  ctx.setTransform(m);
+}
+
 export const hexRgb = (hex: string) => `${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)}`;
 
 export const PLATE_COLORS = ['#ffcf4a', '#4ad3c9', '#ff7fb0'];
@@ -622,13 +694,21 @@ export function drawCheckpoint(ctx: CanvasRenderingContext2D, x: number, y: numb
   const lx = x + 7;
   const ly = base - 21;
   if (lit) glow(ctx, lx, ly, 28, '255,214,120', 0.7 + 0.1 * Math.sin(t * 9));
+  // the lantern and its cap, painted once (the flame flickers in it, and never reaches the cap, so it's
+  // drawn after both)
+  stamp(ctx, `lantern|${lit}|${th.ink}`, lx, ly, LANTERN_BOX, (g) => {
+    g.strokeStyle = th.ink;
+    g.lineWidth = 1.5;
+    g.fillStyle = lit ? '#ffe7a0' : '#4a4a62';
+    g.beginPath();
+    g.roundRect(lx - 5, ly - 6, 10, 12, 3);
+    g.fill();
+    g.stroke();
+    g.fillStyle = '#3a3048';
+    g.fillRect(lx - 6, ly - 8, 12, 2.5);
+  });
   ctx.strokeStyle = th.ink;
   ctx.lineWidth = 1.5;
-  ctx.fillStyle = lit ? '#ffe7a0' : '#4a4a62';
-  ctx.beginPath();
-  ctx.roundRect(lx - 5, ly - 6, 10, 12, 3);
-  ctx.fill();
-  ctx.stroke();
   if (lit) {
     ctx.fillStyle = '#ff9a3a';
     ctx.beginPath();
@@ -636,8 +716,10 @@ export function drawCheckpoint(ctx: CanvasRenderingContext2D, x: number, y: numb
     ctx.fill();
   }
   ctx.fillStyle = '#3a3048';
-  ctx.fillRect(lx - 6, ly - 8, 12, 2.5);
 }
+
+/** a lantern's body and cap, around its centre */
+const LANTERN_BOX = [-7, -9, 7, 7] as const;
 
 /** The nest: both birds inside clears the level. */
 /** The goal: a cosy terracotta pot of soil, a heart bobbing over it (both sprouts in it = level clear). */
@@ -649,37 +731,43 @@ export function drawNest(ctx: CanvasRenderingContext2D, x: number, y: number, t:
   heartPath(ctx, x, base - 66 + Math.sin(t * 2.5) * 4, 14 + inside * 3);
   ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = th.ink;
-  ctx.lineWidth = 2;
+  // the pot — tapering sides, a rim, soil — and the stem of a sprig already growing there, waiting for
+  // company: painted once (its two leaves sway, so they're drawn after)
+  stamp(ctx, `pot|${th.ink}`, x, y, POT_BOX, (g) => {
+    g.strokeStyle = th.ink;
+    g.lineWidth = 2;
+    g.lineJoin = 'round';
+    g.fillStyle = '#d8794a';
+    g.beginPath();
+    g.moveTo(x - 40, base - 30);
+    g.lineTo(x + 40, base - 30);
+    g.lineTo(x + 31, base);
+    g.lineTo(x - 31, base);
+    g.closePath();
+    g.fill();
+    g.stroke();
+    g.fillStyle = 'rgba(255,255,255,0.18)';
+    g.fillRect(x - 30, base - 24, 7, 20);
+    g.fillStyle = '#e68b58';
+    g.beginPath();
+    g.roundRect(x - 45, base - 38, 90, 10, 3);
+    g.fill();
+    g.stroke();
+    g.fillStyle = '#5a3a24';
+    g.beginPath();
+    g.ellipse(x, base - 38, 40, 4.5, 0, Math.PI, 0);
+    g.fill();
+    g.strokeStyle = '#4a7a1c';
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.moveTo(x + 24, base - 40);
+    g.quadraticCurveTo(x + 26, base - 50, x + 22, base - 56);
+    g.stroke();
+  });
+  // (what drawing it straight left on the canvas, for whatever comes after)
   ctx.lineJoin = 'round';
-  // the pot: tapering sides, a rim, soil
-  ctx.fillStyle = '#d8794a';
-  ctx.beginPath();
-  ctx.moveTo(x - 40, base - 30);
-  ctx.lineTo(x + 40, base - 30);
-  ctx.lineTo(x + 31, base);
-  ctx.lineTo(x - 31, base);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,0.18)';
-  ctx.fillRect(x - 30, base - 24, 7, 20);
-  ctx.fillStyle = '#e68b58';
-  ctx.beginPath();
-  ctx.roundRect(x - 45, base - 38, 90, 10, 3);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = '#5a3a24';
-  ctx.beginPath();
-  ctx.ellipse(x, base - 38, 40, 4.5, 0, Math.PI, 0);
-  ctx.fill();
-  // a sprig already growing there, waiting for company
   ctx.strokeStyle = '#4a7a1c';
   ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.moveTo(x + 24, base - 40);
-  ctx.quadraticCurveTo(x + 26, base - 50, x + 22, base - 56);
-  ctx.stroke();
   ctx.fillStyle = '#a8d64a';
   for (let i = 0; i < 2; i++) {
     const s = i ? 1 : -1;
@@ -689,7 +777,20 @@ export function drawNest(ctx: CanvasRenderingContext2D, x: number, y: number, t:
   }
 }
 
+/** everything a sign draws, around (x, y) */
+const SIGN_BOX = [-13, -15.5, 13, 17] as const;
+
+/** the flower pot, its rim and its sprig's stem, around the nest's (x, y) */
+const POT_BOX = [-47, -42, 47, 18] as const;
+
 export function drawSign(ctx: CanvasRenderingContext2D, x: number, y: number, th: Theme, near: boolean) {
+  stamp(ctx, `sign|${near}|${th.ink}`, x, y, SIGN_BOX, (g) => paintSign(g, x, y, th, near));
+  // (what drawing it straight left on the canvas, for whatever comes after)
+  ctx.fillStyle = ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.8;
+}
+
+function paintSign(ctx: CanvasRenderingContext2D, x: number, y: number, th: Theme, near: boolean) {
   const base = y + T / 2;
   ctx.fillStyle = '#7a5434';
   ctx.fillRect(x - 1.5, base - 22, 3, 22);

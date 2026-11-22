@@ -93,6 +93,7 @@ export class World {
   readonly trapFired: Uint8Array;
   readonly trapBit: Uint8Array;
   private readonly tmp: Pt = { x: 0, y: 0 };
+  private readonly beetle = { x: 0, face: 1 };
   private readonly hold: number;
 
   constructor(L: LevelData) {
@@ -323,7 +324,7 @@ export class World {
     const cs = this.L.creatures;
     for (let i = 0; i < cs.length; i++) {
       if (cs[i].kind !== Creature.Beetle) continue;
-      const p = beetlePos(cs[i], t);
+      const p = beetlePos(cs[i], t, this.beetle);
       this.creatureX[i] = p.x;
       this.creatureFace[i] = p.face;
     }
@@ -404,10 +405,13 @@ export class World {
   /** Plates, doors and crumbling blocks, given everyone who can stand on them this step. */
   stepDynamic(dt: number, bodies: readonly BodyLike[]) {
     const L = this.L;
+    // (every loop here by index: this runs every physics step, and a for-of is an iterator V8 may or
+    // may not manage to do without)
+    const nb = bodies.length;
     for (let i = 0; i < L.plates.length; i++) {
       const p = L.plates[i];
       let down = 0;
-      for (const b of bodies) if (this.standingOn(b, p.tx, p.ty + 1) && (!p.heavy || b.heavy)) down = 1;
+      for (let k = 0; k < nb; k++) if (this.standingOn(bodies[k], p.tx, p.ty + 1) && (!p.heavy || bodies[k].heavy)) down = 1;
       if (down !== this.plateDown[i]) {
         this.plateDown[i] = down;
       }
@@ -421,9 +425,10 @@ export class World {
       let open = want || this.doorHold[g] > 0;
       // never close a door on a bird standing in the doorway
       if (!open && this.doorOpen[g] > 0) {
-        for (const d of L.doors) {
+        for (let j = 0; j < L.doors.length; j++) {
+          const d = L.doors[j];
           if (d.group !== g) continue;
-          for (const b of bodies) if (this.overlapsTile(b, d.tx, d.ty)) open = true;
+          for (let k = 0; k < nb; k++) if (this.overlapsTile(bodies[k], d.tx, d.ty)) open = true;
         }
       }
       if (open !== !!this.doorWant[g]) {
@@ -437,8 +442,8 @@ export class World {
       const c = L.crumbles[i];
       const st = this.crumbleState[i];
       if (st === Crumble.Intact) {
-        for (const b of bodies) {
-          if (this.standingOn(b, c.tx, c.ty)) {
+        for (let k = 0; k < nb; k++) {
+          if (this.standingOn(bodies[k], c.tx, c.ty)) {
             this.crumbleState[i] = Crumble.Shaking;
             this.crumbleT[i] = CRUMBLE_SHAKE;
             break;
@@ -454,7 +459,7 @@ export class World {
         this.crumbleT[i] -= dt;
         if (this.crumbleT[i] <= 0) {
           let blocked = false;
-          for (const b of bodies) if (this.overlapsTile(b, c.tx, c.ty)) blocked = true;
+          for (let k = 0; k < nb; k++) if (this.overlapsTile(bodies[k], c.tx, c.ty)) blocked = true;
           if (!blocked) this.crumbleState[i] = Crumble.Intact;
         }
       }
@@ -466,7 +471,8 @@ export class World {
       if (c.kind !== Creature.Snaptrap) continue;
       const st = this.trapState[i];
       if (st === Trap.Dormant) {
-        for (const b of bodies) {
+        for (let k = 0; k < nb; k++) {
+          const b = bodies[k];
           if (b.ghost) continue;
           if (Math.abs(b.x - c.x) < TRAP_RANGE && Math.abs(b.y - c.y) < TRAP_RANGE) {
             this.trapState[i] = Trap.Rearing;

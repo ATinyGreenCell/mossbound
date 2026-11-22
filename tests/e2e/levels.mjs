@@ -386,10 +386,67 @@ const r = await page.evaluate(async () => {
   for (const K of [['tall', 'small'], ['small', 'tall'], ['even', 'even']]) out[K.join('/')] = play(K);
   return out;
 });
+
+// ---- where a sprout is put down: a level's start, a run continued from a lantern (which is also where
+// an update's reload and a partner's rejoin carry on from), and a seed that gave up waiting by its
+// partner and went home. Each must be somewhere that sprout's own body fits — for every pairing, at
+// every lantern. Fern Falls' third lantern stands right by the roots arch, and the second sprout used
+// to be put down inside it: wedged in the rock, or clinging to it from inside.
+const homes = await page.evaluate(async () => {
+  const { Session } = await import('/src/game/session.ts');
+  const { LEVELS, COURSE_INDEX } = await import('/src/game/levels.ts');
+  const { app, flow } = window.__fb;
+  const bad = [];
+  let checked = 0;
+  const grounds = [...LEVELS.map((_, i) => ({ level: i })), { level: COURSE_INDEX }, { level: LEVELS.length, practice: true }];
+  for (const g of grounds) {
+    for (const kinds of [['tall', 'small'], ['small', 'tall'], ['even', 'even']]) {
+      for (let cp = -1; ; cp++) {
+        const s = new Session(app, flow, { ...g, mode: 'local', seats: ['keysL', 'keysR'], profiles: flow.profiles(), kinds, ...(cp >= 0 ? { resume: { cp, seeds: [], grown: [], feathers: 0, time: 0, gen: 1 } } : {}) });
+        const lanterns = s.L.checkpoints.length;
+        for (const b of s.birds) {
+          checked++;
+          if (!s.world.boxFree(b.x, b.y, b.w, b.h)) bad.push(`${s.L.def.id} ${cp < 0 ? 'start' : `lantern ${cp}`} ${kinds.join('/')}: the ${b.kind} sprout at ${(b.x / 32).toFixed(2)},${(b.y / 32).toFixed(2)}`);
+        }
+        s.dispose();
+        if (cp + 1 >= lanterns) break;
+      }
+    }
+  }
+  // a seed whose partner hovers over a pit with nowhere to land beside them gives up after a while and
+  // goes home — to a lantern spot that, here, a rock juts into
+  const { parseLevel } = await import('/src/game/level.ts');
+  const { World } = await import('/src/game/world.ts');
+  const { Bird } = await import('/src/game/bird.ts');
+  const T = 32;
+  const H = 20, W = 40;
+  const map = Array.from({ length: H }, (_, y) => (y >= 15 ? '#'.repeat(15) + ' '.repeat(20) + '#'.repeat(5) : ' '.repeat(W)));
+  map[13] = ' '.repeat(12) + 'X' + ' '.repeat(W - 13);
+  map[14] = '  1 2' + ' '.repeat(W - 6) + 'N';
+  const L = parseLevel({ id: 'rock', name: 'rock', subtitle: '', theme: 'garden', song: 'garden', map }, 0);
+  const world = new World(L);
+  const partner = new Bird(0);
+  partner.setKind('small');
+  partner.x = 19.5 * T; partner.y = 13 * T; partner.grounded = false;
+  const home = { x: 12 * T - 2, y: 14 * T + 12 };
+  const goneHome = {};
+  for (const kind of ['tall', 'small', 'even']) {
+    const g = new Bird(1);
+    g.setKind(kind);
+    g.x = 19 * T; g.y = 17 * T;
+    g.die('fall');
+    let k = 0;
+    for (; k < 120 * 8 && g.ghost; k++) g.stepGhost(1 / 120, world, partner, home);
+    goneHome[kind] = { back: !g.ghost, afterSecs: +(k / 120).toFixed(2), fits: world.boxFree(g.x, g.y, g.w, g.h), nearHome: +(Math.hypot(g.x - home.x, g.y - home.y) / T).toFixed(2) };
+  }
+  return { checked, bad, goneHome };
+});
 await browser.close();
 
 const t = reporter();
 for (const [id, issues] of Object.entries(r.lint)) t.check(`lint ${id}`, issues.length === 0, issues.join('; '));
 t.check('both springboard signs teach holding on while your partner climbs', Object.values(r.fallbackSigns).every((n) => n === 1), r.fallbackSigns);
 for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v, r[K][lvl][`${k}Detail`] ?? '');
+t.check(`every sprout is put down somewhere its body fits: the start and every lantern, every level, every pairing (${homes.checked} placings)`, homes.bad.length === 0, homes.bad);
+t.check('a seed that gives up waiting and goes home is put down somewhere it fits there too', Object.values(homes.goneHome).every((v) => v.back && v.fits && v.nearHome < 2), homes.goneHome);
 t.finish('levels', page.errors);

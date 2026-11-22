@@ -249,13 +249,138 @@ function armPose(b: Bird): [number, number] {
   return [0.9 + walk * 0.5, 1.2 - walk * 0.5];
 }
 
+/** The tilt and the squash a sprout is drawn with right now (see paintSprout). */
+function pose(b: Bird) {
+  let rot = 0;
+  const rope = b.rope;
+  if (b.hanging && rope) rot = Math.atan2(rope.pivot.x - b.x, -(rope.pivot.y - b.y)) * 0.75;
+  else if (b.anchored && rope) rot = -Math.sign(rope.pivot.x - b.x || b.facing) * 0.18;
+  else if (b.cling !== 0) rot = b.cling * 0.12;
+  else if (b.grounded && Math.abs(b.vx) > 40) rot = Math.sign(b.vx) * 0.06 + (b.strain > 0.3 ? Math.sign(b.vx) * 0.1 : 0);
+  else if (!b.grounded) rot = clamp(b.vx / 1800, -0.22, 0.22);
+  // Squash around the feet: the springy impulse plus the lean of rising or falling. A landing takes
+  // the full flattening — that's where the punch reads — but a stretch is given less height than it
+  // takes width, or a tall sprout leaving the ground draws as a tube rather than a sprout.
+  const sq = clamp(b.squash + b.airLean, -0.42, LAND_SQUASH_MAX);
+  return { rot, sq };
+}
+
+/**
+ * Everything paintSprout can draw for this sprout, as a box around its centre (world px): its body,
+ * leaves and limbs in every pose (a glide's leaf held overhead, a hat), squashed and turned the way it
+ * is now, and a dash's swoosh behind it. Null if the sprout is somewhere it can't be (not finite).
+ */
+export function sproutBox(b: Bird): [number, number, number, number] | null {
+  if (b.ghost) return [-20, -20, 20, 20];
+  const feet = b.h / 2;
+  const k = b.traits.art;
+  // the body's own box, before it's squashed and turned
+  let half: number;
+  let top: number;
+  if (b.kind === 'tall') {
+    half = 20;
+    top = b.fluttering ? 47 : 39;
+  } else {
+    half = Math.max(9 * k + 2, 7.5 * k + 8, b.fluttering ? 14 * k + 2 : 0);
+    top = b.fluttering ? 36.3 * k + 8 - feet : feet + 15 * k + 2;
+  }
+  const bottom = feet + 3;
+  const { rot, sq } = pose(b);
+  const fx = 1 + sq * 0.8;
+  const fy = 1 - sq * (sq < 0 ? 0.72 : 1);
+  const c = Math.cos(rot);
+  const n = Math.sin(rot);
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [px, py] of [
+    [-half, -top],
+    [half, -top],
+    [-half, bottom],
+    [half, bottom],
+  ]) {
+    const qx = px * fx;
+    const qy = feet + (py - feet) * fy;
+    const x = qx * c - qy * n;
+    const y = qx * n + qy * c;
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  if (b.dashT > 0) {
+    // the swoosh: from the centre to 26 px back along the way it's going, b.h × 0.7 wide, round ends
+    const sp = Math.hypot(b.vx, b.vy) || 1;
+    const ex = (-b.vx / sp) * 26;
+    const ey = (-b.vy / sp) * 26;
+    const r = b.h * 0.35 + 1;
+    x0 = Math.min(x0, Math.min(0, ex) - r);
+    y0 = Math.min(y0, Math.min(0, ey) - r);
+    x1 = Math.max(x1, Math.max(0, ex) + r);
+    y1 = Math.max(y1, Math.max(0, ey) + r);
+  }
+  const box: [number, number, number, number] = [x0 - 1, y0 - 1, x1 + 1, y1 + 1];
+  return box.every(Number.isFinite) ? box : null;
+}
+
+/** each sprout's own little canvas, drawn on by the CPU (see drawSprout) */
+const sprites = new WeakMap<Bird, { c: HTMLCanvasElement; g: CanvasRenderingContext2D }>();
+
+/**
+ * A sprout, drawn around its body centre (see paintSprout) — painted first onto a little canvas of its
+ * own that the CPU draws on, then laid onto the screen in one go.
+ *
+ * A sprout is some fifty small anti-aliased paths, a dozen of them strokes, and a GPU's canvas pays for
+ * each one: on a software renderer the two sprouts were 15–20 ms of every frame, on this laptop's GPU
+ * ~4 ms. The CPU draws them in microseconds; the little canvas, sized to the sprout's pose and painted
+ * at the screen's own scale with its pixels on the screen's, is then one image. Same drawing, same
+ * place to the pixel, at every scale; only the rasteriser differs (anti-aliasing of thin outlines to
+ * within a fraction of a pixel's coverage). Anything it can't line up (a turned canvas) is drawn straight.
+ */
+export function drawSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: number, ink: string, hat: string, menu: boolean) {
+  const m = ctx.getTransform();
+  const s = m.a;
+  const box = m.b === 0 && m.c === 0 && m.d === s && s > 0 ? sproutBox(b) : null;
+  if (!box) return paintSprout(ctx, b, col, t, ink, hat, menu);
+  // the box on the screen, in whole pixels (one to spare all round for the anti-aliased edge)
+  const X0 = Math.floor((b.x + box[0]) * s + m.e) - 1;
+  const Y0 = Math.floor((b.y + box[1]) * s + m.f) - 1;
+  const w = Math.ceil((b.x + box[2]) * s + m.e) + 1 - X0;
+  const h = Math.ceil((b.y + box[3]) * s + m.f) + 1 - Y0;
+  if (!(w > 0 && h > 0 && w < 2048 && h < 2048)) return paintSprout(ctx, b, col, t, ink, hat, menu);
+  let sp = sprites.get(b);
+  if (!sp) {
+    const c = document.createElement('canvas');
+    sp = { c, g: c.getContext('2d', { willReadFrequently: true })! };
+    sprites.set(b, sp);
+  }
+  // (sized in steps of 8 so a pose that grows a pixel doesn't make a new canvas; resizing clears it)
+  const cw = Math.ceil(w / 8) * 8;
+  const ch = Math.ceil(h / 8) * 8;
+  const g = sp.g;
+  if (sp.c.width !== cw || sp.c.height !== ch) {
+    sp.c.width = cw;
+    sp.c.height = ch;
+  } else {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+  }
+  g.setTransform(s, 0, 0, s, m.e - X0, m.f - Y0);
+  g.globalAlpha = 1;
+  paintSprout(g, b, col, t, ink, hat, menu);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(sp.c, 0, 0, w, h, X0, Y0, w, h);
+  ctx.setTransform(m);
+}
+
 /**
  * A sprout, drawn around its body centre like a bird was: tilted toward the vine while it hangs,
  * leaning back while it holds on, squashed and stretched by its springy `squash`. Both are little
  * twig folk on two jointed legs: the tall one a bark-grained torso and a round head under a crown of
  * leaves, the small one a seed that is head and body at once, with two leaves that flap like wings.
  */
-export function drawSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: number, ink: string, hat: string, menu: boolean) {
+export function paintSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColor, t: number, ink: string, hat: string, menu: boolean) {
   ctx.save();
   ctx.translate(b.x, b.y);
   if (b.ghost) {
@@ -279,18 +404,8 @@ export function drawSprout(ctx: CanvasRenderingContext2D, b: Bird, col: BirdColo
     ctx.stroke();
     ctx.restore();
   }
-  let rot = 0;
-  const rope = b.rope;
-  if (b.hanging && rope) rot = Math.atan2(rope.pivot.x - b.x, -(rope.pivot.y - b.y)) * 0.75;
-  else if (b.anchored && rope) rot = -Math.sign(rope.pivot.x - b.x || b.facing) * 0.18;
-  else if (b.cling !== 0) rot = b.cling * 0.12;
-  else if (b.grounded && Math.abs(b.vx) > 40) rot = Math.sign(b.vx) * 0.06 + (b.strain > 0.3 ? Math.sign(b.vx) * 0.1 : 0);
-  else if (!b.grounded) rot = clamp(b.vx / 1800, -0.22, 0.22);
+  const { rot, sq } = pose(b);
   ctx.rotate(rot);
-  // Squash around the feet: the springy impulse plus the lean of rising or falling. A landing takes
-  // the full flattening — that's where the punch reads — but a stretch is given less height than it
-  // takes width, or a tall sprout leaving the ground draws as a tube rather than a sprout.
-  const sq = clamp(b.squash + b.airLean, -0.42, LAND_SQUASH_MAX);
   ctx.translate(0, feet);
   ctx.scale(b.facing * (1 + sq * 0.8), 1 - sq * (sq < 0 ? 0.72 : 1));
   ctx.translate(0, -feet);

@@ -1,5 +1,5 @@
 import type { ControlFrame } from '../core/input';
-import { approach, clamp } from '../core/math';
+import { approach, clamp, len } from '../core/math';
 import type { Pt } from './level';
 import type { RopeBird, RopeEnd } from './tether';
 import {
@@ -120,6 +120,8 @@ export class Bird implements RopeBird {
   climbing = 0;
   ghost = false;
   ghostT = 0;
+  /** a ghost waiting by its partner for somewhere to land: seconds until it looks again (see stepGhost) */
+  private lookT = 0;
   private ghostFromX = 0;
   private ghostFromY = 0;
   invuln = 0;
@@ -216,6 +218,18 @@ export class Bird implements RopeBird {
     this.placeCenter({ x: p.x, y: p.y + BIRD_H / 2 - this.h / 2 });
   }
 
+  /**
+   * Stand at a spot from the level as `place` does — or, when this body doesn't fit there (a lantern's
+   * spot sits by a rock that a taller or wider sprout would be inside), at the nearest spot it does fit,
+   * found the way a seed coming home finds one.
+   */
+  placeFree(world: World, p: Pt) {
+    this.place(p);
+    if (world.boxFree(this.x, this.y, this.w, this.h)) return;
+    const spot = freeSpotNear(world, p.x, p.y + BIRD_H / 2 - this.h / 2, this.w, this.h);
+    if (spot) this.placeCenter(spot);
+  }
+
   /** Put this body's centre exactly here. */
   placeCenter(p: Pt) {
     this.x = this.prevX = p.x;
@@ -293,9 +307,9 @@ export class Bird implements RopeBird {
       // swing: push along the arc, a pendulum does the rest
       const dx = this.x - rope.pivot.x;
       const dy = this.y + this.ropeOff - rope.pivot.y;
-      const len = Math.hypot(dx, dy) || 1;
-      let tx = -dy / len;
-      let ty = dx / len;
+      const r = len(dx, dy) || 1;
+      let tx = -dy / r;
+      let ty = dx / r;
       if (tx * mx < 0) {
         tx = -tx;
         ty = -ty;
@@ -434,7 +448,7 @@ export class Bird implements RopeBird {
       let dx = mx;
       let dy = Math.abs(c.moveY) > 0.3 ? -c.moveY : 0;
       if (!dx && !dy) dx = this.facing;
-      const n = Math.hypot(dx, dy);
+      const n = len(dx, dy);
       this.vx = (dx / n) * DASH_V;
       this.vy = (dy / n) * DASH_V;
       this.dashT = DASH_TIME;
@@ -485,7 +499,9 @@ export class Bird implements RopeBird {
       if (!wasFluttering) this.fx.push({ k: 'flutter' });
     }
     this.inVent = false;
-    for (const v of world.L.vents) {
+    const vents = world.L.vents;
+    for (let i = 0; i < vents.length; i++) {
+      const v = vents[i];
       if (this.x > v.x0 && this.x < v.x1 && this.y > v.top && this.y < v.bottom) {
         this.inVent = true;
         this.vy = Math.max(-VENT_MAX_UP, this.vy - VENT_ACCEL * dt);
@@ -604,6 +620,10 @@ export class Bird implements RopeBird {
     // --- walls: anyone can kick off one they brush in mid-air; only a climber sticks to one
     this.stepWallTouch(world);
     if (T_.climb) this.stepWall(world, mx, c);
+    // holding on needs something to hold on with: feet that left the ground this step (a crumbling
+    // block, a blossom, a lift dropping away) let go now, not at the start of the next step — the vine,
+    // a tug and the partner's screen all read this before then
+    if (this.anchored && !this.grounded && this.cling === 0) this.anchored = false;
 
     // --- dangers
     if (this.invuln <= 0) {
@@ -611,7 +631,7 @@ export class Bird implements RopeBird {
       else if (world.creatureHazard(this)) this.die('bite');
     }
     // (a safety net: nothing in the game moves a bird faster than this)
-    const sp = Math.hypot(this.vx, this.vy);
+    const sp = len(this.vx, this.vy);
     if (sp > MAX_SPEED) {
       this.vx *= MAX_SPEED / sp;
       this.vy *= MAX_SPEED / sp;
@@ -660,26 +680,25 @@ export class Bird implements RopeBird {
 
   /** Cling to a wall pushed against in the air, keep to it, climb over its top, or let go. */
   private stepWall(world: World, mx: number, c: ControlFrame) {
-    const touching = (side: number, reach = 1.5) => !world.boxFree(this.x + side * reach, this.y, this.w, this.h);
     if (this.cling !== 0) {
       const side = this.cling;
       // (a grip, not a touch: the vine tugging a climber a pixel or two off the wall doesn't shake it loose)
-      if (touching(side) === false && touching(side, 4)) this.x += side * (world.boxFree(this.x + side * 2.5, this.y, this.w, this.h) ? 2.5 : 1);
+      if (this.touching(world, side) === false && this.touching(world, side, 4)) this.x += side * (world.boxFree(this.x + side * 2.5, this.y, this.w, this.h) ? 2.5 : 1);
       // climbing (or pushing) up to a lip: over it
       if ((c.moveY > 0.3 || mx * side > 0.3) && this.ontoLip(world, side)) {
         this.cling = 0;
         return;
       }
-      if (this.grounded || this.hanging || mx * side < -0.3 || !touching(side, 4)) {
+      if (this.grounded || this.hanging || mx * side < -0.3 || !this.touching(world, side, 4)) {
         // stick pulled away, or the wall ran out: climbing past its top steps up onto it
-        if (!this.grounded && !touching(side) && c.moveY > 0.3) this.overTop(world, side);
+        if (!this.grounded && !this.touching(world, side) && c.moveY > 0.3) this.overTop(world, side);
         this.cling = 0;
       }
       return;
     }
     if (this.grounded || this.hanging || this.dashT > 0 || this.wallJumpT > 0 || mx === 0 || this.vy < -260) return;
     const side = mx > 0 ? 1 : -1;
-    if (!touching(side)) return;
+    if (!this.touching(world, side)) return;
     // a lip just above the feet is stepped up onto, not clung to underneath
     if (this.ontoLip(world, side)) return;
     this.cling = side as -1 | 1;
@@ -691,9 +710,15 @@ export class Bird implements RopeBird {
     this.fx.push({ k: 'cling' });
   }
 
+  /** A wall on that side, within `reach` px of the body. */
+  private touching(world: World, side: number, reach = 1.5) {
+    return !world.boxFree(this.x + side * reach, this.y, this.w, this.h);
+  }
+
   /** A wall whose top is within half a tile above the feet: up onto it (true), as a walker steps up a lip. */
   private ontoLip(world: World, side: number) {
-    for (const up of [3, 6, 9, 12, 15]) {
+    for (let k = 0; k < LIP_UPS.length; k++) {
+      const up = LIP_UPS[k];
       if (world.boxFree(this.x + side * 2, this.y - up, this.w, this.h)) {
         this.y -= up;
         this.x += side * 2;
@@ -707,7 +732,8 @@ export class Bird implements RopeBird {
   /** Climbed up past the top of a wall: step over onto the ledge beside it. */
   private overTop(world: World, side: number) {
     const x = this.x + side * (this.w / 2 + 3);
-    for (const dy of [0, -4, -8, -12]) {
+    for (let k = 0; k < OVER_RISES.length; k++) {
+      const dy = OVER_RISES[k];
       if (world.boxFree(x, this.y + dy, this.w, this.h)) {
         this.x = x;
         this.y += dy;
@@ -725,7 +751,8 @@ export class Bird implements RopeBird {
 
   /** Step up onto a lip no taller than 9 px, if there's room. */
   private stepUp(world: World, dir: number) {
-    for (const up of [3, 6, 9]) {
+    for (let k = 0; k < STEP_UPS.length; k++) {
+      const up = STEP_UPS[k];
       if (world.boxFree(this.x + dir * 2, this.y - up, this.w, this.h)) {
         this.y -= up;
         this.x += dir * 2;
@@ -799,6 +826,7 @@ export class Bird implements RopeBird {
     if (this.ghost) return;
     this.ghost = true;
     this.ghostT = 0;
+    this.lookT = 0;
     this.ghostFromX = this.x;
     this.ghostFromY = Math.min(this.y, 1e6);
     this.vx = this.vy = 0;
@@ -832,16 +860,26 @@ export class Bird implements RopeBird {
     if (u < 1) return;
     let spot: Pt | null;
     if (toPartner) {
-      spot = spotBeside(world, partner!, this.w, this.h);
       // Nowhere to land beside them yet (a one-tile nook, a wall over a pit, a partner in mid-air):
       // hover there and keep looking. Coming back in mid-air over a pit only falls and dies again.
       // Going home is the last resort, and only once the string will still reach from there: tied
       // across the level it would haul them both at its reeling-in cap. Otherwise keep waiting —
       // the partner climbs out, or follows us, and then we both come back at the lantern together.
-      if (!spot && (this.ghostT < GHOST_TIME + GHOST_WAIT || Math.hypot(home.x - partner!.x, home.y - partner!.y) > ROPE_LEN)) return;
+      const giveUp = this.ghostT >= GHOST_TIME + GHOST_WAIT && len(home.x - partner!.x, home.y - partner!.y) <= ROPE_LEN;
+      // (a look is a few hundred box tests: while waiting it looks GHOST_LOOK apart, not every step —
+      // but always on the first step it could come back, and on any step it would give up)
+      this.lookT -= dt;
+      if (this.lookT > 0 && !giveUp) return;
+      spot = spotBeside(world, partner!, this.w, this.h);
+      if (!spot && !giveUp) {
+        this.lookT = GHOST_LOOK;
+        return;
+      }
     } else spot = freeSpotNear(world, home.x, home.y + BIRD_H / 2 - this.h / 2, this.w, this.h);
     if (spot) this.placeCenter(spot);
-    else this.place(home);
+    // (given up waiting by the partner, or nowhere free by the lantern: the lantern's own spot — or as
+    // near it as this body fits, since it may not fit the spot itself)
+    else this.placeFree(world, home);
     this.invuln = INVULN_TIME;
     this.vy = -200;
     this.squash = -0.3;
@@ -885,7 +923,7 @@ export class Bird implements RopeBird {
     if (Math.abs(this.vx) < 30 && lookAt && this.grounded) {
       const dx = lookAt.x - this.x;
       const dy = lookAt.y - this.y;
-      const d = Math.hypot(dx, dy) || 1;
+      const d = len(dx, dy) || 1;
       lx = dx / d;
       ly = dy / d;
     } else if (!this.grounded) {
@@ -896,8 +934,15 @@ export class Bird implements RopeBird {
   }
 }
 
+/** how far up a lip a sprout steps (walking), and climbs (gripping a wall), and rises to get over a wall's top */
+const STEP_UPS = [3, 6, 9];
+const LIP_UPS = [3, 6, 9, 12, 15];
+const OVER_RISES = [0, -4, -8, -12];
+
 /** how long a ghost hovers by its partner waiting for somewhere to land, before giving up and going home */
 const GHOST_WAIT = 3;
+/** while it waits, it looks for somewhere to land this often (seconds) rather than every physics step */
+const GHOST_LOOK = 0.1;
 /** how far from its partner a ghost will look for that spot */
 const BESIDE_X = 3.5 * T;
 const BESIDE_UP = 3 * T;
@@ -957,7 +1002,7 @@ function overGround(world: World, x: number, y: number, w: number, h: number) {
 
 /** Is the straight line between two points clear of solid tiles? */
 function sees(world: World, x0: number, y0: number, x1: number, y1: number) {
-  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 4);
+  const n = Math.ceil(len(x1 - x0, y1 - y0) / 4);
   for (let i = 1; i < n; i++) {
     const t = i / n;
     if (world.solidAt(Math.floor((x0 + (x1 - x0) * t) / T), Math.floor((y0 + (y1 - y0) * t) / T))) return false;

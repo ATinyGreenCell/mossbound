@@ -25,6 +25,12 @@ const FULL_MS = 5000;
 /** A path we haven't heard from for this long isn't trusted for sending. */
 const PATH_STALE_MS = 2500;
 /**
+ * The direct path quiet this long (a dozen bird packets at 40 Hz) may be dying: until it's heard from
+ * again, the bird stream goes over the relay as well (the receiver keeps whichever copy comes first), so
+ * a path that does die hands over before the partner's level holds still (FREEZE_MS, 1.6 s).
+ */
+const SHAKY_MS = 300;
+/**
  * Each side's clock counts from its own page load, so the two can sit any sensible distance apart —
  * but not years apart. A reply time implying that isn't a clock reading, and the shared clock it would
  * set moves the platforms both players are standing on.
@@ -189,7 +195,21 @@ export class NetLink {
     }
     this.pingTimer = window.setInterval(() => this.tick(), 1000);
     window.addEventListener('pagehide', this.onPageHide);
+    window.addEventListener('online', this.onWake);
+    document.addEventListener('visibilitychange', this.onWake);
   }
+
+  /**
+   * The network may have changed under us — it's back (`online`), or the page is being shown again after
+   * the phone slept or the tab sat in the background: don't wait for timers to find out what survived.
+   */
+  private readonly onWake = () => {
+    if (this.closed || document.visibilityState === 'hidden') return;
+    this.relay?.wake();
+    this.healRt();
+    if (this.peerId) this.checkAway();
+    this.sendHelloRelay();
+  };
 
   private async startDirect() {
     let joinRoom: typeof import('trystero').joinRoom;
@@ -240,10 +260,10 @@ export class NetLink {
     }
   }
 
-  private hello(ack = false): Wire {
+  private hello(ack = false, partner = this.peerId && this.status === 'connected' ? this.peerId : null): Wire {
     // (naming our partner while we're with them: a newcomer is told the room's taken. Once they've
     // dropped out the seat is open again — to them reloading, or to whoever takes it)
-    const taken = this.peerId && this.status === 'connected' ? { with: this.peerId } : {};
+    const taken = partner ? { with: partner } : {};
     return { t: 'hello', v: PROTOCOL, role: this.role, id: this.myId, ...taken, ...(ack ? { ack: 1 as const } : {}) };
   }
 
@@ -309,12 +329,12 @@ export class NetLink {
     reply = (r) => {
       if (!this.muted) answer(r);
     };
+    let replace = false;
     if (this.peerId && this.peerId !== m.id) {
       // our partner reloaded the page (a new id) and the old one has gone quiet: welcome them back
       const quiet = performance.now() - Math.max(this.lastDirect, this.lastRelay);
-      if (m.v === PROTOCOL && m.role !== this.role && (this.status === 'reconnecting' || this.status === 'lost' || quiet > AWAY_MS)) {
-        this.replacePeer(m.id, tpeer);
-      } else {
+      if (m.v === PROTOCOL && m.role !== this.role && (this.status === 'reconnecting' || this.status === 'lost' || quiet > AWAY_MS)) replace = true;
+      else {
         reply({ t: 'full' });
         return false;
       }
@@ -337,7 +357,16 @@ export class NetLink {
       if (this.role === 'host' && !this.peerId && m.id < this.myId) this.fail('Someone else is hosting this room code. Make a new room and try again.');
       return false;
     }
-    if (!m.ack) reply(this.hello(true));
+    // The answer goes first. Whoever said hello takes nothing from us until they have heard it, and
+    // pairing (below) is what sends them our profile, our save and — from a host — the level: sent
+    // before the answer, all of it was dropped on arrival, and a partner back from a page reload never
+    // learned our name, colour or hat. (Naming them as our partner already: that's what they're about
+    // to be, and an answer naming the one they replace would read as "this room is full".)
+    if (!m.ack) reply(this.hello(true, replace ? m.id : undefined));
+    if (replace) {
+      this.replacePeer(m.id, tpeer);
+      return true;
+    }
     // (the direct path is known before anyone hears we're connected: what they send goes both ways)
     if (tpeer) this.useDirect(tpeer);
     if (!this.peerId) {
@@ -430,6 +459,7 @@ export class NetLink {
       }
     } else if (this.tpeer) void this.cAct?.(ping, this.tpeer).catch(() => undefined);
     void this.relay?.send('p', ping);
+    this.relay?.check();
     this.healRt();
     this.checkAway();
   }
@@ -506,6 +536,8 @@ export class NetLink {
         if (this.status === 'reconnecting') this.setStatus('lost', 'Your partner disconnected.');
       }, RECONNECT_GRACE_MS);
       this.setStatus('reconnecting');
+      // (every path has gone quiet: whatever the relay's sockets claim, ask them now)
+      this.relay?.wake();
       this.sendHelloRelay();
     }
   }
@@ -618,18 +650,21 @@ export class NetLink {
     if (!this.peerId || this.closed || this.muted) return false;
     const now = performance.now();
     const fast = this.fast();
+    let sent = false;
     if (fast && this.directHealthy(now)) {
       try {
         fast.send('S' + JSON.stringify(m));
-        return true;
+        sent = true;
       } catch {
         // fall through
       }
     }
-    if (this.relay?.up && (!this.directHealthy(now) || !fast)) {
+    // the relay: when the direct path can't carry it — or has gone quiet for a moment (see SHAKY_MS)
+    if (this.relay?.up && (!sent || now - this.lastDirect > SHAKY_MS)) {
       void this.relay.sendSnap(m);
-      if (!this.tpeer) return true;
+      if (sent || !this.tpeer) return true;
     }
+    if (sent) return true;
     // direct link without the fast channel (yet): the reliable one, with a cap on what's in flight
     if (!this.tpeer || !this.sAct || this.inflight >= MAX_INFLIGHT) return false;
     this.inflight++;
@@ -654,6 +689,8 @@ export class NetLink {
     }
     this.closed = true;
     window.removeEventListener('pagehide', this.onPageHide);
+    window.removeEventListener('online', this.onWake);
+    document.removeEventListener('visibilitychange', this.onWake);
     window.clearTimeout(this.findTimer);
     window.clearTimeout(this.graceTimer);
     window.clearInterval(this.pingTimer);

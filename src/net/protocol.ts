@@ -55,8 +55,12 @@ export type CtrlMsg =
   | { t: 'end'; c: number }
   /** gameplay events for level session `n` */
   | { t: 'ev'; n: number; e: GameEvent }
-  /** the collectables, checkpoint and grown plants as this side knows them (merged by union / max) */
-  | { t: 'world'; n: number; seeds: number[]; feathers: number; cp: number; grown?: number[] }
+  /**
+   * the collectables, checkpoint and grown plants as this side knows them (merged by union / max) — and
+   * the vine: [its change count, tied (1) or not (0), which bird made that change] (see Session.vineFrom;
+   * builds before 1.9.2 neither send nor read it)
+   */
+  | { t: 'world'; n: number; seeds: number[]; feathers: number; cp: number; grown?: number[]; tie?: [number, number, number] }
   /** host: level cleared */
   | { t: 'clear'; n: number; time: number }
   /** clock sync: ping with sender time, pong echoes it plus the replier's time */
@@ -75,9 +79,13 @@ export type GameEvent =
   /** the sender shot its vine over ring `i` (a peg index), or let go of the one it held */
   | { k: 'hook'; i: number }
   | { k: 'unhook' }
-  /** the sender tied the vine between the two sprouts, standing next to the receiver — or untied it */
-  | { k: 'tie' }
-  | { k: 'untie' }
+  /**
+   * the sender tied the vine between the two sprouts, standing next to the receiver — or untied it. `s`:
+   * the vine's change count after this change, so changes crossing in flight settle the same way on both
+   * screens (builds before 1.9.2 send none: their change is taken as the newest)
+   */
+  | { k: 'tie'; s?: number }
+  | { k: 'untie'; s?: number }
   /** the sender grew the plant in patch of soil `i` */
   | { k: 'grow'; i: number }
   /** pause-menu "regroup": both birds back to the checkpoint */
