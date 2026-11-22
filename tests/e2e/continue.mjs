@@ -62,7 +62,16 @@ async function finish(page) {
 }
 /** The game's own save module (the same copy the game uses). */
 const saveModule = 'window.__fb.save ?? (await import("/src/core/save.ts"))';
+/**
+ * Which half of the scenarios this run plays (`a` or `b`; all of them when not given). As one group the
+ * file came within a minute of run.mjs's per-test limit on a CI runner with no GPU (452-533 s against
+ * 600 at 1.8.2), and slightly costlier level art in 1.9.0 tipped it over — twice, so the gate never
+ * published. Two halves fit comfortably and land on different shards; no check changed.
+ */
+const PART = process.argv[2] ?? '';
+const HALF_B = new Set(['damaged save', 'no storage', 'names and times', 'save codes', 'rooms', 'carried over']);
 async function scenario(name, fn) {
+  if ((PART === 'a' && HALF_B.has(name)) || (PART === 'b' && !HALF_B.has(name))) return;
   try {
     await fn();
   } catch (e) {

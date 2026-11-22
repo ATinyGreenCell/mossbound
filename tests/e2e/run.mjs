@@ -48,7 +48,9 @@ const TESTS = [
   { name: 'menus', file: 'menus.mjs', est: 35, pass: passed('menus') },
   { name: 'resize', file: 'resize.mjs', est: 25, pass: passed('resize') },
   { name: 'save', file: 'save.mjs', est: 15, pass: passed('save') },
-  { name: 'continue', file: 'continue.mjs', est: 90, pass: passed('continue') },
+  // (in two halves: as one group it outgrew the killer's 600 s on a runner with no GPU — see continue.mjs)
+  { name: 'continue', file: 'continue.mjs', args: ['a'], est: 50, pass: passed('continue') },
+  { name: 'continue-b', file: 'continue.mjs', args: ['b'], est: 45, pass: passed('continue') },
   { name: 'sprouts', file: 'sprouts.mjs', est: 30, pass: passed('sprouts') },
   { name: 'practice', file: 'practice.mjs', est: 25, pass: passed('practice') },
   { name: 'course', file: 'course.mjs', est: 20, pass: passed('course') },
