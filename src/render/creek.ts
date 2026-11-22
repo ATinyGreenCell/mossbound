@@ -3,9 +3,10 @@
  * A waterfall comes down a mossy rock face on the right, clear of the buttons, into a creek that runs
  * across behind the two sprouts, who stand on a mossy bank in front.
  *
- * The rock, the banks, the stones, the moss and the ferns are painted once per screen size (two
- * canvases, cropped to where they are); a frame only moves the water — streaks down the fall, foam
- * where it lands, ripples and glints running down the creek — and a few fireflies over it.
+ * The sky, the woods, the rock, the banks, the stones, the moss and the ferns are painted once per
+ * screen shape into one picture with holes where the water is; a frame draws only the water —
+ * streaks down the fall, ripples and glints running down the creek — then that picture over it, then
+ * the foam where the fall lands and a few fireflies.
  */
 import { rng, TAU } from '../core/math';
 import { canvasEpoch } from './renderer';
@@ -33,14 +34,24 @@ const G = {
 
 type Ctx = CanvasRenderingContext2D;
 
-/** Dots of moss, lichen or grit over whatever the current clip allows. */
+/**
+ * Dots of moss, lichen or grit over whatever the current clip allows — one path per colour, so a
+ * few thousand dots are a handful of fills (one fill per dot cost seconds on a software renderer).
+ */
 function stipple(ctx: Ctx, x0: number, y0: number, x1: number, y1: number, n: number, colors: string[], rMin: number, rMax: number, r: () => number) {
+  const paths = colors.map(() => new Path2D());
   for (let i = 0; i < n; i++) {
-    ctx.fillStyle = colors[Math.floor(r() * colors.length)];
-    ctx.beginPath();
-    ctx.arc(x0 + r() * (x1 - x0), y0 + r() * (y1 - y0), rMin + r() * (rMax - rMin), 0, TAU);
-    ctx.fill();
+    const p = paths[Math.floor(r() * colors.length)];
+    const x = x0 + r() * (x1 - x0);
+    const y = y0 + r() * (y1 - y0);
+    const rad = rMin + r() * (rMax - rMin);
+    p.moveTo(x + rad, y);
+    p.arc(x, y, rad, 0, TAU);
   }
+  paths.forEach((p, k) => {
+    ctx.fillStyle = colors[k];
+    ctx.fill(p);
+  });
 }
 
 /** A fern frond: a curved stem with leaflets in pairs, smaller toward the tip. */
@@ -84,16 +95,11 @@ function stone(ctx: Ctx, x: number, y: number, rx: number, ry: number, r: () => 
   ctx.beginPath();
   ctx.ellipse(x, y, rx * 0.96, ry * 0.92, 0, 0, TAU);
   ctx.fill();
-  ctx.save();
-  ctx.beginPath();
-  ctx.ellipse(x, y, rx * 0.96, ry * 0.92, 0, 0, TAU);
-  ctx.clip();
+  // (a cap of moss sitting on the top half: no clip, which a software renderer pays dearly for)
   ctx.fillStyle = MOSS[Math.floor(r() * 3)];
   ctx.beginPath();
-  ctx.ellipse(x - rx * 0.1, y - ry * 0.75, rx * 1.05, ry * 0.62, 0, 0, TAU);
+  ctx.ellipse(x - rx * 0.06, y - ry * 0.42, rx * 0.86, ry * 0.5, 0, 0, TAU);
   ctx.fill();
-  stipple(ctx, x - rx, y - ry, x + rx, y, Math.ceil(rx * 0.6), MOSS, rx * 0.04, rx * 0.1, r);
-  ctx.restore();
 }
 
 /** A bumpy line from x0 to x1 around `y` (px), returned as points. */
@@ -103,11 +109,16 @@ function bumpy(x0: number, x1: number, y: number, amp: number, step: number, r: 
   return pts;
 }
 
+/** Something that can paint the sky and the woods behind the creek (a Backdrop). */
+interface Sky {
+  draw(ctx: Ctx, W: number, H: number, camX: number, camY: number, rise: number, scale: number, t: number): void;
+}
+
 export class CreekScene {
-  private rock: HTMLCanvasElement | null = null;
-  private banks: HTMLCanvasElement | null = null;
+  /** everything that doesn't move — sky, woods, rock, banks — with holes where the water shows through */
+  private still: HTMLCanvasElement | null = null;
   private glow: HTMLCanvasElement | null = null;
-  private key = '';
+  private painted = { w: 0, h: 0, epoch: -1 };
   private readonly ripples: { y: number; x: number; len: number; speed: number; p: number }[] = [];
   private readonly glints: { x: number; y: number; k: number; p: number }[] = [];
   private readonly streaks: { u: number; len: number; speed: number; p: number; w: number }[] = [];
@@ -121,18 +132,25 @@ export class CreekScene {
     for (let i = 0; i < 9; i++) this.motes.push({ x: 0.05 + r() * 0.9, y: 0.42 + r() * 0.36, p: r() * TAU, q: r() * TAU });
   }
 
-  draw(ctx: Ctx, W: number, H: number, t: number) {
-    const key = `${W}x${H}:${canvasEpoch}`;
-    if (key !== this.key || !this.rock || !this.banks || !this.glow) {
-      this.paint(W, H);
-      this.key = key;
+  /**
+   * The whole title scenery. `sky` is painted into the still picture once, so a frame is the water,
+   * one image over it, and the fireflies — not the sky, two layers of woods and the rock every time.
+   */
+  draw(ctx: Ctx, W: number, H: number, t: number, sky: Sky) {
+    const p = this.painted;
+    // A new picture for a new shape of screen, a GPU reset or a big change of size. The governor
+    // stepping the resolution down a notch on a struggling device only scales it: repainting then
+    // would cost the struggling device the most, at the worst moment.
+    const sameShape = Math.abs(W / H - p.w / Math.max(1, p.h)) < 0.02;
+    if (!this.still || !this.glow || p.epoch !== canvasEpoch || !sameShape || W > p.w * 1.25 || W < p.w * 0.5) {
+      this.paint(W, H, sky);
+      this.painted = { w: W, h: H, epoch: canvasEpoch };
     }
     const s = H / 420;
     this.drawFall(ctx, W, H, s, t);
-    ctx.drawImage(this.rock!, 0, Math.round(G.rockTop * H));
     this.drawCreek(ctx, W, H, s, t);
+    ctx.drawImage(this.still!, 0, 0, W, H);
     this.drawFoam(ctx, W, H, s, t);
-    ctx.drawImage(this.banks!, 0, Math.round(G.banksTop * H));
     this.drawMotes(ctx, W, H, s, t);
   }
 
@@ -266,7 +284,7 @@ export class CreekScene {
 
   // ------------------------------------------------------------------ the still parts (once per size)
 
-  private paint(W: number, H: number) {
+  private paint(W: number, H: number, sky: Sky) {
     const s = H / 420;
     const r = rng(23);
     // a firefly's glow, drawn once
@@ -281,15 +299,16 @@ export class CreekScene {
     gc.fillStyle = rg;
     gc.fillRect(0, 0, 64, 64);
 
+    const still = (this.still ??= document.createElement('canvas'));
+    still.width = W;
+    still.height = H;
+    const c = still.getContext('2d')!;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, W, H);
+    // ---- the sky and the woods (held still: only the water moves on this screen)
+    sky.draw(c, W, H, 0, 0, 0, 1, 0);
     // ---- the rock: the cliff on the right with the fall's channel cut through it, and boulders on the left
-    const ry0 = G.rockTop * H;
-    const rock = (this.rock ??= document.createElement('canvas'));
-    rock.width = W;
-    rock.height = Math.ceil((G.rockBottom - G.rockTop) * H);
-    const c = rock.getContext('2d')!;
-    c.clearRect(0, 0, rock.width, rock.height);
     c.save();
-    c.translate(0, -ry0);
     const ridge: [number, number][] = [
       [0.64, 0.76], [0.643, 0.56], [0.655, 0.44], [0.675, 0.37], [0.705, 0.325], [0.74, 0.305], [G.fallTop[0], G.lipY],
       [G.fallTop[1], G.lipY], [0.85, 0.285], [0.885, 0.268], [0.925, 0.252], [0.965, 0.232], [1.001, 0.22], [1.001, 0.76],
@@ -341,7 +360,7 @@ export class CreekScene {
       c.ellipse(x, y, (6 + r() * 14) * s, (3 + r() * 5) * s, (r() - 0.5) * 0.5, 0, TAU);
       c.fill();
     }
-    stipple(c, 0.64 * W, 0.22 * H, W, 0.76 * H, Math.ceil(700 * (W / H) * 0.4), [...MOSS, ROCK.top, ROCK.dark], 0.6 * s, 1.6 * s, r);
+    stipple(c, 0.64 * W, 0.22 * H, W, 0.76 * H, Math.ceil(500 * (W / H) * 0.4), [...MOSS, ROCK.top, ROCK.dark], 0.6 * s, 1.6 * s, r);
     c.restore();
     // the channel the water falls through: cut out (the fall is drawn behind), its wet edges dark
     const [a0, b0] = [G.fallTop[0] * W, G.fallTop[1] * W];
@@ -380,16 +399,15 @@ export class CreekScene {
     fern(c, 0.09 * W, 0.62 * H, 34 * s, -Math.PI / 2 - 0.5, 0.1, '#86b442');
     fern(c, 0.1 * W, 0.63 * H, 30 * s, -Math.PI / 2 + 0.5, -0.1, '#9ac64c');
     c.restore();
+    // the creek runs across in front of everything so far: a hole for it too (the banks cover its edges)
+    c.save();
+    c.globalCompositeOperation = 'destination-out';
+    c.fillRect(0, G.creekTop * H, W, (G.creekBottom - G.creekTop) * H);
+    c.restore();
 
     // ---- the banks: the far one with a gap where the fall lands, and the near one the sprouts stand on
-    const by0 = G.banksTop * H;
-    const banks = (this.banks ??= document.createElement('canvas'));
-    banks.width = W;
-    banks.height = Math.ceil((1 - G.banksTop) * H) + 1;
-    const b = banks.getContext('2d')!;
-    b.clearRect(0, 0, banks.width, banks.height);
+    const b = c;
     b.save();
-    b.translate(0, -by0);
     const far = (xa: number, xb: number) => {
       const topEdge = bumpy(xa * W, xb * W, 0.66 * H, 5 * s, 22 * s, r);
       const shore = bumpy(xa * W, xb * W, 0.728 * H, 3 * s, 26 * s, r).reverse();
@@ -409,7 +427,7 @@ export class CreekScene {
       b.save();
       path();
       b.clip();
-      stipple(b, xa * W, 0.64 * H, xb * W, 0.74 * H, Math.ceil((xb - xa) * 900), [...MOSS, ...MOSS_DARK], 0.6 * s, 1.8 * s, r);
+      stipple(b, xa * W, 0.64 * H, xb * W, 0.74 * H, Math.ceil((xb - xa) * 650), [...MOSS, ...MOSS_DARK], 0.6 * s, 1.8 * s, r);
       b.restore();
       // stones along the water's edge, ferns on top
       for (let x = xa * W + 10 * s; x < xb * W - 10 * s; x += (24 + r() * 46) * s) stone(b, x, 0.728 * H, (7 + r() * 9) * s, (4 + r() * 5) * s, r);
@@ -442,7 +460,7 @@ export class CreekScene {
     b.save();
     near();
     b.clip();
-    stipple(b, 0, CREEK_BANK * H - 4 * s, W, H, Math.ceil(2200 * (W / H) * 0.5), [...MOSS, ...MOSS_DARK, '#e3ee9a'], 0.7 * s, 2.2 * s, r);
+    stipple(b, 0, CREEK_BANK * H - 4 * s, W, H, Math.ceil(1500 * (W / H) * 0.5), [...MOSS, ...MOSS_DARK, '#e3ee9a'], 0.7 * s, 2.2 * s, r);
     // pebbles and little flowers in the moss
     for (let i = 0; i < 18; i++) stone(b, r() * W, (CREEK_BANK + 0.04 + r() * 0.1) * H, (3 + r() * 5) * s, (2 + r() * 3) * s, r);
     for (let i = 0; i < 26; i++) {

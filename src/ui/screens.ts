@@ -171,11 +171,12 @@ class MenuScene {
     const creek = this.theme.id === 'creek';
     if (!creek) this.camX += dt * 14;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.backdrop.draw(ctx, W, H, this.camX, 0, 0, 1, t);
     const s = H / 420;
     const ground = H * (creek ? CREEK_BANK : 0.86);
-    if (creek) (this.creek ??= new CreekScene()).draw(ctx, W, H, t);
+    // (the creek paints the sky into its own still picture once, rather than every frame)
+    if (creek) (this.creek ??= new CreekScene()).draw(ctx, W, H, t, this.backdrop);
     else {
+      this.backdrop.draw(ctx, W, H, this.camX, 0, 0, 1, t);
       ctx.fillStyle = this.theme.ground.body;
       ctx.fillRect(0, ground, W, H - ground);
       ctx.fillStyle = this.theme.ground.top;
