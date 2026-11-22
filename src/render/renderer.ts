@@ -37,7 +37,11 @@ export class Renderer {
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'view';
     container.appendChild(this.canvas);
-    const ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
+    // `desynchronized` asks for a low-latency canvas, which may show a frame before it's finished being
+    // drawn. Edge on an Xbox does exactly that: the backdrop and tiles (drawn first) hold steady and
+    // the sprites (drawn last) flicker in and out. At most a frame of latency on a TV across the room
+    // is not worth a flickering game, so there it's off; laptops and phones keep it.
+    const ctx = this.canvas.getContext('2d', { alpha: false, desynchronized: !IS_XBOX });
     if (!ctx) throw new Error('2D canvas unavailable');
     this.ctx = ctx;
     this.lostEl = document.createElement('div');

@@ -139,6 +139,11 @@ await frames(page, 4);
 const reclaimed = await page.evaluate(() => [...window.__fbSession.opts.seats]);
 t.check('a sprout taken back by an Ⓐ whose key half lands first goes to the controller', reclaimed[1] === 'pad0', { seats: reclaimed, dropped });
 
+// the canvas isn't the low-latency kind on an Xbox: Edge there showed frames before they were finished,
+// and the sprites (drawn last) flickered in and out over a steady background
+const attrs = await page.evaluate(() => document.querySelector('canvas').getContext('2d').getContextAttributes());
+t.check('on an Xbox the game canvas is not desynchronized (no half-drawn frames, no flickering sprites)', attrs.desynchronized === false, attrs);
+
 await page.screenshot({ path: `${process.env.E2E_OUT ?? './.out'}/xbox.png` });
 await browser.close();
 t.finish('xbox', page.errors);
