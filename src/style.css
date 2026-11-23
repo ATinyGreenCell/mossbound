@@ -9,6 +9,9 @@
   --sky: #5cb8ff;
   /* (a solid translucent card: backdrop-filter blur is a frame-rate killer on phones) */
   --card: rgba(29, 27, 56, 0.86);
+  /* The unit every menu, card and HUD is measured in. Text smaller than it is never under 11 px: each
+     smaller size is written max(11px, …) — a phone held sideways drew the version badge, the cards'
+     subtitles and the update note at 8 px. (The debug ground's panel is the one exception.) */
   --u: clamp(11px, 1.9vh, 18px);
   --sat: env(safe-area-inset-top);
   --sar: env(safe-area-inset-right);
@@ -18,6 +21,14 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* An Xbox (Edge, on a TV, read from across the room): the "10-foot" scale. The whole UI grows with the
+   screen — half as big again as a laptop's at 1080p, with the smallest text about 20 px — and keeps
+   growing past it, where the laptop's stops at 18 px: Edge reporting a 4K viewport would otherwise
+   have drawn every menu at half the size. */
+:root.tv {
+  --u: max(18px, 2.5vh);
 }
 
 html,
@@ -91,14 +102,11 @@ body {
   letter-spacing: 0.04em;
   text-align: center;
   box-shadow: 0 0.22em 0 rgba(43, 33, 64, 0.45);
-  transition:
-    transform 0.08s,
-    background 0.12s;
 }
 
 .btn.small {
   min-width: 12em;
-  font-size: 0.95em;
+  font-size: max(11px, 0.95em);
   padding: 0.5em 1.2em;
   background: rgba(255, 248, 234, 0.82);
 }
@@ -114,6 +122,12 @@ body {
   transform: scale(1.05);
 }
 
+/* LEAVE ROOM, asking to be pressed again before it ends the game for both of you */
+.btn.asking {
+  background: var(--coral);
+  color: var(--cream);
+}
+
 /* The pointer moves the highlight itself (see ButtonList), so hover alone only warms a button —
    two buttons must never look chosen at once. */
 @media (hover: hover) {
@@ -122,8 +136,11 @@ body {
   }
 }
 
+/* The highlight moves in the frame that moved it: no fade, no glide (on a TV a fade reads as lag). A
+   press still sinks the button a little — that's the press answering, not the highlight. */
 .btn:active {
   transform: scale(0.97);
+  transition: transform 0.08s;
 }
 
 .panel {
@@ -192,6 +209,17 @@ body {
 .field input:focus,
 .code-input:focus {
   border-color: var(--gold);
+}
+
+/* a text box that is a stop in a menu (your name, a save code, a TURN server): the highlight marks the
+   row, as it does a setting's (Ⓐ on it goes into the box) — drawn around it, so nothing moves */
+.field[data-act] {
+  border-radius: 0.5em;
+}
+
+.field[data-act].sel {
+  background: rgba(255, 210, 122, 0.18);
+  box-shadow: 0 0 0 0.35em rgba(255, 210, 122, 0.18);
 }
 
 .code-input {
@@ -287,7 +315,7 @@ body {
 .row em {
   font-style: normal;
   opacity: 0.5;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
 }
 
 .row .steps {
@@ -316,10 +344,16 @@ body {
   cursor: pointer;
   pointer-events: auto;
   padding: 0.3em 0.8em;
+  border-radius: 0.8em;
+}
+
+/* a section heading is a stop too: Ⓐ on it folds and unfolds it */
+.advanced summary.sel {
+  background: rgba(255, 210, 122, 0.18);
 }
 
 .advanced p {
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   line-height: 1.35;
   opacity: 0.8;
 }
@@ -338,7 +372,7 @@ body {
 }
 
 .status.small {
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
 }
 
 .spinner {
@@ -381,7 +415,8 @@ body {
 }
 
 .logo {
-  font-size: clamp(42px, 11vh, 110px);
+  /* --n is the name's length (screens.ts): a long name gets smaller rather than wider than the screen */
+  font-size: min(clamp(42px, 11vh, 110px), calc(158vw / var(--n, 9)));
   font-weight: 700;
   line-height: 1;
   color: var(--cream);
@@ -427,7 +462,7 @@ body {
      on an Xbox most needs to be able to read */
   background: rgba(20, 30, 16, 0.55);
   text-align: center;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   opacity: 0.92;
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
@@ -442,6 +477,7 @@ body {
 /* Edge on Xbox left the page without focus: no controller reaches the game until it's back */
 .xbox-refocus {
   position: absolute;
+  font-size: var(--u);
   left: 50%;
   top: calc(12px + var(--sat));
   transform: translateX(-50%);
@@ -467,7 +503,7 @@ body {
   border-radius: 0.8em;
   background: rgba(20, 16, 36, 0.38);
   color: #fff;
-  font-size: 0.72em;
+  font-size: max(11px, 0.72em);
   opacity: 0.8;
   pointer-events: none;
 }
@@ -501,7 +537,7 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 0.1em;
-  font-size: 0.8em;
+  font-size: max(11px, 0.8em);
   text-align: center;
   pointer-events: none;
   opacity: 0.92;
@@ -509,7 +545,7 @@ body {
 
 .update-pill span,
 .update-toast span {
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   opacity: 0.8;
 }
 
@@ -543,7 +579,7 @@ body {
 }
 
 .seat span {
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   opacity: 0.85;
 }
 
@@ -576,7 +612,6 @@ body {
   text-align: center;
   color: var(--ink);
   box-shadow: 0 0.25em 0 rgba(0, 0, 0, 0.3);
-  transition: transform 0.08s;
 }
 
 .card .num {
@@ -591,12 +626,12 @@ body {
 
 .card em {
   font-style: normal;
-  font-size: 0.75em;
+  font-size: max(11px, 0.75em);
   opacity: 0.75;
 }
 
 .card .best {
-  font-size: 0.75em;
+  font-size: max(11px, 0.75em);
   opacity: 0.8;
 }
 
@@ -607,7 +642,7 @@ body {
   align-items: center;
   justify-content: center;
   margin: 0.2em 0 0.4em;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   opacity: 0.95;
 }
 
@@ -618,7 +653,7 @@ body {
 }
 
 .card .going {
-  font-size: 0.75em;
+  font-size: max(11px, 0.75em);
   font-weight: 600;
   color: #6b4a00;
 }
@@ -640,7 +675,7 @@ body {
   padding: 0.5em 0.6em;
   border-radius: 0.6em;
   background: rgba(0, 0, 0, 0.25);
-  font-size: 0.7em;
+  font-size: max(11px, 0.7em);
   word-break: break-all;
   user-select: all;
   -webkit-user-select: all;
@@ -793,7 +828,7 @@ body {
   padding: 0.3em 0.8em;
   border-radius: 99px;
   background: rgba(29, 27, 56, 0.45);
-  font-size: 0.95em;
+  font-size: max(11px, 0.95em);
 }
 
 .hud-partner .dot {
@@ -805,7 +840,7 @@ body {
 
 .hud-partner .lat {
   opacity: 0.8;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
 }
 
 .bars {
@@ -906,7 +941,7 @@ body.touch-play .hud-menu {
   background: rgba(255, 248, 234, 0.95);
   color: var(--ink);
   text-shadow: none;
-  font-size: 0.95em;
+  font-size: max(11px, 0.95em);
   line-height: 1.3;
   text-align: center;
   box-shadow: 0 0.3em 1em rgba(0, 0, 0, 0.25);
@@ -936,7 +971,7 @@ body.touch-play .hud-menu {
 }
 
 .hud-notice span {
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   opacity: 0.85;
 }
 
@@ -1007,7 +1042,7 @@ body.touch-play .hud-menu {
 .ov-hint {
   margin-top: 0.8em;
   opacity: 0.6;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
 }
 
 .controls-panel {
@@ -1038,7 +1073,7 @@ body.touch-play .hud-menu {
   grid-template-columns: auto 1fr;
   gap: 0.25em 0.8em;
   margin: 0;
-  font-size: 0.9em;
+  font-size: max(11px, 0.9em);
 }
 
 .ctl-col dt {
@@ -1052,7 +1087,7 @@ body.touch-play .hud-menu {
 }
 
 .ctl-col p {
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   opacity: 0.85;
   line-height: 1.4;
   margin: 0.2em 0;
@@ -1064,7 +1099,7 @@ body.touch-play .hud-menu {
   gap: 0.4em 1.2em;
   justify-content: center;
   margin-top: 0.9em;
-  font-size: 0.85em;
+  font-size: max(11px, 0.85em);
   opacity: 0.85;
 }
 
@@ -1116,9 +1151,16 @@ body:not(.touch) .ctl-col:last-child {
   .panel {
     padding: 0.8em 1em;
   }
+  /* (the cards' small print is 11 px at the least: a little wider, with less air around the number,
+     they wrap it less and stand about as tall as they did) */
   .card {
-    width: 8.4em;
+    width: 9.2em;
     min-height: 8em;
+    padding: 0.6em 0.5em 0.55em;
+    gap: 0.15em;
+  }
+  .card .num {
+    font-size: 1.35em;
   }
   .hud-banner {
     top: 12%;
@@ -1162,6 +1204,8 @@ body:not(.touch) .ctl-col:last-child {
   z-index: 40;
   width: min(15.5em, 46vw);
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* (a developer's tool, and the one exception to 11 px at the least: any bigger, and on a phone held
+     sideways it no longer leaves the level beside it, nor fits the screen's height) */
   font-size: 0.72em;
   color: var(--cream);
   background: var(--card);

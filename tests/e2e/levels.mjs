@@ -398,6 +398,8 @@ const homes = await page.evaluate(async () => {
   const { app, flow } = window.__fb;
   const bad = [];
   let checked = 0;
+  // (pairs put down within reach of each other, and those of them a VINE press there couldn't tie)
+  const pairs = { beside: 0, cantTie: [] };
   const grounds = [...LEVELS.map((_, i) => ({ level: i })), { level: COURSE_INDEX }, { level: LEVELS.length, practice: true }];
   for (const g of grounds) {
     for (const kinds of [['tall', 'small'], ['small', 'tall'], ['even', 'even']]) {
@@ -407,6 +409,13 @@ const homes = await page.evaluate(async () => {
         for (const b of s.birds) {
           checked++;
           if (!s.world.boxFree(b.x, b.y, b.w, b.h)) bad.push(`${s.L.def.id} ${cp < 0 ? 'start' : `lantern ${cp}`} ${kinds.join('/')}: the ${b.kind} sprout at ${(b.x / 32).toFixed(2)},${(b.y / 32).toFixed(2)}`);
+        }
+        // VINE ties only with a clear line between the two: put down beside each other, they can tie there
+        const [A, B] = s.birds;
+        if (Math.hypot(A.x - B.x, A.y - B.y) <= 2.5 * 32) {
+          pairs.beside++;
+          s.tieVine(A);
+          if (!s.tether.tied) pairs.cantTie.push(`${s.L.def.id} ${cp < 0 ? 'start' : `lantern ${cp}`} ${kinds.join('/')}`);
         }
         s.dispose();
         if (cp + 1 >= lanterns) break;
@@ -439,7 +448,7 @@ const homes = await page.evaluate(async () => {
     for (; k < 120 * 8 && g.ghost; k++) g.stepGhost(1 / 120, world, partner, home);
     goneHome[kind] = { back: !g.ghost, afterSecs: +(k / 120).toFixed(2), fits: world.boxFree(g.x, g.y, g.w, g.h), nearHome: +(Math.hypot(g.x - home.x, g.y - home.y) / T).toFixed(2) };
   }
-  return { checked, bad, goneHome };
+  return { checked, bad, goneHome, pairs };
 });
 await browser.close();
 
@@ -448,5 +457,6 @@ for (const [id, issues] of Object.entries(r.lint)) t.check(`lint ${id}`, issues.
 t.check('both springboard signs teach holding on while your partner climbs', Object.values(r.fallbackSigns).every((n) => n === 1), r.fallbackSigns);
 for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v, r[K][lvl][`${k}Detail`] ?? '');
 t.check(`every sprout is put down somewhere its body fits: the start and every lantern, every level, every pairing (${homes.checked} placings)`, homes.bad.length === 0, homes.bad);
+t.check(`…and wherever the two are put down beside each other, VINE ties them there (${homes.pairs.beside} placings)`, homes.pairs.beside > 0 && homes.pairs.cantTie.length === 0, homes.pairs.cantTie);
 t.check('a seed that gives up waiting and goes home is put down somewhere it fits there too', Object.values(homes.goneHome).every((v) => v.back && v.fits && v.nearHome < 2), homes.goneHome);
 t.finish('levels', page.errors);

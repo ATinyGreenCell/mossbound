@@ -1,7 +1,12 @@
 // Online play over a relay the test runs itself: a tiny MQTT-over-WebSocket broker on this machine
 // (?relay&brokers=…), so every network fault is exact and every run the same — no public broker in the way.
-//   · a partner whose page reloaded comes back (REJOIN / REOPEN ROOM) and both sides know each other's
-//     name, colour and hat again;
+//   · a partner whose page reloaded goes back into the room by itself (a guest rejoins, a host reopens it),
+//     the pair carries on in the level they were in — tied, if they were — and both sides know each
+//     other's name, colour and hat again; but not after LEAVE ROOM, nor from a note that's too old, nor
+//     round and round;
+//   · during a Wi-Fi blip a stale tab with the room's code can't take the partner's seat, while the
+//     partner's own tab, reloaded during the blip, gets it back;
+//   · a broker that asks every client to log in (as the one on port 443 does) is logged in to;
 //   · a relay socket that goes silent without closing (Wi-Fi with no way out, a NAT that forgot us) is
 //     noticed and replaced in seconds, not after the 25 s keepalive watchdog;
 //   · with two brokers, one going silent for a player moves the bird stream to the other at once.
@@ -15,6 +20,8 @@ const errors = [];
 /** The smallest MQTT 3.1.1 broker the relay needs: CONNECT, SUBSCRIBE, PUBLISH (QoS 0), PINGREQ. */
 class Broker {
   socks = new Set();
+  /** `{ user, pass }`: a client that doesn't log in with exactly these is refused (CONNACK 5, not authorised) */
+  login = null;
   async start() {
     this.wss = new WebSocketServer({ port: 0, host: '127.0.0.1', handleProtocols: () => 'mqtt' });
     await new Promise((r) => this.wss.on('listening', r));
@@ -38,7 +45,20 @@ class Broker {
         } while (byte & 128);
         const body = b.subarray(i, i + len);
         const str = (o) => body.subarray(o + 2, o + 2 + ((body[o] << 8) | body[o + 1])).toString();
-        if (type === 1) ws.send(Buffer.from([0x20, 2, 0, 0]));
+        if (type === 1) {
+          // CONNECT: protocol name, level, flags, keepalive, client id, then the user name and password if flagged
+          let o = 0;
+          const field = () => { const v = str(o); o += 2 + Buffer.byteLength(v); return v; };
+          field();
+          const flags = body[o + 1];
+          o += 4;
+          field();
+          const user = flags & 0x80 ? field() : null;
+          const pass = flags & 0x40 ? field() : null;
+          const ok = !this.login || (user === this.login.user && pass === this.login.pass);
+          ws.send(Buffer.from([0x20, 2, 0, ok ? 0 : 5]));
+          if (!ok) ws.close();
+        }
         else if (type === 8) {
           s.subs.add(str(2));
           ws.send(Buffer.from([0x90, 3, body[0], body[1], 0]));
@@ -65,13 +85,24 @@ class Broker {
 }
 
 const browsers = [];
+const relayQuery = (brokers) => ({ extra: `norender&relay&brokers=${brokers.map((x) => encodeURIComponent(x.url)).join(',')}` });
 async function player(brokers, settings) {
   const b = await launch();
   browsers.push(b);
-  const page = await open(b, { query: { extra: `norender&relay&brokers=${brokers.map((x) => encodeURIComponent(x.url)).join(',')}` }, storage: { 'mossbound.settings.v1': settings } });
+  const page = await open(b, { query: relayQuery(brokers), storage: { 'mossbound.settings.v1': settings } });
   page.browser_ = b;
   return page;
 }
+/** Reload a page and wait for the game to be up again. */
+const reload = async (p) => {
+  await p.reload({ waitUntil: 'networkidle0' });
+  await waitFor(() => p.evaluate(() => !!window.__fb?.app?.current), 20000, 'boot after the reload');
+};
+/** Both in the same level session (one the host started after `notNonce`), playing, with the link up. */
+const together = (host, guest, notNonce, ms = 30000) => waitFor(() => Promise.all([host, guest].map((p) => p.evaluate(() => {
+  const s = window.__fbSession;
+  return { n: s?.opts.nonce, level: s?.L.index, cp: s?.checkpoint, tied: !!s?.tether.tied, on: window.__fb.app.current === s && s?.state === 'play', link: window.__fb.flow.link?.status };
+}))).then(([h, g]) => (h.on && g.on && h.n === g.n && h.n !== notNonce && h.link === 'connected' && g.link === 'connected' ? { h, g } : null)), ms, 'both back in the level').catch(() => null);
 const PIP = { name: 'Pip', color: 2, hat: 'crown' };
 const BO = { name: 'Bo', color: 3, hat: 'none' };
 const linked = (...ps) => waitFor(() => Promise.all(ps.map((p) => p.evaluate(() => window.__fb.flow.link?.status === 'connected'))).then((v) => v.every(Boolean)), 30000, 'pairing over the local relay');
@@ -119,31 +150,119 @@ const frozenStats = (p) => p.evaluate(() => {
   return { frozen, last, statuses: [...new Set(tr.map((r) => r[2]))] };
 });
 
-// ---- a page reload and a rejoin, either side: both end up knowing who they're playing with again
+// ---- a page reload, either side: nothing to press — the reloaded page goes back into the room by itself
+// (a guest rejoins, the host reopens it), the pair is back in the level they were in, still tied, and
+// both know who they're playing with again
 {
   const broker = await new Broker().start();
   const { host, guest, code } = await pair([broker]);
-  const first = [await partner(host), await partner(guest)];
-  // the guest's page goes away and comes back (REJOIN ROOM)
-  await guest.close();
-  const guest2 = await player([broker], BO);
-  await guest2.evaluate((c) => window.__fb.flow.online({ joinCode: c }), code);
-  await playing(guest2);
+  // tied together, at the first lantern
+  await host.evaluate(() => { const s = window.__fbSession; s.tieVine(s.birds[0]); s.light(0, true); });
+  await waitFor(() => guest.evaluate(() => window.__fbSession?.tether.tied && window.__fbSession.checkpoint === 0), 10000, 'tied on both, at the lantern');
+  await sleep(1800);
+  const n0 = await host.evaluate(() => window.__fbSession.opts.nonce);
+  await reload(guest);
+  const g = await together(host, guest, n0);
   await sleep(2500);
-  const afterGuest = [await partner(host), await partner(guest2)];
-  t.check(`a guest whose page reloaded rejoins knowing the host again (host knows ${afterGuest[0]}, guest knows ${afterGuest[1]})`, afterGuest[0] === 'Bo/3/none' && afterGuest[1] === 'Pip/2/crown', { first, afterGuest });
-  // the host's page goes away and comes back (REOPEN ROOM)
-  await host.close();
-  const host2 = await player([broker], { ...PIP, lastRoom: code, lastRole: 'host' });
-  await host2.evaluate(() => window.__fb.flow.online());
-  await waitFor(() => host2.evaluate(() => window.__fb.app.current?.constructor.name === 'OnlineScreen'), 5000, 'online screen');
-  await host2.evaluate(() => window.__fb.app.current.act('rehost'));
-  await linked(host2, guest2);
+  const knowG = [await partner(host), await partner(guest)];
+  t.check(`a guest whose page reloaded is back in the level by itself, at the lantern and still tied (${JSON.stringify(g)})`, !!g && g.h.level === 0 && g.g.cp === 0 && g.h.tied && g.g.tied, g);
+  t.check(`…and both know each other again (host knows ${knowG[0]}, guest knows ${knowG[1]})`, knowG[0] === 'Bo/3/none' && knowG[1] === 'Pip/2/crown', knowG);
+  const n1 = g?.h.n;
+  await reload(host);
+  const reopened = await waitFor(() => host.evaluate(() => { const l = window.__fb.flow.link; return l?.role === 'host' ? l.code : null; }), 10000, 'the room reopened').catch(() => null);
+  const h = await together(host, guest, n1);
   await sleep(2500);
-  const afterHost = [await partner(host2), await partner(guest2)];
-  t.check(`a host whose page reloaded reopens the room knowing the guest again (host knows ${afterHost[0]}, guest knows ${afterHost[1]})`, afterHost[0] === 'Bo/3/none' && afterHost[1] === 'Pip/2/crown', afterHost);
-  errors.push(...host.errors, ...guest.errors, ...guest2.errors, ...host2.errors);
-  for (const p of [guest2, host2]) await p.browser_.close();
+  const knowH = [await partner(host), await partner(guest)];
+  t.check(`a host whose page reloaded reopens room ${reopened} by itself, and the pair is back in the level, still tied (${JSON.stringify(h)})`, reopened === code && !!h && h.h.level === 0 && h.h.cp === 0 && h.h.tied && h.g.tied, { reopened, h });
+  t.check(`…and both know each other again (host knows ${knowH[0]}, guest knows ${knowH[1]})`, knowH[0] === 'Bo/3/none' && knowH[1] === 'Pip/2/crown', knowH);
+  errors.push(...host.errors, ...guest.errors);
+  for (const p of [host, guest]) await p.browser_.close();
+  broker.close();
+}
+
+// ---- …but not after LEAVE ROOM, nor from a note too old to be this visit's, nor round and round (a
+// page that went back into its room three times and never found the partner stays at the title)
+{
+  const broker = await new Broker().start();
+  const p = await player([broker], BO);
+  const at = () => p.evaluate(() => ({ screen: window.__fb.app.current?.constructor.name, room: window.__fb.flow.link?.code ?? null }));
+  await p.evaluate(() => window.__fb.flow.online({ joinCode: 'K7QX' }));
+  await waitFor(() => p.evaluate(() => window.__fb.flow.link?.code === 'K7QX'), 5000, 'in the room');
+  await p.evaluate(() => window.__fb.flow.leaveOnline());
+  await reload(p);
+  const left = await at();
+  const note = (more) => p.evaluate((more) => sessionStorage.setItem('mossbound.room', JSON.stringify({ code: 'K7QX', role: 'guest', at: Date.now(), tries: 0, ...more })), more);
+  await note({ at: Date.now() - 11 * 60_000 });
+  await reload(p);
+  const old = await at();
+  // a fresh note goes back — and every reload that goes back and never finds the partner is counted
+  await note({});
+  const runs = [];
+  for (let i = 0; i < 4; i++) {
+    await reload(p);
+    runs.push({ ...(await at()), tries: await p.evaluate(() => JSON.parse(sessionStorage.getItem('mossbound.room') ?? 'null')?.tries ?? null) });
+  }
+  t.check(`no going back after LEAVE ROOM (${left.screen}) or from an 11-minute-old note (${old.screen}); a fresh one goes back three reloads running and no more (${runs.map((r) => r.room ?? r.screen).join(', ')})`, [left, old].every((x) => x.screen === 'TitleScreen' && !x.room) && runs.slice(0, 3).every((r, i) => r.room === 'K7QX' && r.screen === 'OnlineScreen' && r.tries === i + 1) && runs[3].screen === 'TitleScreen' && !runs[3].room, { left, old, runs });
+  errors.push(...p.errors);
+  await p.browser_.close();
+  broker.close();
+}
+
+// ---- a Wi-Fi blip, and meanwhile a stale tab on the guest's device says hello with the room's code: the
+// seat stays the guest's for their whole grace (the stale tab hears the room is full); the guest's own
+// tab, reloaded during a blip (no goodbye gets out), still gets it back
+{
+  const broker = await new Broker().start();
+  const { host, guest, code } = await pair([broker]);
+  await guest.evaluate(() => { window.__fb.flow.link.muted = true; });
+  await waitFor(() => host.evaluate(() => window.__fb.flow.link.status === 'reconnecting'), 10000, 'the host sees the blip');
+  const stale = await open(guest.browser_, { query: relayQuery([broker]), storage: { 'mossbound.settings.v1': BO } });
+  await stale.evaluate((c) => window.__fb.flow.online({ joinCode: c }), code);
+  await sleep(7500);
+  const seat = { host: await host.evaluate(() => window.__fb.flow.link.status), stale: await stale.evaluate(() => ({ status: window.__fb.flow.link?.status, detail: window.__fb.flow.link?.detail })) };
+  t.check(`during the guest’s blip a stale tab can’t take their seat (host ${seat.host}; the stale tab: ${seat.stale.status}, “${seat.stale.detail}”)`, seat.host === 'reconnecting' && seat.stale.status === 'error' && /two sprouts/.test(seat.stale.detail ?? ''), seat);
+  await stale.close();
+  await guest.bringToFront();
+  await guest.evaluate(() => { window.__fb.flow.link.muted = false; });
+  const resumed = await linked(host, guest).then(() => true, () => false);
+  // a blip again, and this time the guest's own tab reloads in the middle of it (a seat already lost to
+  // the stale tab never sees that blip: the check below fails, and the scenarios after it still run)
+  await guest.evaluate(() => { window.__fb.flow.link.muted = true; });
+  const blip = await waitFor(() => host.evaluate(() => window.__fb.flow.link.status === 'reconnecting'), 10000, 'the host sees the second blip').then(() => true, () => false);
+  const n0 = await host.evaluate(() => window.__fbSession?.opts.nonce);
+  if (blip) await reload(guest);
+  const back = blip ? await together(host, guest, n0) : null;
+  t.check(`…the guest carries on after it (${resumed}), and their own tab, reloaded during a blip, gets the seat back (${!!back})`, resumed && !!back, back);
+  errors.push(...host.errors, ...guest.errors, ...stale.errors);
+  for (const p of [host, guest]) await p.browser_.close();
+  broker.close();
+}
+
+// ---- a broker that asks every client to log in (as the public one on port 443 does) is logged in to, and
+// the list the relay uses has a broker on 443 at all — the port strict networks leave open
+{
+  const broker = await new Broker().start();
+  broker.login = { user: 'public', pass: 'public' };
+  const b = await launch();
+  browsers.push(b);
+  const page = await open(b, { query: { extra: 'norender' } });
+  const r = await page.evaluate(async (url) => {
+    const { MqttClient } = await import('/src/net/mqtt.ts');
+    const { BROKERS } = await import('/src/net/relay.ts');
+    const up = async (login) => {
+      const c = new MqttClient(url, undefined, login);
+      c.connect();
+      for (let i = 0; i < 40 && !c.connected; i++) await new Promise((res) => setTimeout(res, 50));
+      const ok = c.connected;
+      c.close();
+      return ok;
+    };
+    const on443 = (BROKERS ?? []).filter((x) => { const u = new URL(x.url); return u.protocol === 'wss:' && (u.port === '' || u.port === '443'); });
+    return { withLogin: await up({ user: 'public', pass: 'public' }), without: await up(undefined), on443: on443.map((x) => `${x.url} ${x.hz} Hz${x.login ? ' (login)' : ''}`) };
+  }, broker.url);
+  t.check(`a broker that wants a login is logged in to (${r.withLogin}; refused without: ${!r.without}), and the relay has one on port 443 (${r.on443.join(', ') || 'none'})`, r.withLogin && !r.without && r.on443.length >= 1, r);
+  errors.push(...page.errors.filter((e) => !/WebSocket/.test(e)));
+  await b.close();
   broker.close();
 }
 

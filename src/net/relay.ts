@@ -3,10 +3,17 @@ import { MqttClient } from './mqtt';
 
 /**
  * Public MQTT brokers, best first. HiveMQ's carries a 30 Hz stream both ways without a hiccup; EMQX's
- * throttles above ~8 messages a second, so it's the backup path at a lower rate.
+ * throttles above ~8 messages a second, so it's the backup path at a lower rate. Both listen on ports
+ * that strict networks (hotel and office Wi-Fi) often block, which leaves those players no path at all:
+ * shiftr.io's public broker is on 443, the port such networks leave open for the web itself. Measured
+ * from one client it carries 30 a second without loss; in the game's shape (two players, one topic,
+ * 30 a second each) about one in six is dropped, when the two players' sends land at the same moment —
+ * a usable stream all the same, and far more than EMQX's, so it comes second. It asks every client to
+ * log in, with a public name and password (`login`).
  */
-const BROKERS: { url: string; hz: number }[] = [
+export const BROKERS: { url: string; hz: number; login?: { user: string; pass: string } }[] = [
   { url: 'wss://broker.hivemq.com:8884/mqtt', hz: 30 },
+  { url: 'wss://public.cloud.shiftr.io', hz: 30, login: { user: 'public', pass: 'public' } },
   { url: 'wss://broker.emqx.io:8084/mqtt', hz: 6 },
 ];
 
@@ -71,9 +78,9 @@ export class Relay {
       return; // no WebCrypto (insecure context): no relay
     }
     if (this.closed) return;
-    const list = BROKERS_OVERRIDE ? BROKERS_OVERRIDE.map((url, i) => ({ url, hz: i === 0 ? 30 : 6 })) : BROKERS;
+    const list: typeof BROKERS = BROKERS_OVERRIDE ? BROKERS_OVERRIDE.map((url, i) => ({ url, hz: i === 0 ? 30 : 6 })) : BROKERS;
     for (const b of list) {
-      const mqtt = new MqttClient(b.url);
+      const mqtt = new MqttClient(b.url, undefined, b.login);
       const client: Client = { mqtt, hz: b.hz, lastSnap: 0, heard: 0, probed: 0 };
       mqtt.onMessage = (_t, payload) => void this.recv(payload, client);
       mqtt.onState = () => this.onState?.();

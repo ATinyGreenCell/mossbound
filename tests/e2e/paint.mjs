@@ -388,8 +388,8 @@ await part('the creek along the bottom of a level', async () => {
 // ---------------------------------------------------------------- the sprouts' own little canvases
 // Each sprout is painted onto a canvas of its own sized to its pose, then laid onto the screen. Too
 // small a box would cut a leaf or a foot off: so every kind of sprout, in every pose there is (a glide's
-// leaf held overhead, a dash, hanging at every angle, clinging, braced, squashed and stretched to the
-// limits, every hat, a ghost), is painted straight and its pixels must all lie inside the box.
+// leaf held overhead, a dash, hanging at every angle, clinging, braced, a hey's wave, squashed and
+// stretched to the limits, every hat, a ghost), is painted straight and its pixels must all lie inside the box.
 await part("the sprouts' own little canvases", async () => {
   const fit = await page.evaluate(async () => {
     const { Bird, BIRD_COLORS } = await import('/src/game/bird.ts');
@@ -433,6 +433,9 @@ await part("the sprouts' own little canvases", async () => {
         b.climbing = r() < 0.3 ? 1 : 0;
         b.lookX = r() * 2 - 1;
         b.lookY = r() * 2 - 1;
+        // a hey: the near arm up over the head, waving the partner over (see armPose)
+        b.emote = r() < 0.25 ? 'hey' : null;
+        b.emoteT = b.emote ? r() * 2.2 : 0;
         g.setTransform(1, 0, 0, 1, 0, 0);
         g.clearRect(0, 0, N, N);
         g.setTransform(S, 0, 0, S, N / 2 - 100 * S, N / 2 - 100 * S);

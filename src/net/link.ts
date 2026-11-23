@@ -1,5 +1,6 @@
 import type { Room } from 'trystero';
 import { settings } from '../core/settings';
+import { tabId } from '../core/tab';
 import { GRACE_S, P2P_ONLY, RELAY_ONLY } from '../core/testmode';
 import { APP_ID, PROTOCOL, randomId, type CtrlMsg, type Role, type SnapMsg } from './protocol';
 import { Relay } from './relay';
@@ -38,6 +39,15 @@ const SHAKY_MS = 300;
 const MAX_SKEW_MS = 1e11;
 /** Two samples this close agree: a step in the clocks that's really there is still there next ping. */
 const STEP_AGREE_MS = 2000;
+/**
+ * The partner's pongs say which of our snapshots they last heard over each path (see judgeDirect). A
+ * snapshot sent this long before a ping went out has had all the time it needs to land…
+ */
+const REPORT_SLACK_MS = 300;
+/** …and when they have heard none of what we sent over the direct path for this long, it isn't reaching them. */
+const OUT_LOST_MS = 700;
+/** the direct sends kept on record for that: a few seconds' worth */
+const SENT_KEPT = 160;
 /** Snapshots dropped (not queued) once this many reliable sends are still in flight. */
 const MAX_INFLIGHT = 4;
 /** Stream id of the real-time channel both peers open on Trystero's connection (its own channel is auto-numbered from 0). */
@@ -75,6 +85,11 @@ export class NetLink {
   rtt = 0;
   /** the partner's link id once paired */
   peerId: string | null = null;
+  /**
+   * the partner's tab (core/tab.ts tabId), as their hello gave it: a newcomer during the partner's grace
+   * takes the seat only by proving it's the same tab, back from a reload (null: a build before 1.11)
+   */
+  private peerTab: string | null = null;
   onStatus: ((s: LinkStatus, detail: string) => void) | null = null;
   onCtrl: ((m: CtrlMsg) => void) | null = null;
   onSnap: ((m: SnapMsg) => void) | null = null;
@@ -121,6 +136,15 @@ export class NetLink {
   /** 'room full' replies while we look for a host: since when, and the latest */
   private fullSince = 0;
   private fullLast = 0;
+  /** the latest bird snapshot (its count) heard from the partner over each path: what our pongs report */
+  private heardSeq = { direct: 0, relay: 0 };
+  /** our snapshots sent over the direct path lately: [count, when] */
+  private directSent: [number, number][] = [];
+  /**
+   * the partner's reports say what we send over the direct path isn't reaching them, though theirs
+   * reaches us (a one-way failure: everything we judge by what we hear calls that path healthy)
+   */
+  private directOutLost = false;
 
   private constructor(
     readonly role: Role,
@@ -145,7 +169,8 @@ export class NetLink {
   /** Which path carries traffic right now. */
   get via(): 'direct' | 'relay' | null {
     const now = performance.now();
-    if (this.directHealthy(now)) return 'direct';
+    // (heard over the direct path, but the partner hears nothing of ours over it: ours go by the relay)
+    if (this.directHealthy(now) && !(this.directOutLost && this.relayHealthy(now))) return 'direct';
     if (this.relayHealthy(now)) return 'relay';
     return null;
   }
@@ -238,6 +263,7 @@ export class NetLink {
         if (ctx.peerId === this.tpeer) {
           this.lastDirect = performance.now();
           this.heard();
+          this.noteSnap('direct', data);
           this.onSnap?.(data);
         }
       };
@@ -262,9 +288,10 @@ export class NetLink {
 
   private hello(ack = false, partner = this.peerId && this.status === 'connected' ? this.peerId : null): Wire {
     // (naming our partner while we're with them: a newcomer is told the room's taken. Once they've
-    // dropped out the seat is open again — to them reloading, or to whoever takes it)
+    // dropped out the seat is open again — to them reloading, or once their grace is over, to whoever
+    // takes it. `tab` is how a reload of this tab proves it's the one coming back: see acceptHello)
     const taken = partner ? { with: partner } : {};
-    return { t: 'hello', v: PROTOCOL, role: this.role, id: this.myId, ...taken, ...(ack ? { ack: 1 as const } : {}) };
+    return { t: 'hello', v: PROTOCOL, role: this.role, id: this.myId, tab: tabId(), ...taken, ...(ack ? { ack: 1 as const } : {}) };
   }
 
   private sendHelloRelay() {
@@ -307,8 +334,10 @@ export class NetLink {
     } else if (from === this.peerId) {
       this.lastRelay = performance.now();
       this.heard();
-      if (kind === 's') this.onSnap?.(data as SnapMsg);
-      else if (kind === 'p') this.recvPing(data, 'relay');
+      if (kind === 's') {
+        this.noteSnap('relay', data);
+        this.onSnap?.(data as SnapMsg);
+      } else if (kind === 'p') this.recvPing(data, 'relay');
     }
   }
 
@@ -330,10 +359,18 @@ export class NetLink {
       if (!this.muted) answer(r);
     };
     let replace = false;
+    const tab = typeof m.tab === 'string' && m.tab.length <= 32 ? m.tab : null;
     if (this.peerId && this.peerId !== m.id) {
-      // our partner reloaded the page (a new id) and the old one has gone quiet: welcome them back
+      // our partner reloaded the page (a new id) and the old one has gone quiet: welcome them back.
+      // Not whoever turns up with the code, though: while the partner may still be back from a blip
+      // (until their grace is over, or they've said goodbye) the seat stays theirs, and a newcomer takes
+      // it only by proving it's them — the same tab, back from a reload. A stale tab of theirs, or an
+      // old installed copy waking up, would otherwise take the seat from them in a two-second Wi-Fi blip.
+      // (A partner on a build before 1.11 never said which tab they are: for them the old rule stands.)
       const quiet = performance.now() - Math.max(this.lastDirect, this.lastRelay);
-      if (m.v === PROTOCOL && m.role !== this.role && (this.status === 'reconnecting' || this.status === 'lost' || quiet > AWAY_MS)) replace = true;
+      const away = this.status === 'reconnecting' || this.status === 'lost' || quiet > AWAY_MS;
+      const theirs = this.status === 'lost' || !this.peerTab || tab === this.peerTab;
+      if (m.v === PROTOCOL && m.role !== this.role && away && theirs) replace = true;
       else {
         reply({ t: 'full' });
         return false;
@@ -365,10 +402,13 @@ export class NetLink {
     if (!m.ack) reply(this.hello(true, replace ? m.id : undefined));
     if (replace) {
       this.replacePeer(m.id, tpeer);
+      this.peerTab = tab;
       return true;
     }
     // (the direct path is known before anyone hears we're connected: what they send goes both ways)
     if (tpeer) this.useDirect(tpeer);
+    // (the partner's own hello: which tab they are, if their build says)
+    if (tab && (!this.peerId || this.peerId === m.id)) this.peerTab = tab;
     if (!this.peerId) {
       this.peerId = m.id;
       window.clearTimeout(this.findTimer);
@@ -398,6 +438,10 @@ export class NetLink {
     this.offsetSet = false;
     this.rttDirect = this.rttRelay = 0;
     this.gone = false;
+    this.peerTab = null;
+    this.heardSeq.direct = this.heardSeq.relay = 0;
+    this.directSent.length = 0;
+    this.directOutLost = false;
     window.clearTimeout(this.graceTimer);
     if (tpeer) this.useDirect(tpeer);
     this.status = 'connected';
@@ -469,7 +513,9 @@ export class NetLink {
     if (!p || !Number.isFinite(p.a)) return;
     if (p.t === 'ping') {
       if (this.muted) return;
-      const pong = { t: 'pong' as const, a: p.a, b: performance.now() };
+      // (and which of their snapshots we last heard over each path: see judgeDirect. Builds before 1.11
+      // read only `a` and `b`, and never send `r`)
+      const pong = { t: 'pong' as const, a: p.a, b: performance.now(), r: [this.heardSeq.direct, this.heardSeq.relay] as [number, number] };
       if (path === 'relay') void this.relay?.send('p', pong);
       else {
         const fast = this.fast();
@@ -487,6 +533,7 @@ export class NetLink {
     const now = performance.now();
     const rtt = now - p.a;
     if (rtt < 0 || rtt > 10000) return;
+    this.judgeDirect((m as { r?: unknown }).r, p.a);
     const off = (p.b as number) + rtt / 2 - now;
     // a reply time no clock could hold: not a sample, however healthy its round trip looks
     if (Math.abs(off) > MAX_SKEW_MS) return;
@@ -515,6 +562,44 @@ export class NetLink {
       this.offset = this.offsetTarget;
       this.offsetSet = true;
     }
+  }
+
+  /** A bird snapshot from the partner over `path`: the latest one heard there is what our pongs report. */
+  private noteSnap(path: 'direct' | 'relay', m: unknown) {
+    const q = Array.isArray(m) ? m[0] : undefined;
+    if (Number.isSafeInteger(q) && (q as number) > 0) this.heardSeq[path] = q as number;
+  }
+
+  /**
+   * The partner's report, in a pong to our ping sent at `askedAt`: the latest of our snapshots they had
+   * heard over each path. Path health is otherwise judged by what we hear, which is blind to a path that
+   * fails one way only — our direct sends vanishing while theirs still reach us. Then nothing of ours has
+   * reached them over the direct path since well before we asked: send by the relay as well (the
+   * receiver keeps whichever copy comes first) until their reports show the direct path carrying ours again.
+   */
+  private judgeDirect(r: unknown, askedAt: number) {
+    if (!Array.isArray(r) || !Number.isSafeInteger(r[0])) return;
+    // (nothing sent over the direct path lately — between levels, say — means nothing to judge: a verdict
+    // about sends long gone isn't one about the path as it is now)
+    const last = this.directSent[this.directSent.length - 1];
+    if (!last || askedAt - last[1] > 3000) {
+      this.directOutLost = false;
+      return;
+    }
+    const heard = r[0] as number;
+    // the sends that had time to land before we asked
+    const due = askedAt - REPORT_SLACK_MS;
+    let ackAt = -Infinity;
+    for (const [q, at] of this.directSent) if (q === heard && at > ackAt) ackAt = at;
+    let missed = 0;
+    let missedFrom = Infinity;
+    for (const [, at] of this.directSent) {
+      if (at <= ackAt || at > due) continue;
+      missed++;
+      if (at < missedFrom) missedFrom = at;
+    }
+    if (missed >= 8 && due - missedFrom >= OUT_LOST_MS) this.directOutLost = true;
+    else if (ackAt >= due - OUT_LOST_MS) this.directOutLost = false;
   }
 
   private directHealthy(now: number) {
@@ -620,8 +705,10 @@ export class NetLink {
     if (kind === 'P') return;
     try {
       const m: unknown = JSON.parse(data.slice(1));
-      if (kind === 'S') this.onSnap?.(m as SnapMsg);
-      else if (kind === 'C') this.recvPing(m, 'direct');
+      if (kind === 'S') {
+        this.noteSnap('direct', m);
+        this.onSnap?.(m as SnapMsg);
+      } else if (kind === 'C') this.recvPing(m, 'direct');
     } catch {
       // a mangled packet is just a lost packet
     }
@@ -655,12 +742,14 @@ export class NetLink {
       try {
         fast.send('S' + JSON.stringify(m));
         sent = true;
+        this.sentDirect(m, now);
       } catch {
         // fall through
       }
     }
-    // the relay: when the direct path can't carry it — or has gone quiet for a moment (see SHAKY_MS)
-    if (this.relay?.up && (!sent || now - this.lastDirect > SHAKY_MS)) {
+    // the relay: when the direct path can't carry it — or has gone quiet for a moment (see SHAKY_MS), or
+    // the partner says what goes down it isn't reaching them (see judgeDirect)
+    if (this.relay?.up && (!sent || now - this.lastDirect > SHAKY_MS || this.directOutLost)) {
       void this.relay.sendSnap(m);
       if (sent || !this.tpeer) return true;
     }
@@ -668,10 +757,19 @@ export class NetLink {
     // direct link without the fast channel (yet): the reliable one, with a cap on what's in flight
     if (!this.tpeer || !this.sAct || this.inflight >= MAX_INFLIGHT) return false;
     this.inflight++;
+    this.sentDirect(m, now);
     this.sAct(m, this.tpeer)
       .catch(() => undefined)
       .finally(() => this.inflight--);
     return true;
+  }
+
+  /** A snapshot went down the direct path: kept on record for the partner's reports (judgeDirect). */
+  private sentDirect(m: SnapMsg, now: number) {
+    const q = m[0];
+    if (!Number.isSafeInteger(q)) return;
+    this.directSent.push([q, now]);
+    if (this.directSent.length > SENT_KEPT) this.directSent.splice(0, this.directSent.length - SENT_KEPT);
   }
 
   private readonly onPageHide = () => this.close();

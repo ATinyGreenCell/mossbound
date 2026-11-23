@@ -33,10 +33,31 @@ const UNASKED_ARM_MS = 900;
 const UNASKED_ARM_POLLS = 3;
 
 /**
+ * A button marked `data-confirm` asks before it acts: its first press only says so, and a second press
+ * of it within this long acts. Then it goes back to what it was — and so it does if the highlight moves
+ * off it first. It is for LEAVE ROOM, which ends the game for both of you, and which a stray Ⓑ or Ⓐ
+ * mustn't: every LEAVE ROOM carries it (the level select's, the guest's pause menu and clear card).
+ */
+const CONFIRM_MS = 3000;
+/** what a `data-confirm` button says while it asks, unless the attribute says otherwise */
+const CONFIRM_ASK = 'LEAVE? PRESS AGAIN';
+
+interface Box {
+  cx: number;
+  cy: number;
+  h: number;
+}
+
+const boxOf = (el: HTMLElement): Box => {
+  const r = el.getBoundingClientRect();
+  return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, h: r.height };
+};
+
+/**
  * A column (or row) of DOM buttons that keyboard, controller and touch can all drive: arrows / d-pad /
  * stick move the highlight, A / Enter / Space presses it, B / Esc backs out, and a tap or click
  * presses the button under it. Elements with `data-act` are the buttons; `.off` ones are skipped.
- * `sel` -1 highlights nothing (see disarm).
+ * `sel` -1 highlights nothing (see disarm). Axis 'grid' is for cards laid out in rows (see gridStep).
  */
 export class ButtonList {
   sel = 0;
@@ -49,6 +70,13 @@ export class ButtonList {
   private down: HTMLElement | null = null;
   /** a press rescued on pointerup, whose own click may yet arrive: that click is the same press */
   private rescued: { act: string; at: number } | null = null;
+  /** the button asking to be pressed again (see CONFIRM_MS), and until when */
+  private asking: { act: string; until: number } | null = null;
+  /**
+   * 'grid': the column ↑/↓ are keeping to (where the run of ↑/↓ began), and the stop they left the
+   * highlight on — so ↓ then ↑ comes back to the same card, rows of different lengths or not
+   */
+  private column: { x: number; sel: number } | null = null;
   private readonly onClick: (e: Event) => void;
   private readonly onMove: (e: PointerEvent) => void;
   private readonly onDown: (e: PointerEvent) => void;
@@ -58,7 +86,7 @@ export class ButtonList {
     private readonly root: HTMLElement,
     private readonly act: (action: string, el: HTMLElement) => void,
     private readonly back: (() => void) | null = null,
-    private readonly axis: 'v' | 'h' | 'both' = 'v',
+    private readonly axis: 'v' | 'h' | 'grid' = 'v',
   ) {
     const pressed = (el: HTMLElement) => {
       const i = this.items().indexOf(el);
@@ -160,14 +188,99 @@ export class ButtonList {
     this.root.querySelectorAll('.sel').forEach((el) => el.classList.remove('sel'));
     const on = items[this.sel];
     on?.classList.add('sel');
+    // a button that was asking to be pressed again stops asking once the highlight moves off it (and
+    // one built again by news keeps asking)
+    if (this.asking && on?.dataset.act !== this.asking.act) this.asking = null;
+    this.showAsking();
     // a card taller than the screen scrolls inside itself (a phone held sideways, a short window), and
     // a highlight below the fold would have you pressing a row you can't see
     on?.scrollIntoView?.({ block: 'nearest' });
   }
 
+  /** Press the button that does `act` as if it were highlighted and Ⓐ pressed (for a Ⓑ that means it). */
+  pressAct(act: string) {
+    const items = this.items();
+    const i = items.findIndex((el) => el.dataset.act === act);
+    if (i < 0) return;
+    this.sel = i;
+    this.highlight();
+    this.press(items[i]);
+  }
+
   private press(el: HTMLElement) {
+    const act = el.dataset.act!;
+    if (el.dataset.confirm !== undefined && this.asking?.act !== act) {
+      audio.play('uiMove');
+      this.asking = { act, until: performance.now() + CONFIRM_MS };
+      this.showAsking();
+      return;
+    }
+    if (this.asking) {
+      this.asking = null;
+      this.showAsking();
+    }
     audio.play('uiSelect');
-    this.act(el.dataset.act!, el);
+    this.act(act, el);
+  }
+
+  /** The asking button says so (its label kept to go back to); every other one says what it does. */
+  private showAsking() {
+    this.root.querySelectorAll<HTMLElement>('[data-confirm]').forEach((el) => {
+      const ask = !!this.asking && el.dataset.act === this.asking.act;
+      if (ask === el.classList.contains('asking')) return;
+      if (ask) {
+        el.dataset.label = el.textContent ?? '';
+        el.textContent = el.dataset.confirm || CONFIRM_ASK;
+      } else el.textContent = el.dataset.label ?? el.textContent;
+      el.classList.toggle('asking', ask);
+    });
+  }
+
+  /**
+   * ↑/↓ go to the row above or below — to the stop there nearest the column they started from — and ←/→
+   * along the row. Rows are read off the page, so they follow the layout at any width. Both ends wrap,
+   * as every list does.
+   */
+  private gridStep(items: HTMLElement[], m: MenuInput) {
+    const next = m.down || m.right;
+    if (this.sel < 0) {
+      this.sel = next ? 0 : items.length - 1;
+      return;
+    }
+    const boxes = items.map(boxOf);
+    const cur = boxes[this.sel];
+    const inRow = (b: Box, cy: number, h: number) => Math.abs(b.cy - cy) < Math.min(b.h, h) / 2;
+    const all = boxes.map((b, i) => ({ b, i }));
+    if (m.left || m.right) {
+      this.column = null;
+      const row = all.filter(({ b }) => inRow(b, cur.cy, cur.h)).sort((p, q) => p.b.cx - q.b.cx);
+      const k = row.findIndex(({ i }) => i === this.sel);
+      if (row.length > 1 && k >= 0) this.sel = row[(k + (m.right ? 1 : -1) + row.length) % row.length].i;
+      return;
+    }
+    // (a highlight moved some other way since — the pointer, a press — starts a new column)
+    const x = this.column && this.column.sel === this.sel ? this.column.x : cur.cx;
+    const others = all.filter(({ b }) => !inRow(b, cur.cy, cur.h));
+    if (!others.length) return;
+    const ahead = others.filter(({ b }) => (m.down ? b.cy > cur.cy : b.cy < cur.cy));
+    // the nearest row that way — or, past the last, the first row from the other end
+    const pool = ahead.length ? ahead : others;
+    const cys = pool.map(({ b }) => b.cy);
+    const rowCy = m.down ? Math.min(...cys) : Math.max(...cys);
+    const rowH = pool.find(({ b }) => b.cy === rowCy)!.b.h;
+    let best = -1;
+    let dist = Infinity;
+    for (const { b, i } of pool) {
+      if (!inRow(b, rowCy, rowH)) continue;
+      const d = Math.abs(b.cx - x);
+      if (d < dist) {
+        dist = d;
+        best = i;
+      }
+    }
+    if (best < 0) return;
+    this.sel = best;
+    this.column = { x, sel: best };
   }
 
   update(m: MenuInput) {
@@ -179,16 +292,31 @@ export class ButtonList {
     // was spent on the screen they left, so there is nothing of it left to arrive here.
     if (this.armPolls > 0) this.armPolls--;
     const armed = !this.armPolls && performance.now() - this.born >= this.armMs;
+    if (this.asking && performance.now() >= this.asking.until) {
+      this.asking = null;
+      this.showAsking();
+    }
     if (!items.length) {
       if (armed && m.back && this.back) this.back();
       return;
     }
-    const prev = this.axis === 'h' ? m.left : this.axis === 'v' ? m.up : m.left || m.up;
-    const next = this.axis === 'h' ? m.right : this.axis === 'v' ? m.down : m.right || m.down;
-    if (prev || next) {
-      this.sel = this.sel < 0 ? (next ? 0 : items.length - 1) : (this.sel + (next ? 1 : -1) + items.length) % items.length;
-      audio.play('uiMove');
-      this.highlight();
+    if (this.axis === 'grid') {
+      if (m.up || m.down || m.left || m.right) {
+        const was = this.sel;
+        this.gridStep(items, m);
+        if (this.sel !== was) {
+          audio.play('uiMove');
+          this.highlight();
+        }
+      }
+    } else {
+      const prev = this.axis === 'h' ? m.left : m.up;
+      const next = this.axis === 'h' ? m.right : m.down;
+      if (prev || next) {
+        this.sel = this.sel < 0 ? (next ? 0 : items.length - 1) : (this.sel + (next ? 1 : -1) + items.length) % items.length;
+        audio.play('uiMove');
+        this.highlight();
+      }
     }
     if (!armed) return;
     if (m.confirm) {

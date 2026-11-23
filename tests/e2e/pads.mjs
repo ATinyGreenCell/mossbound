@@ -205,7 +205,9 @@ const localLevel = async (page, seats, gen, level = 0) => {
     const key = (type) => window.dispatchEvent(new KeyboardEvent(type, { key: code, code }));
     const padAt = gap >= 0 ? 0 : -gap;
     const keyAt = gap >= 0 ? gap : 0;
-    const end = Math.max(padAt, keyAt) + 3;
+    // (both let go a frame after the second half arrives: one press. Held any longer it would be a held
+    // direction on a machine drawing three frames a second, and a held direction repeats in a menu)
+    const end = Math.max(padAt, keyAt) + 1;
     let n = 0;
     const f = () => {
       if (n === padAt) pad(true);

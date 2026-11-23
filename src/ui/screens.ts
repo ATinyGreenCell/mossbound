@@ -21,6 +21,7 @@ import { Backdrop } from '../render/backdrop';
 import { Particles, PK } from '../render/particles';
 import { THEMES, type Theme } from '../render/theme';
 import { ButtonList, esc } from './menu';
+import { BRAND } from '../brand';
 
 export const CONTROLS_HTML = `
 <div class="ctl-cols">
@@ -97,6 +98,10 @@ export function unlockedHats() {
  * press on one leaves the box: Ⓑ and Ⓐ then do what they do in the menu as well (keyboard keys never
  * reach input.menu while a box has focus, so a confirm here can only be a pad's Ⓐ), while up/down
  * only step out — leaving the box is the whole of that press, so the highlight stays where it is.
+ *
+ * A box that is a stop of its own (your name, a save code to paste, a TURN server: see textRow) was
+ * gone into with Ⓐ on it, so Ⓐ or Ⓑ there only comes back out — pressing the row again would only go
+ * back in, and Ⓑ on the way out of your name shouldn't leave the settings as well.
  */
 function typingIn(app: App, m: { back: boolean; up: boolean; down: boolean; confirm: boolean }) {
   const el = document.activeElement;
@@ -104,10 +109,27 @@ function typingIn(app: App, m: { back: boolean; up: boolean; down: boolean; conf
   if (!app.input.padConnected) return true;
   if (m.back || m.confirm) {
     (el as HTMLElement).blur();
-    return false;
+    return !!(el as HTMLElement).closest('[data-act]');
   }
-  if (m.up || m.down) (el as HTMLElement).blur();
+  if (m.up || m.down) {
+    (el as HTMLElement).blur();
+    // (and only that: held on, it doesn't go on to repeat down the menu)
+    app.input.stopRepeats();
+  }
   return true;
+}
+
+/**
+ * A labelled text box as a stop in a menu (`data-act`), so a controller can reach it: Ⓐ on it puts the
+ * caret in the box — on an Xbox that brings up the on-screen keyboard — and a tap or click does what it
+ * always did. (A box on its own was out of reach of a d-pad: on an Xbox in game-controls mode there was
+ * no way to name your sprout, or to paste a save code.)
+ */
+const textRow = (act: string, label: string, input: string) => `<label class="field" data-act="${act}"><span>${label}</span>${input}</label>`;
+
+/** Ⓐ on a textRow: into its box. */
+function enterBox(row: HTMLElement) {
+  row.querySelector('input')?.focus();
 }
 
 // ------------------------------------------------------------------ the scene behind the menus
@@ -118,6 +140,12 @@ function typingIn(app: App, m: { back: boolean; up: boolean; down: boolean; conf
  */
 /** Shown wherever progress is, when this browser won't keep it (blocked or full storage). */
 const SAVE_BLOCKED = 'This browser isn’t keeping your progress on this device. Playing together keeps it on your partner’s device too, and Settings has a save code to copy.';
+
+/**
+ * A room is open (making it, waiting in it, the partner picking, the partner gone but free to come
+ * back): the phone's screen stays on (see Screen.awake). Only a dead link, or none, lets it sleep.
+ */
+const linkLive = (flow: Flow) => flow.mode === 'online' && !!flow.link && flow.link.status !== 'error';
 
 const menuBackdrops: Backdrop[] = [];
 const MENU_BACKDROPS = 2;
@@ -281,7 +309,7 @@ export class TitleScreen implements Screen {
     const iosHint = IS_IOS && !IS_STANDALONE ? '<div class="foot-hint">tip: Share → <b>Add to Home Screen</b> to play full screen</div>' : '';
     const installBtn = IS_STANDALONE ? '' : `<div class="btn small" data-act="install"${canInstall() ? '' : ' hidden'}>INSTALL</div>`;
     this.el.innerHTML = `
-      <div class="logo-wrap"><div class="logo">moss<span>bound</span></div><div class="logo-sub">two little sprouts · one vine · any distance</div></div>
+      <div class="logo-wrap"><div class="logo" style="--n:${BRAND.logo.join('').length}">${esc(BRAND.logo[0])}<span>${esc(BRAND.logo[1])}</span></div><div class="logo-sub">${esc(BRAND.tagline)}</div></div>
       <div class="menu">
         <div class="btn" data-act="online">PLAY ONLINE</div>
         <div class="btn" data-act="local">PLAY ON ONE SCREEN</div>
@@ -324,7 +352,10 @@ export class TitleScreen implements Screen {
           // (the row SETTINGS itself is on: PLAY ONLINE, PLAY ON ONE SCREEN, PRACTICE, HOW TO PLAY)
           this.list.sel = 4;
           this.list.highlight();
+          this.app.input.stopRepeats();
         });
+        // (a new card in the same screen: a direction still held from the menu doesn't scroll it)
+        this.app.input.stopRepeats();
         break;
     }
   }
@@ -363,7 +394,7 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
   host.innerHTML = `
     <div class="panel settings">
       <div class="panel-title">settings</div>
-      <label class="field"><span>your name</span><input class="name-input" maxlength="12" value="${esc(settings.name)}" placeholder="a cute name" autocomplete="off" spellcheck="false"></label>
+      ${textRow('name', 'your name', `<input class="name-input" maxlength="12" value="${esc(settings.name)}" placeholder="a cute name" autocomplete="off" spellcheck="false">`)}
       <div class="field"><span>your sprout</span><div class="swatches">${sw}</div></div>
       <div class="row" data-act="hat"><span>hat</span><b></b>${hatOpts.length > 1 ? arrows : '<em>find all 3 fireflies in a level</em>'}</div>
       <div class="row" data-act="even"><span>sprouts</span><b></b></div>
@@ -371,25 +402,30 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
       <div class="row" data-act="sfx"><span>sounds</span><b></b>${arrows}</div>
       <div class="row" data-act="shake"><span>screen shake</span><b></b></div>
       <div class="row" data-act="perf"><span>graphics</span><b></b></div>
-      <details class="advanced"><summary>your shared save</summary>
+      <details class="advanced"><summary data-act="fold">your shared save</summary>
         <p>Your progress is shared with your partner every time you play together. To move it to a new device, copy the save code here and paste it there.</p>
         ${canSave() ? '' : `<p class="warn">${SAVE_BLOCKED}</p>`}
         <div class="btn small" data-act="copysave">COPY SAVE CODE</div>
         <code class="save-code" hidden></code>
-        <label class="field"><span>paste a code</span><input class="save-input" placeholder="MB1-…" autocomplete="off" spellcheck="false"></label>
+        ${textRow('paste', 'paste a code', '<input class="save-input" placeholder="MB1-…" autocomplete="off" spellcheck="false">')}
       </details>
-      <details class="advanced"><summary>connection help</summary>
+      <details class="advanced"><summary data-act="fold">connection help</summary>
         <p>Online play connects you directly when it can, and through a relay when your network blocks that. If you still can't connect, add a TURN server here (free ones: metered.ca, expressturn.com).</p>
-        <label class="field"><span>TURN url</span><input class="turn-url" value="${esc(settings.turn.urls)}" placeholder="turn:host:3478" autocomplete="off" spellcheck="false"></label>
-        <label class="field"><span>username</span><input class="turn-user" value="${esc(settings.turn.username)}" autocomplete="off" spellcheck="false"></label>
-        <label class="field"><span>password</span><input class="turn-pass" type="password" value="${esc(settings.turn.credential)}" autocomplete="off"></label>
+        ${textRow('turn-url', 'TURN url', `<input class="turn-url" value="${esc(settings.turn.urls)}" placeholder="turn:host:3478" autocomplete="off" spellcheck="false">`)}
+        ${textRow('turn-user', 'username', `<input class="turn-user" value="${esc(settings.turn.username)}" autocomplete="off" spellcheck="false">`)}
+        ${textRow('turn-pass', 'password', `<input class="turn-pass" type="password" value="${esc(settings.turn.credential)}" autocomplete="off">`)}
       </details>
       <div class="btn small" data-act="back">BACK</div>
     </div>`;
   host.querySelectorAll('details').forEach((d) => {
-    // a clicked <summary> keeps the keyboard focus, and the next ENTER would both fold the section
-    // and press whatever row is highlighted: let go of it again
-    d.querySelector('summary')?.addEventListener('click', (e) => (e.currentTarget as HTMLElement).blur());
+    // A section heading is a stop in the list (Ⓐ on it folds and unfolds it: closed, what's inside
+    // can't be reached), so its own click mustn't fold it as well — the list's press does that, once.
+    // And a clicked <summary> keeps the keyboard focus, so the next ENTER would both fold the section
+    // and press whatever row is highlighted: let go of it again.
+    d.querySelector('summary')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).blur();
+    });
   });
   const name = host.querySelector<HTMLInputElement>('.name-input')!;
   name.addEventListener('input', () => {
@@ -460,6 +496,10 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
     host,
     (a, el) => {
       if (a === 'back') done();
+      else if (a === 'fold') {
+        const d = el.closest('details');
+        if (d) d.open = !d.open;
+      } else if (el.matches('.field')) enterBox(el);
       else if (a === 'copysave') {
         const code = exportCode();
         // the clipboard said no (or there isn't one): show the code, to copy by hand
@@ -505,13 +545,17 @@ function buildSettings(host: HTMLElement, app: App, done: () => void): ButtonLis
     host.removeEventListener('click', onArrow, true);
     dispose();
   };
-  // left/right change the highlighted row
+  // left/right change the highlighted row — a held one again and again (see Input.repeat), except a
+  // switch: held, it would flick ON and OFF eight times a second and stop wherever the thumb let go
+  const steps = new Set(['hat', 'even', 'music', 'sfx', 'shake', 'perf']);
+  const switches = new Set(['even', 'shake', 'perf']);
   const orig = list.update.bind(list);
   list.update = (m) => {
     if (m.left || m.right) {
       const el = list.items()[list.sel];
       const a = el?.dataset.act;
-      if (a && a !== 'back') {
+      if (a && (a.startsWith('color:') || steps.has(a))) {
+        if (m.repeat && switches.has(a)) return;
         if (a.startsWith('color:')) {
           const c = (settings.color + (m.right ? 1 : -1) + BIRD_COLORS.length) % BIRD_COLORS.length;
           settings.color = c;
@@ -541,8 +585,19 @@ export class LocalScreen implements Screen {
   private gen: [number, number] = [0, 0];
   private dt = 0;
   private born = performance.now();
-  /** the countdown to the level select, once both are seated — cancelled if the screen goes first */
-  private startTimer = 0;
+  /**
+   * The countdown to the level select once both are seated: when it ends (0: not counting), and the
+   * frames it lasts at the least. A seat that empties on the way — a Ⓑ / ESC from either player still
+   * gets up — stops it, and so does leaving.
+   *
+   * It ends in a frame, after that frame's presses have been read, never between frames: a wall-clock
+   * timer fired between two slow frames and started the game under a Ⓑ already pressed, which then
+   * landed on the level select and backed out to the title. Counting frames as well as time gives a
+   * player on a slow phone the frames to see both seats taken and still get up: the one the second
+   * seat appears in, and one more to answer during (as a menu nobody asked for is armed: see menu.ts).
+   */
+  private startAt = 0;
+  private startPolls = 0;
 
   constructor(
     private readonly app: App,
@@ -584,17 +639,18 @@ export class LocalScreen implements Screen {
     this.el.querySelector('[data-act="back"]')!.addEventListener('click', () => this.leave());
   }
 
+  /** Stop the countdown: somebody got up. */
+  private hold() {
+    this.startAt = 0;
+  }
+
   /**
-   * Go back to the title, and stop the countdown on the way out.
-   *
-   * `dispose()` stops it too, but a click's screen change is taken up at the start of the NEXT frame,
-   * and the countdown is a wall-clock timer — 450 ms, and 90 under ?fast. Where a frame lasts longer
-   * than that the timer fires first and the game starts behind the player who just asked to leave,
-   * which is the one thing this screen must not do. Nothing here can be left for the next frame to undo.
+   * Go back to the title, and stop the countdown on the way out (a click's screen change is taken up
+   * at the start of the next frame: the countdown mustn't end in that frame, behind the player who just
+   * asked to leave).
    */
   private leave() {
-    window.clearTimeout(this.startTimer);
-    this.startTimer = 0;
+    this.hold();
     this.flow.title();
   }
 
@@ -617,6 +673,7 @@ export class LocalScreen implements Screen {
       const id = this.seats[i];
       if (id && input.device(id)?.connected === false) {
         this.seats[i] = null;
+        this.hold();
         this.build();
       }
     }
@@ -637,7 +694,9 @@ export class LocalScreen implements Screen {
     for (const d of devs) {
       const taken = this.seats.indexOf(d.id);
       if (d.menu.back && taken >= 0) {
+        // (in the countdown too: both seated isn't both sure, and on a console Ⓑ is the only way back)
         this.seats[taken] = null;
+        this.hold();
         audio.play('uiBack');
         this.build();
         continue;
@@ -651,12 +710,13 @@ export class LocalScreen implements Screen {
       audio.play('join');
       this.build();
     }
-    if (this.seats[0] && this.seats[1]) {
-      const seats = this.seats as [DeviceId, DeviceId];
-      const gen: [number, number] = [this.gen[0], this.gen[1]];
-      this.startTimer = window.setTimeout(() => this.flow.startLocal(seats, gen), 450 / ceremony(1));
-      this.seats = [...this.seats];
-      this.born = Infinity;
+    if (!this.seats[0] || !this.seats[1]) return;
+    if (!this.startAt) {
+      this.startAt = performance.now() + 450 / ceremony(1);
+      this.startPolls = 3;
+    } else if (--this.startPolls <= 0 && performance.now() >= this.startAt) {
+      this.startAt = 0;
+      this.flow.startLocal([this.seats[0], this.seats[1]], [this.gen[0], this.gen[1]]);
     }
   }
 
@@ -668,7 +728,7 @@ export class LocalScreen implements Screen {
 
   dispose() {
     // whoever leaves this screen — BACK, Ⓑ, an error — means it: the game mustn't start behind them
-    window.clearTimeout(this.startTimer);
+    this.hold();
     this.el.remove();
   }
 }
@@ -703,7 +763,7 @@ export class OnlineScreen implements Screen {
   constructor(
     private readonly app: App,
     private readonly flow: Flow,
-    opts: { joinCode?: string },
+    opts: { joinCode?: string; reopen?: boolean },
   ) {
     this.el = document.createElement('div');
     this.el.className = 'screen online-screen';
@@ -725,14 +785,29 @@ export class OnlineScreen implements Screen {
     );
     void preloadNet().catch(() => undefined);
     if (opts.joinCode && isValidCode(opts.joinCode)) this.join(opts.joinCode);
+    // (a host back from a reload: REOPEN ROOM, pressed for them — see Flow.rejoinRoom)
+    else if (opts.reopen && isValidCode(settings.lastRoom)) this.host(settings.lastRoom);
     else this.go('menu');
+  }
+
+  /** Make (or reopen) room `code` and wait in it for a partner. */
+  private host(code: string) {
+    settings.lastRoom = code;
+    // (only the one who made a room offers to reopen it: two devices both hosting one code clash)
+    settings.lastRole = 'host';
+    this.retryCode = '';
+    saveSettings();
+    this.flow.adopt(NetLink.open('host', code));
+    this.go('host');
   }
 
   private go(s: OnlineState) {
     this.state = s;
     this.codeInput = null;
+    // (each state is a new card: a direction still held from the last one doesn't scroll it)
+    this.app.input.stopRepeats();
     const L = this.flow.link;
-    const nameField = `<label class="field"><span>your name</span><input class="name-input" maxlength="12" value="${esc(settings.name)}" placeholder="so your partner knows it's you" autocomplete="off" spellcheck="false"></label>`;
+    const nameField = textRow('name', 'your name', `<input class="name-input" maxlength="12" value="${esc(settings.name)}" placeholder="so your partner knows it's you" autocomplete="off" spellcheck="false">`);
     switch (s) {
       case 'menu':
         this.el.innerHTML = `
@@ -852,19 +927,16 @@ export class OnlineScreen implements Screen {
       this.setColor((settings.color + 1) % BIRD_COLORS.length);
       return;
     }
+    if (a === 'name') {
+      const row = this.el.querySelector<HTMLElement>('[data-act="name"]');
+      if (row) enterBox(row);
+      return;
+    }
     switch (a) {
       case 'host':
-      case 'rehost': {
-        const code = a === 'rehost' ? settings.lastRoom : makeRoomCode();
-        settings.lastRoom = code;
-        // (only the one who made a room offers to reopen it: two devices both hosting one code clash)
-        settings.lastRole = 'host';
-        this.retryCode = '';
-        saveSettings();
-        this.flow.adopt(NetLink.open('host', code));
-        this.go('host');
+      case 'rehost':
+        this.host(a === 'rehost' ? settings.lastRoom : makeRoomCode());
         break;
-      }
       case 'join':
         this.go('join');
         break;
@@ -922,10 +994,10 @@ export class OnlineScreen implements Screen {
     const code = this.flow.link?.code;
     if (!code) return;
     const url = `${location.origin}${location.pathname}#join=${code}`;
-    const text = `Come play Mossbound with me! Room ${code}`;
+    const text = `Come play ${BRAND.name} with me! Room ${code}`;
     try {
       if (navigator.share) {
-        await navigator.share({ title: 'Mossbound', text, url });
+        await navigator.share({ title: BRAND.name, text, url });
         return;
       }
     } catch {
@@ -945,7 +1017,7 @@ export class OnlineScreen implements Screen {
     if (s === 'connected') {
       audio.play('join');
       this.go('connected');
-      this.moveOnT = 1.4 / ceremony(1);
+      this.moveOnT = 0.8 / ceremony(1);
     } else if (s === 'error' || (s === 'lost' && this.state !== 'connected')) {
       this.error = detail || 'The connection failed.';
       this.go('error');
@@ -978,6 +1050,10 @@ export class OnlineScreen implements Screen {
       return;
     }
     this.list.update(m);
+  }
+
+  awake() {
+    return linkLive(this.flow);
   }
 
   update() {}
@@ -1019,7 +1095,9 @@ export class LevelSelect implements Screen {
     this.el = document.createElement('div');
     this.el.className = 'screen levels-screen';
     app.ui.appendChild(this.el);
-    this.list = new ButtonList(this.el, (a) => this.act(a), () => this.act('back'), 'both');
+    // (rows of cards: ↑/↓ go to the card above or below, ←/→ along the row. Online, Ⓑ / ESC is LEAVE
+    // ROOM pressed — which asks first, as it does however it's pressed)
+    this.list = new ButtonList(this.el, (a) => this.act(a), () => (this.online ? this.list.pressAct('back') : this.act('back')), 'grid');
     this.build();
     audio.music('title');
   }
@@ -1074,7 +1152,7 @@ export class LevelSelect implements Screen {
         <div class="cards">${course}${cont}${cards}</div>
         ${who}
         ${status}
-        <div class="btn small" data-act="back">${this.online ? 'LEAVE ROOM' : 'BACK'}</div>
+        <div class="btn small" data-act="back"${this.online ? ' data-confirm>LEAVE ROOM' : '>BACK'}</div>
       </div>`;
     this.list.refresh();
     if (!this.lead) {
@@ -1174,6 +1252,10 @@ export class LevelSelect implements Screen {
     }
   }
 
+  awake() {
+    return linkLive(this.flow);
+  }
+
   update() {}
 
   render() {
@@ -1234,6 +1316,10 @@ export class EndingScreen implements Screen {
       this.fx.burst(PK.Spark, x, y, 40, 260 * (r.height / 600), 1.6, 5 * (r.height / 600), c, 90, 1.4);
     }
     this.fx.update(dt);
+  }
+
+  awake() {
+    return linkLive(this.flow);
   }
 
   update() {}

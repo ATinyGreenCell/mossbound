@@ -117,6 +117,31 @@ const guestRoom = (page) => page.evaluate(() => {
   await sleep(300);
   const fits = await page.evaluate(() => [...document.querySelectorAll('.title-screen .btn, .logo')].every((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; }));
   t.check('the title fits a phone held sideways', fits);
+  // the name is src/brand.ts's, on the title, the tab and the install manifest alike (docs/RENAMING.md)
+  const brand = await page.evaluate(async () => {
+    const { BRAND } = await import('/src/brand.ts');
+    const logo = document.querySelector('.logo');
+    const m = await (await fetch('./manifest.webmanifest')).json();
+    return { BRAND, logo: logo.textContent, gold: logo.querySelector('span')?.textContent, tab: document.title, ios: document.querySelector('meta[name="apple-mobile-web-app-title"]')?.content, m: [m.name, m.short_name, m.id] };
+  });
+  const B = brand.BRAND;
+  t.check('the name comes from src/brand.ts: title, tab, home screen, manifest', brand.logo === B.logo.join('') && brand.gold === B.logo[1] && brand.tab === B.name && brand.ios === B.name && brand.m[0] === B.name && brand.m[1] === B.name && brand.m[2] === 'mossbound-game', brand);
+  // a longer name gets a smaller logo, on one line, and the title still fits
+  const long = await page.evaluate(() => {
+    const l = document.querySelector('.logo');
+    const was = [l.innerHTML, l.getAttribute('style')];
+    l.style.setProperty('--n', '20');
+    l.innerHTML = 'by brook or <span>by crook</span>';
+    const r = document.createRange();
+    r.selectNodeContents(l);
+    const text = r.getBoundingClientRect();
+    const lines = Math.round(l.getBoundingClientRect().height / parseFloat(getComputedStyle(l).fontSize));
+    const fits = [...document.querySelectorAll('.title-screen .btn, .logo')].every((el) => { const b = el.getBoundingClientRect(); return b.top >= 0 && b.bottom <= innerHeight; });
+    l.innerHTML = was[0];
+    l.setAttribute('style', was[1]);
+    return { left: Math.round(text.left), right: Math.round(text.right), w: innerWidth, lines, fits };
+  });
+  t.check('a name twice as long fits on one line, and the title still fits', long.left >= 0 && long.right <= long.w && long.lines === 1 && long.fits, long);
   await page.evaluate(() => { window.__fb.flow.mode = 'local'; window.__fb.flow.levels(); });
   await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
   await sleep(300);
@@ -130,7 +155,7 @@ const guestRoom = (page) => page.evaluate(() => {
 // ---- level select: a run to continue is what Ⓐ picks; the highlight survives the partner's save
 {
   const run = { level: 1, cp: 0, seeds: [1, 2], feathers: 0, time: 30, with: 'Pip & Bo' };
-  const page = await open(browser, { storage: { 'mossbound.save.v2': { unlocked: 4, levels: {}, finished: false, run, runAt: 1 } } });
+  const page = await open(browser, { storage: { 'mossbound.save.v2': { unlocked: 6, levels: {}, finished: false, run, runAt: 1 } } });
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
   await page.evaluate(() => { window.__fb.flow.mode = 'local'; window.__fb.flow.levels(); });
   await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
@@ -153,6 +178,24 @@ const guestRoom = (page) => page.evaluate(() => {
   });
   // (one frame between presses — quick scrolling: a frame is at most 0.1 s of game time, inside the
   // highlight's 0.15 s settle, however slow a busy machine makes the frames)
+  // ←/→ walk along a row of cards (↑/↓ go between rows), so the scroll starts at the first card of the
+  // longest row of levels, and takes as many steps as that row has room for — up to four
+  const steps = await page.evaluate(() => {
+    const L = window.__fb.app.current.list;
+    const cards = L.items().filter((el) => el.dataset.act?.startsWith('lvl:'));
+    const rows = new Map();
+    for (const el of cards) rows.set(el.offsetTop, [...(rows.get(el.offsetTop) ?? []), el]);
+    const row = [...rows.values()].sort((a, b) => b.length - a.length)[0];
+    L.sel = L.items().indexOf(row[0]);
+    L.highlight();
+    return Math.min(4, row.length - 1);
+  });
+  // (a frame first: the new highlight starts its settle in the game's next frame, and a look before that
+  // finds the old settle long over. Software rendering draws frames in pairs, one 5 ms after the other,
+  // and the start card's scenery then painted inside the quick scroll below: 17 paints, not 8)
+  await frames(page, 2);
+  await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'scenery settled again').catch(() => undefined);
+  await frames(page, 3);
   const from = await act();
   // Quick: four steps in four frames, driven from inside the page. It used to be page.keyboard.press
   // in a loop out here, and each of those is a round trip to the browser — nothing on a machine
@@ -161,15 +204,15 @@ const guestRoom = (page) => page.evaluate(() => {
   // the check is that a QUICK scroll paints once, so the scroll has to actually be quick, and the only
   // way to guarantee that is to stop leaving the page between presses.
   await page.evaluate(() => { window.__paints = 0; });
-  await page.evaluate(() => new Promise((done) => {
+  await page.evaluate((steps) => new Promise((done) => {
     let n = 0;
     const press = () => {
-      if (n++ >= 4) return done();
+      if (n++ >= steps) return done();
       for (const type of ['keydown', 'keyup']) window.dispatchEvent(new KeyboardEvent(type, { code: 'ArrowRight', key: 'ArrowRight', bubbles: true }));
       requestAnimationFrame(press);
     };
     requestAnimationFrame(press);
-  }));
+  }), steps);
   const to = await act();
   await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'the scenery settles once').catch(() => undefined);
   await frames(page, 3);
@@ -180,13 +223,13 @@ const guestRoom = (page) => page.evaluate(() => {
   // to one renderer on one machine: it says nothing about the behaviour either way, and it fails the
   // day a theme gains a layer. (It was reading 12 and 19 on a runner drawing software frames.)
   await page.evaluate(() => { window.__paints = 0; });
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < steps; i++) {
     await key(page, 'ArrowLeft');
     await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, `step ${i + 1} settles`).catch(() => undefined);
     await frames(page, 3);
   }
   const slow = await page.evaluate(() => window.__paints);
-  t.check('a quick scroll paints one backdrop where a slow one paints at every step', quick * 2 <= slow && to !== from, { quick, slow, from, to });
+  t.check('a quick scroll paints one backdrop where a slow one paints at every step', steps >= 2 && quick * 2 <= slow && to !== from, { steps, quick, slow, from, to });
   t.check('no errors (level select)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -301,9 +344,9 @@ const guestRoom = (page) => page.evaluate(() => {
   const was = await color();
   await padPress(page, 0, 15); // →: the next colour
   const now = await color();
-  await padPress(page, 0, 12); // ↑ again: past the whole row in one step
+  await padPress(page, 0, 12); // ↑ again: past the whole row in one step, to your name
   const pastRow = await act();
-  t.check('the colours are one stop on the way, changed with ←/→', onRow === 'color' && now === (was + 1) % 8 && pastRow === 'back', { onRow, was, now, pastRow });
+  t.check('the colours are one stop on the way, changed with ←/→', onRow === 'color' && now === (was + 1) % 8 && pastRow === 'name', { onRow, was, now, pastRow });
   await page.click('.online-screen .swatch[data-color="6"]');
   await frames(page, 2);
   const tapped = await page.evaluate(() => ({ color: JSON.parse(localStorage.getItem('mossbound.settings.v1') ?? '{}').color, on: document.querySelector('.online-screen .swatch.on')?.dataset.color }));
@@ -343,8 +386,10 @@ const guestRoom = (page) => page.evaluate(() => {
   await page.close();
 }
 
-// ---- settings: clicking a section heading leaves the keyboard where it was, so the next ENTER does
-// one thing — and changing a setting doesn't fold the section away
+// ---- settings: clicking a section heading opens it and leaves the keyboard nowhere, so the next ENTER
+// does one thing — and changing a setting doesn't fold the section away. (The heading is a stop in the
+// list, so the click puts the highlight on it, as a click does on any stop: ENTER there folds it again,
+// and nothing else. Back on a setting, ENTER changes that setting and the section stays open.)
 {
   const page = await open(browser, { storage: { 'mossbound.settings.v1': { shake: true } } });
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
@@ -358,10 +403,18 @@ const guestRoom = (page) => page.evaluate(() => {
   await page.click('.settings details.advanced summary');
   await sleep(300);
   const before = await state();
+  const onHeading = await page.evaluate(() => document.querySelector('.settings .sel')?.tagName);
+  await key(page, 'Enter');
+  await sleep(200);
+  const folded = await state();
+  await key(page, 'Enter');
+  await sleep(200);
+  for (let i = 0; i < 20 && (await page.evaluate(() => document.querySelector('.settings .sel')?.dataset.act)) !== 'shake'; i++) await key(page, 'ArrowUp');
+  const mid = await state();
   await key(page, 'Enter');
   await sleep(200);
   const after = await state();
-  t.check('ENTER after opening a settings section does one thing, and the section stays open', row === 'shake' && before.open && after.open && after.shake === !before.shake, { row, before, after });
+  t.check('ENTER after opening a settings section does one thing, and the section stays open', row === 'shake' && before.open && before.focus !== 'SUMMARY' && onHeading === 'SUMMARY' && !folded.open && folded.shake === before.shake && mid.open && after.open && after.shake === !mid.shake, { row, before, onHeading, folded, mid, after });
   t.check('no errors (settings sections)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -405,13 +458,12 @@ const guestRoom = (page) => page.evaluate(() => {
   await padPress(page, 0, 0); // player 1 sits down
   // Player 2 sits too, and one of them changes their mind before the level select arrives.
   //
-  // The window being aimed at is "both seats taken, level select not here yet". A screen change is
-  // queued and taken up at the start of the NEXT frame, so the window is the rest of the frame the
-  // second seat was claimed in: one frame wide at any frame rate, which is plenty — but only from
-  // inside the page, and only if the watch is already running when the seat is claimed. Pressing
-  // out here and then looking costs two round trips, by which time the lobby has handed over and
-  // there is nothing left to click. So the press and the watch go in together: arm, press, and take
-  // the first frame that shows both seats with the lobby still up.
+  // The window being aimed at is "both seats taken, level select not here yet": the countdown, which
+  // runs for 450 ms (90 under ?fast) and three frames at the least, and ends inside a frame, after that
+  // frame's presses — so a click that lands in it is always in time. It is aimed at from inside the
+  // page, with the watch already running when the seat is claimed: pressing out here and then looking
+  // costs two round trips, which on a slow machine is the whole countdown. So the press and the watch
+  // go in together: arm, press, and take the first frame that shows both seats with the lobby still up.
   //
   // (This used to be a bare `querySelector(...).click()` on the hope of being early enough, which
   // dereferenced null when it wasn't and took the whole of menus.mjs down with it — every check
@@ -419,13 +471,13 @@ const guestRoom = (page) => page.evaluate(() => {
   const hitTheWindow = await page.evaluate(() => new Promise((done) => {
     const deadline = performance.now() + 4000;
     const f = () => {
-      const seated = window.__fb.flow.seats.filter(Boolean).length;
-      if (seated >= 2) {
+      const lobby = window.__fb.app.current;
+      if (lobby?.constructor.name !== 'LocalScreen') return done(false);
+      if (lobby.seats.filter(Boolean).length >= 2) {
         const b = document.querySelector('.local-screen [data-act="back"]');
         b?.click();
         return done(!!b);
       }
-      if (window.__fb.app.current?.constructor.name !== 'LocalScreen') return done(false);
       return performance.now() > deadline ? done(false) : requestAnimationFrame(f);
     };
     window.__pads[1].buttons[0] = { pressed: true, touched: true, value: 1 };
@@ -541,11 +593,14 @@ const guestRoom = (page) => page.evaluate(() => {
   const after = await page.evaluate(() => ({ screen: window.__fb.app.current?.constructor.name, closed: window.__link.closed, link: !!window.__fb.flow.link }));
   await slowTug();
   t.check('a tug (Ⓑ) as the partner moves you to the level select doesn’t leave the room (at 4 frames a second)', after.screen === 'LevelSelect' && !after.closed && after.link, after);
-  // ...and once they've had a moment to see where they are, LEAVE ROOM works
+  // ...and once they've had a moment to see where they are, LEAVE ROOM works (Ⓑ is LEAVE ROOM pressed,
+  // and LEAVE ROOM asks first: the second Ⓑ leaves)
   await sleep(500);
   await padPress(page, 0, 1);
+  const asked = await page.evaluate(() => ({ screen: window.__fb.app.current?.constructor.name, closed: window.__link.closed }));
+  await padPress(page, 0, 1);
   const left = await waitFor(async () => (await screenName(page)) === 'TitleScreen', 3000, 'title').catch(() => false);
-  t.check('Ⓑ on the level select still leaves the room a moment later', !!left && (await page.evaluate(() => window.__link.closed)), { left: !!left });
+  t.check('Ⓑ on the level select still leaves the room a moment later (asking first)', asked.screen === 'LevelSelect' && !asked.closed && !!left && (await page.evaluate(() => window.__link.closed)), { asked, left: !!left });
   t.check('no errors (guest level select)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }

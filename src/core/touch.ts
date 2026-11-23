@@ -38,6 +38,9 @@ interface Button {
   pointers: Set<number>;
 }
 
+/** Where the rotate prompt shows (touch.css): something phone-shaped, held upright. */
+const UPRIGHT = '(orientation: portrait) and (pointer: coarse) and (max-width: 1024px)';
+
 /**
  * On-screen controls for phones and tablets: a floating joystick on the left, a thumb arc of
  * jump / tug / hold / heart buttons on the right, and a pause button. Writes into Input.touch.
@@ -49,7 +52,17 @@ export class TouchControls implements TouchHooks {
   private readonly knob: HTMLDivElement;
   private readonly rotate: HTMLDivElement;
   private readonly buttons: Button[] = [];
+  /**
+   * The button each finger on the right-hand side is pressing. A thumb that slides from one button onto
+   * another presses that one (JUMP → TUG without lifting); one that slides off onto nothing keeps the
+   * button it had, as it always did (a jump or a HOLD isn't dropped by a thumb drifting off the edge).
+   */
+  private readonly finger = new Map<number, Button>();
+  /** the buttons' circles, for telling which one a sliding thumb is over (null: measure again) */
+  private circles: { b: Button; x: number; y: number; r: number }[] | null = null;
   private readonly coarse: MediaQueryList | null;
+  private readonly upright: MediaQueryList | null;
+  private turned = false;
   private readonly off: (() => void)[] = [];
   private stickPointer: number | null = null;
   private originX = 0;
@@ -64,6 +77,8 @@ export class TouchControls implements TouchHooks {
     private readonly input: Input,
   ) {
     this.coarse = typeof matchMedia === 'function' ? matchMedia('(hover: none) and (pointer: coarse)') : null;
+    this.upright = typeof matchMedia === 'function' ? matchMedia(UPRIGHT) : null;
+    this.turned = this.upright?.matches ?? false;
 
     this.el = document.createElement('div');
     this.el.className = 'tc';
@@ -89,8 +104,11 @@ export class TouchControls implements TouchHooks {
       this.el.appendChild(b);
       const btn: Button = { def, el: b, pointers: new Set() };
       this.buttons.push(btn);
-      this.listen(b, 'pointerdown', (e: PointerEvent) => this.press(btn, e));
-      const up = (e: PointerEvent) => this.release(btn, e.pointerId);
+      this.listen(b, 'pointerdown', (e: PointerEvent) => this.down(btn, e));
+      // (the finger stays captured by the button it landed on, so its moves and its lifting come here
+      // wherever it has slid to)
+      this.listen(b, 'pointermove', (e: PointerEvent) => this.slide(e));
+      const up = (e: PointerEvent) => this.lift(e.pointerId);
       this.listen(b, 'pointerup', up);
       this.listen(b, 'pointercancel', up);
       this.listen(b, 'lostpointercapture', up);
@@ -137,6 +155,7 @@ export class TouchControls implements TouchHooks {
     );
     this.listen(window, 'keydown', () => this.refresh());
     this.listen(window, 'resize', () => this.layout());
+    if (this.upright) this.listen(this.upright, 'change', (e: MediaQueryListEvent) => (this.turned = e.matches));
     this.listen(window, 'blur', () => this.releaseAll());
     this.listen(document, 'visibilitychange', () => {
       if (document.hidden) this.releaseAll();
@@ -153,6 +172,11 @@ export class TouchControls implements TouchHooks {
     return this.seenTouch || (this.coarse?.matches ?? false);
   }
 
+  /** The rotate prompt is up, covering the game (the same test as its CSS: body.touch, held upright). */
+  get covered() {
+    return this.turned && this.enabled;
+  }
+
   setPlayActive(on: boolean) {
     this.playActive = on;
     this.refresh();
@@ -162,6 +186,7 @@ export class TouchControls implements TouchHooks {
   setDash(on: boolean) {
     const b = this.buttons.find((x) => x.def.id === 'dash');
     if (b) b.el.style.display = on ? '' : 'none';
+    this.circles = null;
   }
 
   /** Called each frame by the app: a pad or keyboard taking over hides the overlay. */
@@ -202,6 +227,7 @@ export class TouchControls implements TouchHooks {
     this.shown = show;
     this.el.style.display = show ? '' : 'none';
     document.body.classList.toggle('touch-play', show);
+    this.circles = null;
     if (!show) this.releaseAll();
   }
 
@@ -209,20 +235,63 @@ export class TouchControls implements TouchHooks {
     const s = Math.min(window.innerHeight / 390, window.innerWidth / 844);
     this.scale = Math.max(0.85, Math.min(1.6, s));
     this.el.style.setProperty('--s', this.scale.toFixed(3));
+    this.circles = null;
   }
 
-  private press(btn: Button, e: PointerEvent) {
+  /** A finger landed on a button. */
+  private down(btn: Button, e: PointerEvent) {
     e.preventDefault();
-    if (btn.pointers.has(e.pointerId)) return;
-    // a second finger landing on a held button is just more of the same press: track it so that the
-    // first one lifting doesn't let go of the button underneath the other
-    const first = btn.pointers.size === 0;
-    btn.pointers.add(e.pointerId);
+    if (this.finger.has(e.pointerId)) return;
     try {
       btn.el.setPointerCapture(e.pointerId);
     } catch {
       // synthetic/inactive pointer — release still arrives via pointerup
     }
+    this.finger.set(e.pointerId, btn);
+    this.press(btn, e.pointerId);
+  }
+
+  /** A finger on a button moved: onto another button, it presses that one instead. */
+  private slide(e: PointerEvent) {
+    const from = this.finger.get(e.pointerId);
+    if (!from) return;
+    const to = this.buttonAt(e.clientX, e.clientY);
+    if (!to || to === from) return;
+    this.finger.set(e.pointerId, to);
+    this.release(from, e.pointerId);
+    this.press(to, e.pointerId);
+  }
+
+  /** A finger lifted (or the browser took it back): its button lets go. */
+  private lift(pointerId: number) {
+    const btn = this.finger.get(pointerId);
+    if (!btn) return;
+    this.finger.delete(pointerId);
+    this.release(btn, pointerId);
+  }
+
+  /**
+   * The button whose circle is under a point, if any. Measured once per layout rather than per move,
+   * and by layout box: a pressed button is drawn shrunk (.on), and its circle mustn't shrink with it.
+   */
+  private buttonAt(x: number, y: number) {
+    if (!this.circles) {
+      const base = this.el.getBoundingClientRect();
+      this.circles = this.buttons
+        .filter((b) => b.el.style.display !== 'none')
+        .map((b) => ({ b, x: base.left + b.el.offsetLeft + b.el.offsetWidth / 2, y: base.top + b.el.offsetTop + b.el.offsetHeight / 2, r: b.el.offsetWidth / 2 }))
+        .filter((c) => c.r > 0);
+    }
+    for (const c of this.circles) if (Math.hypot(x - c.x, y - c.y) <= c.r) return c.b;
+    return null;
+  }
+
+  private press(btn: Button, pointerId: number) {
+    if (btn.pointers.has(pointerId)) return;
+    // a second finger landing on a held button is just more of the same press: track it so that the
+    // first one lifting doesn't let go of the button underneath the other
+    const first = btn.pointers.size === 0;
+    btn.pointers.add(pointerId);
     if (!first) return;
     btn.el.classList.add('on');
     const t = this.input.touch;
@@ -308,6 +377,7 @@ export class TouchControls implements TouchHooks {
 
   private releaseAll() {
     if (this.stickPointer !== null) this.stickRelease();
+    this.finger.clear();
     for (const b of this.buttons) for (const id of [...b.pointers]) this.release(b, id);
     const t = this.input.touch;
     t.moveX = t.moveY = 0;

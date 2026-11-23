@@ -59,12 +59,14 @@ export interface MenuInput {
   back: boolean;
   pause: boolean;
   any: boolean;
+  /** this frame's direction is a held one repeating, not a fresh press (see REPEAT_DELAY_MS) */
+  repeat: boolean;
 }
 
-const makeMenu = (): MenuInput => ({ up: false, down: false, left: false, right: false, confirm: false, back: false, pause: false, any: false });
+const makeMenu = (): MenuInput => ({ up: false, down: false, left: false, right: false, confirm: false, back: false, pause: false, any: false, repeat: false });
 
 function clearMenu(m: MenuInput) {
-  m.up = m.down = m.left = m.right = m.confirm = m.back = m.pause = m.any = false;
+  m.up = m.down = m.left = m.right = m.confirm = m.back = m.pause = m.any = m.repeat = false;
 }
 
 /**
@@ -206,6 +208,13 @@ class Pad implements Device {
   private prev: boolean[] = [];
   /** menu directions the stick is already counted as pushed in (see stickEdge) */
   private stickOn = { up: false, down: false, left: false, right: false };
+  /** menu directions held down right now, by the d-pad or the stick (they repeat: see Input.repeat) */
+  readonly hold: Record<MenuDir, boolean> = { up: false, down: false, left: false, right: false };
+  /**
+   * Ⓐ was already down when this pad first appeared: the press that handed the pads over (on an Xbox,
+   * picking "Use game controls"). It confirms nothing until it has been let go and pressed again.
+   */
+  private handover = false;
   /** axes that were held when the page lost focus: ignored until they read near centre once */
   private stale: boolean[] = [];
 
@@ -231,6 +240,7 @@ class Pad implements Device {
     clearIntent(it);
     clearMenu(this.menu);
     this.active = this.buttonDown = false;
+    this.hold.up = this.hold.down = this.hold.left = this.hold.right = false;
     if (!pad || !pad.connected) {
       if (this.connected) this.drop();
       return;
@@ -247,10 +257,14 @@ class Pad implements Device {
       this.deadAxes = pad.mapping === 'standard' ? [] : pad.axes.map((a) => Math.abs(a) > 0.97);
       // A pad that comes back with buttons already held mustn't fire them as fresh presses. The first
       // time a slot fills, though, they're real: browsers hide every pad until one is pressed, so the
-      // press that shows it is the player's first move (on an Xbox, often the very first Ⓐ).
+      // press that shows it is the player's first move — a direction counts. Ⓐ, though, may be the
+      // press that handed the pads to the page (Edge on an Xbox: hold ☰, "Use game controls"), still
+      // down when the page first sees the pad: it must not also press the highlighted PLAY ONLINE. A
+      // confirm takes a fresh Ⓐ.
       const first = this.generation === 1;
       this.prev.length = pad.buttons.length;
       for (let i = 0; i < pad.buttons.length; i++) this.prev[i] = !first && !!pad.buttons[i]?.pressed;
+      this.handover = first && !!pad.buttons[0]?.pressed;
       this.stale.length = pad.axes.length;
       for (let i = 0; i < pad.axes.length; i++) this.stale[i] = false;
     }
@@ -293,7 +307,13 @@ class Pad implements Device {
     m.down = bp(13) || this.stickEdge('down', sy);
     m.left = bp(14) || this.stickEdge('left', -sx);
     m.right = bp(15) || this.stickEdge('right', sx);
-    m.confirm = bp(0);
+    const h = this.hold;
+    h.up = b(12) || this.stickOn.up;
+    h.down = b(13) || this.stickOn.down;
+    h.left = b(14) || this.stickOn.left;
+    h.right = b(15) || this.stickOn.right;
+    if (this.handover && !b(0)) this.handover = false;
+    m.confirm = bp(0) && !this.handover;
     m.back = bp(1);
     // either small button: Edge on Xbox may keep ☰ for itself (held, it opens Edge's own menu)
     m.pause = bp(9) || bp(8);
@@ -339,6 +359,7 @@ class Pad implements Device {
   drop() {
     this.connected = false;
     this.key = '';
+    this.handover = false;
     this.prev.length = 0;
     this.stale.length = 0;
     this.stickOn.up = this.stickOn.down = this.stickOn.left = this.stickOn.right = false;
@@ -419,6 +440,27 @@ const ALL: KeyMap = {
 
 /** A menu move, as a key or a controller makes it. */
 type MenuEdge = 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'pause';
+type MenuDir = 'up' | 'down' | 'left' | 'right';
+const MENU_DIRS: readonly MenuDir[] = ['up', 'down', 'left', 'right'];
+
+/**
+ * A direction held down in a menu moves again after REPEAT_DELAY_MS, then every REPEAT_EVERY_MS
+ * (eight a second) — the level select has up to nine stops, settings a dozen rows and volumes of ten
+ * steps. Only a hold that began in a menu repeats: a menu that opens (or a screen that takes over)
+ * under a direction already held waits for it to be pressed again (see stopRepeats), so a sprout
+ * walking right into the pause menu, or down a vine onto the clear card, never scrolls it. A level
+ * itself never sees a repeat: they are menu moves only, and a level's controls are read elsewhere.
+ */
+const REPEAT_DELAY_MS = 350;
+const REPEAT_EVERY_MS = 125;
+/**
+ * …and the first repeat comes no sooner than this many polls after the press, however long they are.
+ * A held direction is only seen once a poll: on a phone drawing three frames a second, a tap that
+ * happens to span one slow frame is seen down twice, 350 ms apart, and is still a tap. Seen at three
+ * polls in a row it has been held for two whole frames, and that is a hold. (Where frames are short
+ * this is 33 ms, and REPEAT_DELAY_MS is what anyone feels.)
+ */
+const REPEAT_POLLS = 2;
 const MENU_EDGES: readonly MenuEdge[] = ['up', 'down', 'left', 'right', 'confirm', 'back', 'pause'];
 /** The menu moves each key makes (on the whole keyboard): what a controller's echo would look like. */
 const KEY_EDGES = new Map<string, MenuEdge[]>();
@@ -538,6 +580,10 @@ export class Input {
    * echo: it names the keyboard as the device in use once no controller press has matched it.
    */
   private keyClaim: (Stamp & { edges: MenuEdge[] }) | null = null;
+  /** when each held menu direction moves again (0: it doesn't — not held, or held since before this menu) */
+  private readonly repeatAt: Record<MenuDir, number> = { up: 0, down: 0, left: 0, right: 0 };
+  /** the poll each held menu direction was pressed in (see REPEAT_POLLS) */
+  private readonly repeatPoll: Record<MenuDir, number> = { up: 0, down: 0, left: 0, right: 0 };
 
   constructor(target: HTMLElement) {
     window.addEventListener('keydown', (e) => {
@@ -560,6 +606,8 @@ export class Input {
     });
     window.addEventListener('blur', () => {
       this.down.clear();
+      // (a reading the browser keeps serving to a page without focus must not walk a menu either)
+      this.stopRepeats();
       // a pad may still be held, and the browser may keep repeating that reading to a page without focus
       for (const p of this.pads) p.blurred();
     });
@@ -615,8 +663,18 @@ export class Input {
     this.pressed.set(code, (this.pressed.get(code) ?? 0) + 1);
   }
 
+  /**
+   * A menu appeared over what was going on (the pause menu, the clear card): a direction already held
+   * when it did — a sprout walking, climbing down a vine — doesn't repeat on it. It has to be let go
+   * and pressed again, as a menu move.
+   */
+  stopRepeats() {
+    for (const d of MENU_DIRS) this.repeatAt[d] = 0;
+  }
+
   /** Drop any buffered presses (e.g. the click that started a level). */
   flush() {
+    this.stopRepeats();
     this.pressed.clear();
     this.touchTap = false;
     const t = this.touch;
@@ -648,6 +706,30 @@ export class Input {
 
   wasPressed(code: string) {
     return this.pressed.has(code);
+  }
+
+  /**
+   * Held menu directions move again (see REPEAT_DELAY_MS and REPEAT_POLLS): the count starts at the
+   * press, from the keyboard, a d-pad or a stick. A frame with a fresh press in it repeats nothing: a
+   * repeat is never mistaken for a press of its own (`menu.repeat`), and an Ⓐ / ENTER made with a
+   * direction still held presses what was highlighted when it was made, not the stop a repeat landing
+   * in the same frame would have moved to.
+   */
+  private repeat(m: MenuInput, now: number, k: (code: string) => boolean) {
+    const fresh = m.up || m.down || m.left || m.right || m.confirm || m.back || m.pause;
+    for (const d of MENU_DIRS) {
+      let held = ALL[d].some(k);
+      for (const p of this.pads) if (p.connected && p.hold[d]) held = true;
+      if (!held) this.repeatAt[d] = 0;
+      else if (m[d]) {
+        this.repeatAt[d] = now + REPEAT_DELAY_MS;
+        this.repeatPoll[d] = this.polls;
+      } else if (!fresh && this.repeatAt[d] && now >= this.repeatAt[d] && this.polls - this.repeatPoll[d] >= REPEAT_POLLS) {
+        m[d] = m.repeat = true;
+        // (on cadence; after a long frame, from now rather than in a burst catching up)
+        this.repeatAt[d] = Math.max(this.repeatAt[d] + REPEAT_EVERY_MS, now + REPEAT_EVERY_MS / 2);
+      }
+    }
   }
 
   /** Did `s` happen just now — within ECHO_MS, or no further back than the last poll? */
@@ -736,6 +818,7 @@ export class Input {
       this.keyClaim = null;
     }
     this.padConnected = connected;
+    this.repeat(m, now, k);
     all.mx += px;
     all.my += py;
 

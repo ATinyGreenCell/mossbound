@@ -324,5 +324,143 @@ const pumpBeside = (p) =>
   await page.close();
 }
 
+// ---- who keeps a seat: while the partner may still be back from a blip (their grace), a stale tab saying
+// hello with the room's code is told the room is full — only the partner's own tab, back from a reload,
+// takes the seat. Once the grace is over (or they said goodbye) it's open to whoever comes; a partner on a
+// build that never says which tab it is keeps the old rule.
+{
+  const page = await device();
+  const r = await page.evaluate(async () => {
+    const { NetLink } = await import('/src/net/link.ts');
+    const { PROTOCOL } = await import('/src/net/protocol.ts');
+    const hello = (id, tab) => ({ t: 'hello', v: PROTOCOL, role: 'guest', id, ...(tab ? { tab } : {}) });
+    const L = NetLink.bare('host');
+    const replies = [];
+    const say = (m) => L.acceptHello(m, (x) => replies.push(x.t));
+    const blip = (status) => { L.lastDirect = L.lastRelay = performance.now() - 3000; L.status = status; };
+    say(hello('first', 'tab-a'));
+    const paired = L.peerId === 'first';
+    blip('reconnecting');
+    const stale = { took: say(hello('stale', 'tab-b')), seat: L.peerId, told: replies.at(-1) };
+    const back = { took: say(hello('reloaded', 'tab-a')), seat: L.peerId };
+    blip('lost');
+    const open = { took: say(hello('newcomer', 'tab-c')), seat: L.peerId };
+    const M = NetLink.bare('host');
+    M.acceptHello(hello('older'), () => undefined);
+    M.lastDirect = M.lastRelay = performance.now() - 3000;
+    M.status = 'reconnecting';
+    const older = { took: M.acceptHello(hello('older2'), () => undefined), seat: M.peerId };
+    for (const l of [L, M]) l.close();
+    return { paired, stale, back, open, older };
+  });
+  t.check(`during the partner’s grace a stale tab with the code is told the room is full (${JSON.stringify(r.stale)})`, r.paired && r.stale.took === false && r.stale.seat === 'first' && r.stale.told === 'full', r);
+  t.check(`…the partner’s own tab, back from a reload, takes the seat (${JSON.stringify(r.back)})`, r.back.took === true && r.back.seat === 'reloaded', r);
+  t.check(`…and once the grace is over the seat is open (${JSON.stringify(r.open)}); a partner on an older build keeps the old rule (${JSON.stringify(r.older)})`, r.open.took === true && r.open.seat === 'newcomer' && r.older.took === true && r.older.seat === 'older2', r);
+  errors.push(...page.errors);
+  await page.close();
+}
+
+// ---- a one-way failure: what we send over the direct path vanishes, while the partner's still reaches us.
+// Judged by what we hear, the path is fine — but the partner's pongs say which of our snapshots they last
+// heard over each path, and once nothing of ours has got through for a moment the stream goes by the relay
+// too, until their reports show the direct path carrying ours again.
+{
+  const page = await device();
+  const r = await page.evaluate(async () => {
+    const { NetLink } = await import('/src/net/link.ts');
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const A = NetLink.bare('host');
+    const B = NetLink.bare('guest');
+    const cut = { ab: false };
+    const later = (f, ms) => setTimeout(f, ms);
+    const copy = (d) => JSON.parse(JSON.stringify(d));
+    Object.assign(A, { peerId: B.myId, status: 'connected', tpeer: 'tb', rtReady: true, lastDirect: performance.now(), lastRelay: performance.now() });
+    Object.assign(B, { peerId: A.myId, status: 'connected', tpeer: 'ta', rtReady: true, lastDirect: performance.now(), lastRelay: performance.now() });
+    A.rt = { readyState: 'open', bufferedAmount: 0, send: (d) => { if (!cut.ab) later(() => B.recvRt(d), 10); } };
+    B.rt = { readyState: 'open', bufferedAmount: 0, send: (d) => later(() => A.recvRt(d), 10) };
+    // …and the reliable channel beside it, as on a real link: once B hears nothing from A over the direct
+    // path, B's own snapshots ride this one — and they keep A's view of the direct path fresh
+    A.sAct = (m) => { if (!cut.ab) later(() => B.recvRt('S' + JSON.stringify(m)), 10); return Promise.resolve(); };
+    B.sAct = (m) => { later(() => A.recvRt('S' + JSON.stringify(m)), 10); return Promise.resolve(); };
+    const relay = (me, other) => ({
+      up: true, hz: 30, snaps: 0,
+      send(k, d) { const c = copy(d); later(() => other.recvRelay(k, c, me.myId), 70); return Promise.resolve(true); },
+      sendSnap(d) { this.snaps++; const c = copy(d); later(() => other.recvRelay('s', c, me.myId), 70); return Promise.resolve(true); },
+      check() {}, wake() {}, close() {},
+    });
+    A.relay = relay(A, B);
+    B.relay = relay(B, A);
+    const heard = { byB: 0, byA: 0 };
+    B.onSnap = () => (heard.byB = performance.now());
+    A.onSnap = () => (heard.byA = performance.now());
+    let qa = 0;
+    let qb = 0;
+    const snap = (q) => [q, performance.now(), 0, 0, 0, 0, 0, -1, 0, 0, 1];
+    const timers = [
+      setInterval(() => A.sendSnap(snap(++qa)), 33),
+      setInterval(() => B.sendSnap(snap(++qb)), 33),
+      setInterval(() => { A.tick(); B.tick(); }, 1000),
+    ];
+    await wait(2500);
+    const before = { via: A.via, relaySnaps: A.relay.snaps };
+    cut.ab = true;
+    const tCut = performance.now();
+    let backAt = 0;
+    while (performance.now() - tCut < 6000) {
+      if (!backAt && heard.byB > tCut + 150) backAt = heard.byB;
+      await wait(20);
+    }
+    const during = { via: A.via, backInMs: backAt ? Math.round(backAt - tCut) : null, stillHearB: performance.now() - heard.byA < 500 };
+    cut.ab = false;
+    await wait(3500);
+    const s0 = A.relay.snaps;
+    await wait(1000);
+    const after = { via: A.via, relaySnapsInASecond: A.relay.snaps - s0 };
+    for (const id of timers) clearInterval(id);
+    for (const l of [A, B]) { l.muted = true; l.close(); }
+    return { before, during, after };
+  });
+  t.check(`direct sends that vanish one way: the partner hears our bird again through the relay in ${r.during.backInMs} ms (under 3500)`, r.before.via === 'direct' && r.before.relaySnaps === 0 && r.during.backInMs !== null && r.during.backInMs < 3500 && r.during.stillHearB && r.during.via === 'relay', r);
+  t.check(`…and once the direct path carries ours again, the stream goes back to it alone (${JSON.stringify(r.after)})`, r.after.via === 'direct' && r.after.relaySnapsInASecond === 0, r);
+  errors.push(...page.errors);
+  await page.close();
+}
+
+// ---- a level carried on online, tied at its lantern: both screens come back tied, and their vine
+// syncs agree with each other — and a guest who came in untied (a build that doesn't read `tied`) is
+// tied by the host's sync within a couple of seconds
+{
+  const host = await device();
+  const guest = await device();
+  await host.evaluate(() => {
+    const l = (window.__l = window.__fake('host'));
+    window.__fb.flow.adopt(l);
+    window.__fb.flow.playLevel(0, { cp: 0, seeds: [1], grown: [], feathers: 0, time: 40, gen: 1, tied: true });
+  });
+  await inOnlineLevel(host);
+  const load = await host.evaluate(() => window.__l.sent.map((m) => JSON.parse(m)).find((m) => m.t === 'load'));
+  await guest.evaluate((load) => { const l = (window.__l = window.__fake('guest')); window.__fb.flow.adopt(l); l.onCtrl(load); }, load);
+  await inOnlineLevel(guest);
+  await sleep(2600);
+  const world = (p) => p.evaluate(() => window.__l.sent.map((m) => JSON.parse(m)).filter((m) => m.t === 'world').at(-1) ?? null);
+  const [wh, wg] = [await world(host), await world(guest)];
+  // each takes the other's sync: nothing moves
+  await guest.evaluate((m) => window.__l.onCtrl(m), wh);
+  await host.evaluate((m) => window.__l.onCtrl(m), wg);
+  const tied = await Promise.all([host, guest].map((p) => p.evaluate(() => window.__fbSession.tether.tied)));
+  t.check(`a run carried on tied comes back tied on both screens (host ${tied[0]}, guest ${tied[1]}; syncs ${JSON.stringify(wh?.tie)} / ${JSON.stringify(wg?.tie)})`, tied.every(Boolean) && load?.resume?.tied === true && JSON.stringify(wh?.tie) === '[1,1,0]' && JSON.stringify(wg?.tie) === '[1,1,0]', { tied, resume: load?.resume, wh: wh?.tie, wg: wg?.tie });
+  // a guest that came in untied (its build doesn't read `tied`): the host's sync ties it
+  const { tied: _, ...untied } = load.resume;
+  await guest.evaluate((load) => { const l = (window.__l = window.__fake('guest')); window.__fb.flow.adopt(l); l.onCtrl(load); }, { ...load, n: load.n + 1, c: load.c + 1, resume: untied });
+  await waitFor(() => ev(guest, (n) => window.__fbSession?.opts.nonce === n && window.__fb.app.current === window.__fbSession, load.n + 1), 10000, 'the untied guest in the level');
+  const was = await guest.evaluate(() => window.__fbSession.tether.tied);
+  await guest.evaluate((m) => window.__l.onCtrl({ ...m, n: window.__fbSession.opts.nonce }), wh);
+  const now = await guest.evaluate(() => window.__fbSession.tether.tied);
+  t.check(`…a guest that came back untied is tied by the host’s vine sync (${was} → ${now})`, was === false && now === true, { was, now });
+  errors.push(...host.errors, ...guest.errors);
+  await host.close();
+  await guest.close();
+}
+
 for (const b of browsers) await b.close();
 t.finish('netsave', errors);

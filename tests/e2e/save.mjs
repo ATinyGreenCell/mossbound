@@ -1,7 +1,7 @@
 // The shared save: merges never lose anything either player earned, every level keeps its own run
 // (a later fresh start or more recorded progress wins — never a device's clock), hostile or corrupt
 // input is rejected, save codes round-trip, and 1.0.0's save (one run for the whole game) migrates.
-import { launch, open, reporter } from './harness.mjs';
+import { launch, open, reporter, sleep, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const v2 = { unlocked: 2, levels: { garden: { seeds: 30, feathers: 5, time: 200, clears: 1 } }, finished: false, run: { level: 1, cp: 1, seeds: [3, 4], feathers: 2, time: 77, with: 'Pip & Bo' }, runAt: 1 };
@@ -120,6 +120,17 @@ const r = await page.evaluate(async () => {
   S.setRun('garden', 4, { ...first, sig: 'notthemap' });
   const stale = S.resumeOf(0);
   out.continueBringsThePlantsBack = carried?.grown?.join() === '0' && stale?.grown?.length === 0;
+  // …and the vine (1.11): a run saved tied carries on tied, one saved untied (or before 1.11) doesn't
+  S.setRun('garden', 5, { ...first, tied: true });
+  const tiedRun = S.resumeOf(0);
+  S.setRun('garden', 6, { ...first, tied: false });
+  const untiedRun = S.resumeOf(0);
+  out.continueKeepsTheVine = tiedRun?.tied === true && !untiedRun?.tied && S.cleanSave({ unlocked: 1, runs: { garden: { gen: 1, at: 1, run: first } } })?.runs.garden.run.tied === false;
+  // a dead heat whose only difference is the vine settles the same either way round: tied
+  const vine = (tied) => ({ v: 3, unlocked: 1, levels: {}, finished: false, clock: 3, runs: { paris: { gen: 4, at: 3, run: { ...run(2, 88), tied } } } });
+  const wasTied = settle(vine(true), vine(false));
+  const wasNot = settle(vine(false), vine(true));
+  out.deadHeatAgreesOnTheVine = wasTied === wasNot && JSON.parse(wasNot).runs.paris.run.tied === true;
   // and the same thing as a property, over saves neither of us would ever write on purpose: whatever
   // two devices hold, they have to come away agreeing, and a copy they've already taken in must change
   // nothing a second time. (This is the guard on the next field someone adds to a run.)
@@ -133,6 +144,11 @@ const r = await page.evaluate(async () => {
     const k = rnd();
     if (k < 0.45) o.grown = Array.from({ length: Math.floor(rnd() * 4) }, () => Math.floor(rnd() * 6));
     else if (k < 0.75) o.grown = pick(NASTY);      // a damaged copy, or a build that never had the field
+    // the vine (1.11): tied, untied, a damaged copy's, or (the rest) a build that never had the field
+    const v = rnd();
+    if (v < 0.35) o.tied = true;
+    else if (v < 0.6) o.tied = false;
+    else if (v < 0.75) o.tied = pick([...NASTY, 1, 'true']);
     return o;
   };
   const anySave = () => {
@@ -151,6 +167,7 @@ const r = await page.evaluate(async () => {
       if (!slot.run) continue;
       if (!Array.isArray(g) || g.length > 64 || new Set(g).size !== g.length) bad.push({ why: 'plants not a clean list', n, g });
       else if (g.some((i) => !Number.isInteger(i) || i < 0 || i >= 64) || g.some((i, k) => k && i < g[k - 1])) bad.push({ why: 'plants out of range or order', n, g });
+      if (typeof slot.run.tied !== 'boolean') bad.push({ why: 'the vine not a yes or no', n, tied: slot.run.tied });
     }
   }
   out.anyTwoDevicesAgree = bad.length === 0 || bad;
@@ -159,4 +176,46 @@ const r = await page.evaluate(async () => {
 await browser.close();
 const t = reporter();
 for (const [k, v] of Object.entries(r)) t.check(k, v === true, v);
-t.finish('save', page.errors);
+const errors = [...page.errors];
+
+// ---- the journal's spare copy (IndexedDB). The game shares localStorage with every other page on its
+// origin, and any of them can clear it: the journal comes back from the copy kept beside it.
+{
+  const b = await launch();
+  const p = await open(b);
+  await p.evaluate(() => {
+    const S = window.__fb.save;
+    S.recordClear('garden', 0, 12, 1, 99, 1);
+    S.setRun('woods', 1, { cp: 2, seeds: [4], grown: [], feathers: 0, time: 61, with: '', sig: '', tied: true }, true);
+  });
+  await sleep(600);
+  await p.evaluate(() => localStorage.clear());
+  await p.reload({ waitUntil: 'networkidle0' });
+  await waitFor(() => p.evaluate(() => !!window.__fb?.app?.current), 20000, 'boot');
+  const back = await p.evaluate(() => { const s = window.__fb.save.save; const kept = JSON.parse(localStorage.getItem('mossbound.save.v3') ?? 'null'); return { unlocked: s.unlocked, clears: s.levels.garden?.clears ?? 0, cp: s.runs.woods?.run?.cp ?? null, tied: s.runs.woods?.run?.tied ?? null, stored: kept?.runs?.woods?.run?.cp ?? null }; });
+  t.check(`a localStorage cleared by another page on the site: the journal comes back from its spare copy (${JSON.stringify(back)})`, back.unlocked >= 1 && back.clears === 1 && back.cp === 2 && back.tied === true && back.stored === 2, back);
+  // …and where IndexedDB is missing or refuses (private modes, old Safari), nothing changes and nothing breaks
+  const denied = [];
+  for (const how of ['throws', 'missing']) {
+    const q = await open(b);
+    await q.evaluateOnNewDocument((how) => {
+      if (how === 'throws') Object.defineProperty(window, 'indexedDB', { configurable: true, get() { throw new DOMException('The operation is insecure.', 'SecurityError'); } });
+      else Object.defineProperty(window, 'indexedDB', { configurable: true, value: undefined });
+    }, how);
+    await q.reload({ waitUntil: 'networkidle0' });
+    await waitFor(() => q.evaluate(() => !!window.__fb?.app?.current), 20000, 'boot');
+    const ok = await q.evaluate(async () => {
+      const S = window.__fb.save;
+      S.bankFeathers('mill', 4);
+      await new Promise((r) => setTimeout(r, 300));
+      return JSON.parse(localStorage.getItem('mossbound.save.v3') ?? '{}').levels?.mill?.feathers === 4 && S.canSave();
+    });
+    denied.push({ how, ok, errors: q.errors.length });
+    errors.push(...q.errors);
+    await q.close();
+  }
+  t.check(`IndexedDB refused or missing: the journal saves as before, without a word (${JSON.stringify(denied)})`, denied.every((d) => d.ok && !d.errors), denied);
+  errors.push(...p.errors);
+  await b.close();
+}
+t.finish('save', errors);

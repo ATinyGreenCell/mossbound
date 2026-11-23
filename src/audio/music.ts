@@ -149,13 +149,17 @@ const TAU = Math.PI * 2;
 const BASES = [52, 64, 76, 88];
 /** how long a pad chord takes to die away after its bar (so one chord melts into the next) */
 const PAD_RELEASE = 1.8;
-/** how long the shared reverb rings: the impulse below is this long */
-const REVERB_SECONDS = 2.2;
+/**
+ * How long the shared reverb rings: the impulse below is this long. It was 2.2 s, and a convolver that
+ * long, in stereo, was about 60% of everything the audio thread did — the difference between crackles
+ * and none on a phone's slow core — and 23–109 ms of main-thread work to set up. A second's costs half.
+ */
+const REVERB_SECONDS = 1;
 /** a song comes up over this long when it starts … */
 const FADE_IN = 1.2;
-/** … and fades with this time constant when it is left (a crossfade: see stop()) */
-const FADE_OUT = 0.15;
-/** after which its outputs are cut off for good (FADE_OUT × 9: well under a thousandth by then) */
+/** … and fades to silence over this long when it is left, while the next comes up (a crossfade: see stop()) */
+const FADE_OUT = 0.3;
+/** after which its outputs are cut off for good (long after the fade has reached zero) */
 const GONE_MS = 1400;
 const midiHz = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
 
@@ -311,7 +315,7 @@ export function* renderInstSteps(inst: Inst, note: number, rate: number): Steps<
 }
 
 /**
- * The reverb's impulse response: 2.2 s of noise dying away as (1 − t)³, the left channel then the
+ * The reverb's impulse response: REVERB_SECONDS of noise dying away as (1 − t)³, the left channel then the
  * right, from the same seed and stream the main thread always drew it from — the same impulse, to the
  * last sample, wherever it is rendered now.
  */
@@ -456,6 +460,8 @@ export class Sequencer {
    */
   private songDry: GainNode | null = null;
   private songBus: GainNode | null = null;
+  /** when this song's outputs began their fade-in, on the audio clock */
+  private songAt = 0;
   beds: Beds | null = null;
   /** the beds were tried for this song (so a failure isn't retried every tick) */
   private bedsTried = false;
@@ -546,6 +552,7 @@ export class Sequencer {
     this.step = 0;
     this.prepare(id);
     const now = this.ctx.currentTime;
+    this.songAt = now;
     try {
       this.songDry = this.ctx.createGain();
       this.songBus = this.ctx.createGain();
@@ -573,11 +580,17 @@ export class Sequencer {
     // this song's voices fade (while the next song, if there is one, comes up) and are then cut off for good
     const outs = [this.songDry, this.songBus];
     this.songDry = this.songBus = null;
+    // (where its fade-in has got to: 1, unless the song is only just starting)
+    const level = Math.min(1, Math.max(0, (now - this.songAt) / FADE_IN));
     for (const g of outs) {
       if (!g) continue;
       try {
         hold(g.gain, now);
-        g.gain.setTargetAtTime(0, now, FADE_OUT);
+        // A ramp runs from the event before it. Once the fade-in is over nothing is scheduled across
+        // `now`, so without this one it would run from the end of the fade-in — seconds ago — and drop
+        // the song at once to almost nothing: a click, not a fade.
+        g.gain.setValueAtTime(level, now);
+        g.gain.linearRampToValueAtTime(0, now + FADE_OUT);
       } catch {
         // a closed context: nothing is playing
       }

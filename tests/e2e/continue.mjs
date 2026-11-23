@@ -69,7 +69,7 @@ const saveModule = 'window.__fb.save ?? (await import("/src/core/save.ts"))';
  * published. Two halves fit comfortably and land on different shards; no check changed.
  */
 const PART = process.argv[2] ?? '';
-const HALF_B = new Set(['damaged save', 'no storage', 'names and times', 'save codes', 'rooms', 'carried over']);
+const HALF_B = new Set(['damaged save', 'no storage', 'names and times', 'save codes', 'rooms', 'carried over', 'tied']);
 async function scenario(name, fn) {
   if ((PART === 'a' && HALF_B.has(name)) || (PART === 'b' && !HALF_B.has(name))) return;
   try {
@@ -339,6 +339,25 @@ await scenario('rooms', async () => {
   const buttons = await text(page, '.panel');
   t.check(`a guest is offered to rejoin their room, not to reopen it (“${buttons.match(/RE\w+ ROOM \w+/)?.[0] ?? ''}”)`, /REJOIN ROOM K7QX/.test(buttons) && !/REOPEN/.test(buttons), buttons);
   errors.push(...page.errors.filter((e) => !/WebSocket|relay|Nobody/.test(e)));
+});
+
+// ---- tied together at the lantern: CONTINUE brings the two of you back tied — and untied, if you'd let go
+await scenario('tied', async () => {
+  const page = await device(OPEN);
+  await play(page, 1);
+  await page.evaluate(() => { const s = window.__fbSession; s.tieVine(s.birds[0]); s.light(0, true); });
+  await sleep(1500);
+  await levels(page);
+  await pick(page, 'lvl:1', 1);
+  const tied = await page.evaluate(() => ({ tied: window.__fbSession.tether.tied, cp: window.__fbSession.checkpoint }));
+  // (and left at once: letting go is saved on its own, not only after a second more of play — on a
+  // slow machine the 1.5 s this used to wait was less than a second of the game's time, and it came back tied)
+  await page.evaluate(() => { const s = window.__fbSession; s.untieVine(s.birds[0]); });
+  await levels(page);
+  await pick(page, 'lvl:1', 1);
+  const untied = await page.evaluate(() => ({ tied: window.__fbSession.tether.tied, cp: window.__fbSession.checkpoint }));
+  t.check(`CONTINUE brings a pair tied at the lantern back tied (${JSON.stringify(tied)}), and an untied one back untied (${JSON.stringify(untied)})`, tied.tied === true && tied.cp === 0 && untied.tied === false && untied.cp === 0, { tied, untied });
+  errors.push(...page.errors);
 });
 
 // ---- (sanity) 1.0.0's run carries over; a level can still be started over on purpose

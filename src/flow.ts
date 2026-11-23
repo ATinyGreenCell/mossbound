@@ -4,11 +4,12 @@ import { clamp } from './core/math';
 import type { DeviceId } from './core/input';
 import { clip, cleanSave, flushSave, freshGen, keepStorage, mergeSave, onSaveChange, persist, resumeOf, sameSave, save } from './core/save';
 import { saveSettings, settings } from './core/settings';
+import { tabRead, tabWrite } from './core/tab';
 import { COURSE, COURSE_INDEX, LEVELS } from './game/levels';
 import { Session } from './game/session';
 import { isKind, type Kind, kindsFor } from './game/traits';
 import { NetLink, type LinkStatus } from './net/link';
-import type { CtrlMsg, Profile, Resume, Role } from './net/protocol';
+import { isValidCode, type CtrlMsg, type Profile, type Resume, type Role } from './net/protocol';
 import { CONTROLS_HTML, EndingScreen, LevelSelect, LocalScreen, OnlineScreen, TitleScreen } from './ui/screens';
 
 /** Screens that want the partner's messages while they're up. */
@@ -45,6 +46,37 @@ const HOST_WORDS = new Set<CtrlMsg['t']>(['load', 'lobby', 'pick', 'end', 'kinds
 /** How often the host repeats a level load until the guest confirms it. */
 const LOAD_RETRY_MS = 1000;
 
+/** sessionStorage: the online room this tab is in, so that a reload of the tab goes back into it */
+const ROOM_KEY = 'mossbound.room';
+/** a note older than this is from some other visit (a tab restored long after), not from a reload */
+const ROOM_FRESH_MS = 10 * 60_000;
+/** the note's time is kept this fresh while the room is open (and set again as the page goes) */
+const ROOM_NOTE_MS = 20_000;
+/** this many reloads in a row went back into the room and the partner never turned up: stop going back */
+const ROOM_TRIES = 3;
+
+/**
+ * Where a reloaded tab goes back to (see Flow.noteRoom): the room's code and our seat in it, the level
+ * the room was in (by name: an update may reorder the list) and how many reloads in a row have gone
+ * back into it without the partner turning up.
+ */
+export type RoomNote = { code: string; role: Role; at: number; tries: number; id?: string };
+
+/**
+ * The room this tab was in when it went away, if it's one to go back into — and it's forgotten here
+ * either way: it's for the one load that follows, and a load that goes elsewhere (an invite link, the
+ * debug ground) has left the room behind.
+ */
+export function takeRoomNote(): RoomNote | null {
+  const n = tabRead(ROOM_KEY) as Partial<RoomNote> | null;
+  tabWrite(ROOM_KEY, null);
+  if (!n || typeof n !== 'object' || typeof n.code !== 'string' || !isValidCode(n.code) || (n.role !== 'host' && n.role !== 'guest')) return null;
+  if (typeof n.at !== 'number' || !(Math.abs(Date.now() - n.at) <= ROOM_FRESH_MS)) return null;
+  const tries = Number.isSafeInteger(n.tries) && (n.tries as number) > 0 ? (n.tries as number) : 0;
+  if (tries >= ROOM_TRIES) return null;
+  return { code: n.code, role: n.role, at: n.at, tries, ...(typeof n.id === 'string' ? { id: n.id.slice(0, 32) } : {}) };
+}
+
 /**
  * Moves between screens and owns what outlives them: the online link (one per room, kept from the
  * lobby through every level), who plays which bird, the local players' controllers, and keeping the
@@ -77,11 +109,27 @@ export class Flow {
   private hostKinds: [Kind, Kind] | null = null;
   /** host: counts 'kinds' messages; guest: the newest one taken */
   private kindsSeq = 0;
+  /** keeps the room's note fresh while there's a room (see noteRoom) */
+  private noteTimer = 0;
+  /** reloads in a row that went back into this room without the partner turning up (see takeRoomNote) */
+  private roomTries = 0;
+  /** what the next room adopted carries over of that count (set when a reload goes back into the room) */
+  private nextTries = 0;
+  /** host, back after a reload: the level the room was in, which the pair goes back into once reunited (see levels) */
+  private backTo: string | null = null;
 
   constructor(readonly app: App) {
     app.onRecover = () => this.title();
     // another tab of the game saved: whatever shows the save catches up
     onSaveChange(() => this.screen?.onSave?.());
+    // the page going away with a room open (a reload, a phone dropping the tab): where it stood now
+    const going = () => {
+      if (this.link) this.noteRoom();
+    };
+    window.addEventListener('pagehide', going);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') going();
+    });
   }
 
   /** where the partner's messages go: the screen taking over, if one is (see App.next) */
@@ -134,9 +182,14 @@ export class Flow {
 
   /** The online screen made (or joined) a room. */
   adopt(link: NetLink) {
+    // (a reload going back into its room carries its count on; anything else is a room of its own)
+    const tries = this.nextTries;
     this.dropLink();
     this.link = link;
     this.mode = 'online';
+    this.roomTries = tries;
+    this.noteRoom();
+    this.noteTimer = window.setInterval(() => this.noteRoom(), ROOM_NOTE_MS);
     this.peerGen = link.peerGen;
     // a new room: how far some earlier host's command counter got means nothing here
     this.lastCmd = 0;
@@ -146,6 +199,11 @@ export class Flow {
     this.profileFor = -1;
     this.saveSent = '';
     link.onStatus = (s, d) => {
+      // (together again: a reload that goes back into this room is a first try once more)
+      if (s === 'connected') this.roomTries = 0;
+      // a link that has failed is a room that's over: a reload doesn't go back into it
+      if (s === 'error') this.forgetRoom();
+      else if (this.link === link) this.noteRoom();
       if (s === 'connected') {
         // a new partner (or the same one after a reload): introduce ourselves and swap saves
         link.send({ t: 'profile', p: myProfile() });
@@ -312,6 +370,15 @@ export class Flow {
         this.title();
         return;
       }
+      // a host back from a reload, and the partner with them again: straight back into the level the
+      // room was in, from its lantern — as a partner's reload would have put them both (partnerRejoined)
+      const back = this.role === 'host' && this.link.connected ? this.backTo : null;
+      this.backTo = null;
+      const i = back ? LEVELS.findIndex((L) => L.id === back) : -1;
+      if (i >= 0 && resumeOf(i)) {
+        this.enterLevel(i);
+        return;
+      }
       if (this.role === 'host') this.command({ t: 'lobby', c: ++this.cmd });
     }
     window.clearInterval(this.loadRetry);
@@ -439,9 +506,54 @@ export class Flow {
     this.title();
   }
 
+  /**
+   * Note the room this tab is in — its code, our seat, the level it's in — so that a reload of the tab
+   * goes back into it by itself (rejoinRoom), as the update's comeBack puts local players back where
+   * they were. Kept fresh while the room is open; forgotten when the room is left or fails (forgetRoom).
+   * False if there's nowhere to keep it.
+   */
+  noteRoom(): boolean {
+    const link = this.link;
+    if (!link || link.status === 'error') return false;
+    const cur = this.app.next;
+    const s = cur instanceof Session && cur.online && !cur.course ? cur : null;
+    const note: RoomNote = { code: link.code, role: link.role, at: Date.now(), tries: this.roomTries, ...(s ? { id: s.L.def.id } : {}) };
+    return tabWrite(ROOM_KEY, note);
+  }
+
+  /** The room is over for this tab (left, or failed): a reload starts at the title. */
+  private forgetRoom() {
+    window.clearInterval(this.noteTimer);
+    this.backTo = null;
+    tabWrite(ROOM_KEY, null);
+  }
+
+  /**
+   * Boot, after a reload with a room open (takeRoomNote): back into it, as the button the player would
+   * otherwise have to find — REJOIN for a guest, REOPEN for the host (who takes the pair back into the
+   * level the room was in once the partner is back). True if it went.
+   */
+  rejoinRoom(n: RoomNote): boolean {
+    this.nextTries = n.tries + 1;
+    settings.lastRoom = n.code;
+    settings.lastRole = n.role;
+    saveSettings();
+    if (n.role === 'guest') {
+      this.online({ joinCode: n.code });
+      return !!this.link;
+    }
+    // REOPEN ROOM, pressed for them: the same room and the same card as by hand
+    this.mode = 'online';
+    this.app.setScreen(new OnlineScreen(this.app, this, { reopen: true }));
+    this.backTo = n.id ?? null;
+    return !!this.link;
+  }
+
   private dropLink() {
     window.clearInterval(this.loadRetry);
     window.clearTimeout(this.saveTimer);
+    this.forgetRoom();
+    this.nextTries = 0;
     if (!this.link) return;
     this.link.onStatus = this.link.onCtrl = this.link.onSnap = null;
     this.link.close();
@@ -496,5 +608,6 @@ export function cleanResume(r: unknown): Resume | undefined {
     feathers: Number.isInteger(o.feathers) ? (o.feathers as number) & 7 : 0,
     time: typeof o.time === 'number' && Number.isFinite(o.time) ? Math.max(0, Math.min(360000, o.time)) : 0,
     ...(Number.isInteger(o.gen) && (o.gen as number) > 0 ? { gen: o.gen } : {}),
+    ...(o.tied === true ? { tied: true } : {}),
   };
 }

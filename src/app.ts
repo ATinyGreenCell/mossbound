@@ -14,8 +14,16 @@ export interface Screen {
    * way out, after this one was built.
    */
   enter?(): void;
-  /** The page lost focus or was hidden — pause if that matters for this screen. */
+  /**
+   * The page lost focus or was hidden, or a phone was turned upright over a level (the rotate prompt
+   * covers it) — pause if that matters for this screen.
+   */
   suspend?(): void;
+  /**
+   * An online link is live under this screen (waiting for a partner, the partner picking a level): keep
+   * the phone's screen on, as a level does (see App.keepAwake). Asked every frame.
+   */
+  awake?(): boolean;
   /** Called once per frame before the physics sub-steps (input already polled). */
   frame?(dt: number): void;
 }
@@ -24,6 +32,8 @@ export interface Screen {
 export interface TouchHooks {
   /** Show the touch controls (only while a level is live and unpaused). */
   setPlayActive(on: boolean): void;
+  /** The "turn your phone sideways" prompt is covering the game. */
+  readonly covered?: boolean;
   /** Offer the DASH button (this player's sprout can dash). */
   setDash?(on: boolean): void;
   poll(): void;
@@ -165,7 +175,10 @@ export class App {
   /** keep measuring even with the meter off: set by the debug ground */
   fpsWanted = false;
   private wakeLock: WakeLockLike | null = null;
+  /** a level is being played (keepAwake) */
   private wantAwake = false;
+  /** the screen says an online link is live (Screen.awake) */
+  private linkAwake = false;
   private wakeBusy = false;
   /** Edge on Xbox: seconds the page has been showing without focus, and the note that says so */
   private unfocused = 0;
@@ -177,6 +190,8 @@ export class App {
     this.ui.className = 'ui';
     root.appendChild(this.ui);
     this.input = new Input(root);
+    // the 10-foot UI (see style.css)
+    if (IS_XBOX) document.documentElement.classList.add('tv');
     this.applyPerf();
     const suspend = () => this.screen?.suspend?.();
     document.addEventListener('visibilitychange', () => {
@@ -250,7 +265,11 @@ export class App {
     else this.input.flush();
   }
 
-  /** Keep the phone's screen on while playing (no-op where unsupported). */
+  /**
+   * Keep the phone's screen on while playing (no-op where unsupported). Online it is also kept on while
+   * the link is live outside a level — the host waiting for a partner, the guest while the partner picks
+   * (see Screen.awake): a phone that locks there drops out of the room.
+   */
   keepAwake(on: boolean) {
     this.wantAwake = on;
     void this.syncWake();
@@ -266,11 +285,12 @@ export class App {
     try {
       for (let i = 0; i < 4; i++) {
         const held = this.wakeLock !== null && !this.wakeLock.released;
-        if (this.wantAwake && !held && !document.hidden) {
+        const want = this.wantAwake || this.linkAwake;
+        if (want && !held && !document.hidden) {
           const wl = (navigator as unknown as { wakeLock?: { request(t: 'screen'): Promise<WakeLockLike> } }).wakeLock;
           if (!wl) break;
           this.wakeLock = await wl.request('screen');
-        } else if (!this.wantAwake && this.wakeLock) {
+        } else if (!want && this.wakeLock) {
           const lock = this.wakeLock;
           this.wakeLock = null;
           await lock.release();
@@ -334,6 +354,14 @@ export class App {
     this.updateFps(rawMs);
 
     try {
+      const linked = !!this.screen.awake?.();
+      if (linked !== this.linkAwake) {
+        this.linkAwake = linked;
+        void this.syncWake();
+      }
+      // A phone turned upright: the rotate prompt covers everything, so a local level pauses under it
+      // rather than play on unseen (online there's no pausing: the session's suspend knows).
+      if (this.touch?.covered) this.screen.suspend?.();
       // (checked before update(), which consumes this frame's key presses)
       if (this.input.wasPressed('Backquote')) this.toggleFps();
       this.input.update();

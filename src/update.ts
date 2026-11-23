@@ -20,7 +20,11 @@
  *     level is the wrong place to find that out — there it waits for the start of the next level, or
  *     the level select.
  * Never:
- *   - in an online room, which a reload would drop the partner out of: it waits until it is left;
+ *   - in an online room, which a reload would drop the partner out of: it waits until the room is left
+ *     (the badge says so), or the partner is gone for good — then the room's note opens the same code
+ *     again on the new page, for whenever they're back (see roomMoment, Flow.noteRoom);
+ *   - for an older build than this one: a site serving one (a release taken back, an edge running
+ *     behind) isn't an update (see newerThan);
  *   - on the practice ground or the debug ground, in a lobby still taking seats, or in Settings;
  *   - when this browser keeps nothing for the site (storage blocked or full): the journal then lives
  *     only in the page, and a reload would take everything played with it. The badge says so.
@@ -34,6 +38,7 @@ import type { App } from './app';
 import { canSave, flushSave, resumeOf } from './core/save';
 import type { DeviceId } from './core/input';
 import { IS_XBOX } from './core/platform';
+import { tabRead, tabWrite } from './core/tab';
 import { cleanResume, type Flow } from './flow';
 import { COURSE_INDEX, LEVELS } from './game/levels';
 import { Session } from './game/session';
@@ -63,47 +68,29 @@ type Back =
   | { to: 'title' }
   | { to: 'levels'; seats: Seats }
   /** `resume`: where it stood (the course's only record; older builds read it too); `fresh`: a new start of the level */
-  | { to: 'level'; level: number; id: string; resume: Resume; seats: Seats; fresh?: boolean };
+  | { to: 'level'; level: number; id: string; resume: Resume; seats: Seats; fresh?: boolean }
+  /** an online room the partner had left for good: the room's own note (see Flow.noteRoom) opens it again */
+  | { to: 'room' };
+
+// (the note and the reload guard are this tab's alone, and outlive the reload they're for — in the
+// tab's own name when the browser refuses the site sessionStorage: see core/tab.ts)
+const read = tabRead;
+const write = tabWrite;
 
 /**
- * The tab's own name: it outlives a reload and needs no storage, so the note and the reload guard live
- * there when this browser refuses the site sessionStorage (they'd otherwise be forgotten each time —
- * and a guard that's forgotten reloads for ever).
+ * Is `v` a later build than `than`? Only ever forward: a site serving an older build (a release taken
+ * back, a CDN edge running behind) is never reason to reload into it. Versions are x.y.z, compared
+ * part by part as numbers (1.10.0 is after 1.9.1); a build that isn't one (an unstamped dev build) is
+ * behind any that is.
  */
-const NAME_PREFIX = 'mossbound:';
-function nameStore(): Record<string, unknown> {
-  try {
-    return window.name.startsWith(NAME_PREFIX) ? (JSON.parse(window.name.slice(NAME_PREFIX.length)) as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
+export function newerThan(v: string, than: string) {
+  const a = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+  if (!a) return false;
+  const b = /^(\d+)\.(\d+)\.(\d+)$/.exec(than);
+  if (!b) return true;
+  for (let i = 1; i <= 3; i++) if (Number(a[i]) !== Number(b[i])) return Number(a[i]) > Number(b[i]);
+  return false;
 }
-const read = (k: string): unknown => {
-  try {
-    const s = sessionStorage.getItem(k);
-    return s ? JSON.parse(s) : null;
-  } catch {
-    return nameStore()[k] ?? null;
-  }
-};
-/** Remember `v` (null forgets it) for this tab, across the reload. False if there's nowhere to keep it. */
-const write = (k: string, v: unknown): boolean => {
-  try {
-    if (v === null) sessionStorage.removeItem(k);
-    else sessionStorage.setItem(k, JSON.stringify(v));
-    return true;
-  } catch {
-    try {
-      const all = nameStore();
-      if (v === null) delete all[k];
-      else all[k] = v;
-      window.name = Object.keys(all).length ? NAME_PREFIX + JSON.stringify(all) : '';
-      return true;
-    } catch {
-      return false;
-    }
-  }
-};
 
 const isSeat = (s: unknown): s is DeviceId => typeof s === 'string' && /^(keys|keysL|keysR|pad\d)$/.test(s);
 const seatsOf = (v: unknown): Seats | null => (Array.isArray(v) && v.length === 2 && isSeat(v[0]) && isSeat(v[1]) ? [v[0], v[1]] : null);
@@ -127,8 +114,7 @@ type Watch = { on: unknown; s: Session | null; cp: number };
  * `lit` remembers the level being watched and the lantern it was at when the update was found.
  */
 function moment(app: App, flow: Flow, lit: Watch): Back | null {
-  // an online room, even one the partner has left for now: they would lose it
-  if (flow.link) return null;
+  if (flow.link) return roomMoment(app, flow);
   // nothing is kept for this site: a reload would take everything played this session with it
   if (!canSave()) return null;
   const cur = app.next;
@@ -150,6 +136,22 @@ function moment(app: App, flow: Flow, lit: Watch): Back | null {
   }
   if (cur.checkpoint === lit.cp || cur.checkpoint < 0) return null;
   return here();
+}
+
+/**
+ * In an online room: never while the partner is in it, or may yet be back from a blip — the reload
+ * would drop them out of it. Once they have gone for good (they left, or their grace ran out) the room
+ * is only waiting, and the reload costs nothing: the room's note (Flow.noteRoom) opens the same code
+ * again on the new page, as host or guest, for whenever they come back. Not over their clear card,
+ * nor mid-level on an Xbox (see moment) — the level select comes soon enough — and never unless the
+ * note was kept, or the reload would close the room for good.
+ */
+function roomMoment(app: App, flow: Flow): Back | null {
+  if (flow.link?.status !== 'lost' || !canSave()) return null;
+  const cur = app.next;
+  const quiet = cur instanceof LevelSelect || cur instanceof EndingScreen || (cur instanceof Session && cur.online && cur.state !== 'clear' && !IS_XBOX);
+  if (!quiet || !flow.noteRoom()) return null;
+  return { to: 'room' };
 }
 
 /** Reloading for `v` again would be a loop: the site says it's there, but the reload keeps landing on this one. */
@@ -182,7 +184,7 @@ const seen = { site: null as string | null, failed: false, want: null as string 
  * is, and whether it's the newest the site has — so whoever is holding the controller can tell at a
  * glance that the update they were told about has actually arrived.
  */
-function badge(app: App) {
+function badge(app: App, flow: Flow) {
   const show = !(app.next instanceof Session) || !!app.ui.querySelector('.overlay');
   let el = app.ui.querySelector<HTMLDivElement>('.version-badge');
   if (!show) {
@@ -193,8 +195,11 @@ function badge(app: App) {
   if (import.meta.env.DEV && !seen.site && !seen.want) text += ' · dev';
   // (nothing is kept for this site, so it won't reload by itself: say what reloading would cost)
   else if (seen.want && !canSave()) text += ` · v${seen.want} is out — reloading would lose this session`;
+  // (an online room waits for the room to end — or for the partner to be gone for good: see roomMoment)
+  else if (seen.want && flow.link && flow.link.status !== 'lost') text += ` · v${seen.want} is out — it updates when the room ends`;
   else if (seen.want) text += ` · v${seen.want} is out — loading it`;
-  else if (seen.site === VERSION) text += ' · latest ✓';
+  // (a site behind this build — a release taken back, an edge running late — has nothing newer to offer)
+  else if (seen.site && !newerThan(seen.site, VERSION)) text += ' · latest ✓';
   else if (seen.site) text += ` · v${seen.site} is out — reload to get it`;
   else if (seen.failed) text += " · offline — can't check";
   else text += ' · checking…';
@@ -203,7 +208,7 @@ function badge(app: App) {
     el.className = 'version-badge';
     app.ui.appendChild(el);
   }
-  el.classList.toggle('stale', !!seen.site && seen.site !== VERSION);
+  el.classList.toggle('stale', !!seen.site && newerThan(seen.site, VERSION));
   if (el.textContent !== text) el.textContent = text;
 }
 
@@ -274,11 +279,12 @@ export function watchUpdates(app: App, flow: Flow) {
       pill(app, null);
       want = seen.want = null;
       app.resume();
-      badge(app);
+      badge(app, flow);
     }, giveUpMs);
   };
   const found = (v: string) => {
-    if (v === VERSION || v === want || tooSoon(v)) return;
+    // (forward only: see newerThan)
+    if (!newerThan(v, VERSION) || v === want || tooSoon(v)) return;
     want = seen.want = v;
     lit.on = app.next;
     lit.s = null;
@@ -294,11 +300,11 @@ export function watchUpdates(app: App, flow: Flow) {
       seen.site = v;
       found(v);
     }
-    badge(app);
+    badge(app, flow);
   };
   // the badge follows the screen (menus and cards show it, a level being played doesn't)
-  window.setInterval(() => badge(app), 500);
-  badge(app);
+  window.setInterval(() => badge(app, flow), 500);
+  badge(app, flow);
   if (import.meta.env.PROD) {
     // a first look soon after boot, so the badge can say "latest" while the title is still up
     window.setTimeout(() => void poll(), 3_000);
@@ -324,7 +330,7 @@ export function watchUpdates(app: App, flow: Flow) {
             seen.site = v;
             found(v);
           }
-          badge(app);
+          badge(app, flow);
         },
       },
     });
@@ -395,6 +401,8 @@ export function comeBack(app: App, flow: Flow): boolean {
       went = true;
     }
   }
+  // (an online room — `to: 'room'` — comes back through the room's own note, Flow.rejoinRoom, which
+  // boot asks next: this only says the update has landed)
   const from = typeof note.from === 'string' ? note.from : '';
   const el = pill(app, `<b>✓ updated to ${VERSION}</b>${from ? `<span>from ${from.replace(/[^0-9.]/g, '')} · your progress is all here</span>` : ''}${IS_XBOX ? '<span>controllers not answering? hold ☰ → Use game controls</span>' : ''}`, 'update-toast');
   window.setTimeout(() => el?.remove(), IS_XBOX ? 9000 : 5000);

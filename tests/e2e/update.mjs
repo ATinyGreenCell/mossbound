@@ -88,11 +88,13 @@ for (const [level, id] of [[0, 'garden'], [-1, 'course']]) {
   await sleep(1500);
   const waiting = await page.evaluate(() => ({ marker: window.__marker ?? 0, pill: document.querySelector('.update-pill')?.textContent ?? null }));
   t.check(`${id}: mid-level it waits, and says it will load at the next lantern`, waiting.marker === 1 && /next lantern/.test(waiting.pill ?? ''), waiting);
-  const before = await page.evaluate(() => { const s = window.__fbSession; s.takeSeed(0, true); s.takeSeed(1, true); s.light(0, true); return { cp: s.checkpoint, seeds: [...s.seedTaken].filter(Boolean).length }; });
+  // (tied together as they reach it)
+  const before = await page.evaluate(() => { const s = window.__fbSession; s.takeSeed(0, true); s.takeSeed(1, true); s.tieVine(s.birds[0]); s.light(0, true); return { cp: s.checkpoint, seeds: [...s.seedTaken].filter(Boolean).length }; });
   await reloaded(page);
   await inLevel(page, id);
-  const after = await page.evaluate(() => { const s = window.__fbSession; return { cp: s.checkpoint, seeds: [...s.seedTaken].filter(Boolean).length, seats: s.opts.seats.join(), online: s.online }; });
+  const after = await page.evaluate(() => { const s = window.__fbSession; return { cp: s.checkpoint, seeds: [...s.seedTaken].filter(Boolean).length, seats: s.opts.seats.join(), online: s.online, tied: s.tether.tied }; });
   t.check(`${id}: the lantern brings it in, and the level comes back at that lantern with what was found (${before.cp} → ${after.cp})`, after.cp === before.cp && after.cp >= 0 && after.seeds === before.seeds && after.seats === 'keysL,keysR' && !after.online, { before, after });
+  t.check(`${id}: …still tied together, as they were at the lantern`, after.tied === true, after);
   if (id === 'garden') {
     const run = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v3') ?? '{}').runs?.garden?.run ?? null);
     t.check('…and the journal holds that lantern and those seeds', run?.cp === before.cp && run?.seeds?.length === before.seeds, run);
@@ -170,6 +172,41 @@ const seatState = (page) => page.evaluate(() => ({ seats: window.__fbSession.sea
   await sleep(1500);
   const still = await ev(page, () => window.__marker === 1);
   t.check('in an online room it never reloads — not at a lantern, not at the level select', still === true);
+  const badge = await ev(page, () => document.querySelector('.version-badge')?.textContent ?? '');
+  t.check(`…and the badge says it waits for the room to end, not that it's loading (“${badge}”)`, /9\.9\.8/.test(badge ?? '') && /when the room ends/.test(badge ?? '') && !/loading it/.test(badge ?? ''), badge);
+  errors.push(...page.errors);
+  await page.close();
+}
+
+// ---- …until the partner is gone for good: then it loads, and the new page opens the same room again
+// (as host, waiting for them), the way a reload of the page by hand would
+{
+  // (the reopened room goes through a relay that isn't there: no public network in this test)
+  const page = await open(browser, { query: { extra: 'relay&brokers=ws%3A%2F%2F127.0.0.1%3A9' } });
+  await page.evaluate(() => {
+    const l = (window.__l = { role: 'host', code: 'K7QX', status: 'connected', connected: true, peerGen: 0, rtt: 30, via: 'direct', sent: [], send(m) { this.sent.push(m); }, sendSnap: () => true, close() {}, sharedNow: () => performance.now(), onStatus: null, onCtrl: null, onSnap: null });
+    window.__fb.flow.adopt(l);
+    window.__fb.flow.levels();
+  });
+  await waitFor(() => ev(page, () => window.__fb.app.current?.constructor.name === 'LevelSelect'), 8000, 'the room’s level select');
+  await page.evaluate(() => { window.__marker = 1; window.__fbUpdate.found('9.9.65'); });
+  await sleep(1200);
+  const waited = await ev(page, () => window.__marker === 1);
+  await page.evaluate(() => { const l = window.__l; l.status = 'lost'; l.connected = false; l.onStatus?.('lost', 'Your partner left.'); });
+  const went = await reloaded(page).then(() => true, () => false);
+  const at = went ? await waitFor(() => ev(page, () => { const l = window.__fb.flow.link; return l ? { screen: window.__fb.app.current?.constructor.name, state: window.__fb.app.current?.state, code: l.code, role: l.role, toast: document.querySelector('.update-toast')?.textContent ?? '' } : null; }), 8000, 'the room again').catch(() => null) : null;
+  t.check(`with the partner gone for good it loads (waited while they were there: ${waited}), and the new page reopens room ${at?.code ?? '—'} as host`, waited === true && at?.code === 'K7QX' && at.role === 'host' && at.screen === 'OnlineScreen' && at.state === 'host' && /updated to/.test(at.toast), at);
+  errors.push(...page.errors);
+  await page.close();
+}
+
+// ---- never backwards: a site serving an older build (a release taken back, an edge running behind)
+{
+  const page = await open(browser);
+  await page.evaluate(() => { window.__marker = 1; window.__fbUpdate.checked('1.0.0'); window.__fbUpdate.found('0.9.9'); });
+  await sleep(2000);
+  const r = await ev(page, () => ({ marker: window.__marker ?? 0, badge: document.querySelector('.version-badge')?.textContent ?? '', stale: !!document.querySelector('.version-badge.stale') }));
+  t.check(`an older build on the site is never loaded (“${r?.badge}”)`, r?.marker === 1 && /latest/.test(r.badge) && !r.stale, r);
   errors.push(...page.errors);
   await page.close();
 }

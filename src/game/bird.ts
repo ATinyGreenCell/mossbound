@@ -25,6 +25,7 @@ import {
   FLUTTER_TIME,
   GHOST_TIME,
   HANG_HOP_V,
+  HEY_COOLDOWN,
   INVULN_TIME,
   JUMP_BUFFER,
   JUMP_CUT,
@@ -126,6 +127,8 @@ export class Bird implements RopeBird {
   private ghostFromY = 0;
   invuln = 0;
   tugCd = 0;
+  /** a TUG with no vine waved to the partner: the next such wave waits this long (see Session.tug) */
+  heyCd = 0;
   /** the vine shot is spent for this long (see Session.shoot) */
   shotCd = 0;
   /** it let go of the vine this step (the session lets go of any ring it was holding with it) */
@@ -264,6 +267,7 @@ export class Bird implements RopeBird {
     this.jumpBuf -= dt;
     this.invuln -= dt;
     this.tugCd -= dt;
+    this.heyCd -= dt;
     this.shotCd -= dt;
     this.bounceCd -= dt;
     this.dropT -= dt;
@@ -870,7 +874,7 @@ export class Bird implements RopeBird {
       // but always on the first step it could come back, and on any step it would give up)
       this.lookT -= dt;
       if (this.lookT > 0 && !giveUp) return;
-      spot = spotBeside(world, partner!, this.w, this.h);
+      spot = spotBeside(world, partner!, this.w, this.h, this.ghostFromX);
       if (!spot && !giveUp) {
         this.lookT = GHOST_LOOK;
         return;
@@ -884,6 +888,13 @@ export class Bird implements RopeBird {
     this.vy = -200;
     this.squash = -0.3;
     this.fx.push({ k: 'respawn' });
+  }
+
+  /** A TUG with no vine to tug: is a wave to the partner due (HEY_COOLDOWN apart, however fast it's pressed)? */
+  beckon() {
+    if (this.heyCd > 0) return false;
+    this.heyCd = HEY_COOLDOWN;
+    return true;
   }
 
   /** Per-frame animation (both local and mirrored birds). */
@@ -948,6 +959,14 @@ const BESIDE_X = 3.5 * T;
 const BESIDE_UP = 3 * T;
 /** what a spot out of the partner's sight costs: more than the whole search area, so it's a last choice */
 const OUT_OF_SIGHT = 1e6;
+/** the air a seed leaves between itself and its partner when it comes back beside them (px past touching) */
+const BESIDE_GAP = 4;
+/**
+ * What a spot on the far side of the partner costs, over one on the side the seed came from (px, in the
+ * search's own measure of nearness): the near side wins unless the far side is clearly nearer — a seed
+ * that fell in a pit comes back on the ground beside its partner, not across the pit it fell in.
+ */
+const FAR_SIDE = T / 2;
 
 /**
  * Somewhere beside a partner for a ghost to come back to: a free spot, nearest first — sideways counts
@@ -955,24 +974,39 @@ const OUT_OF_SIGHT = 1e6;
  * them beats anywhere behind a tile (the string is tied afresh, and a bend would have to be repaired).
  * Somewhere to stand if there is one; failing that, anywhere with ground below to fall to, but never
  * over a pit, which would only mean dying again. Null when there's nowhere, and then the ghost waits.
+ *
+ * Beside means beside. The nearest spot of all is the partner's own (dx = 0, feet level with theirs),
+ * and that is where seeds used to come back: on top of them, two bodies in one place. So it looks
+ * first for a spot clear of the partner's body and in their sight: on the side it is coming from
+ * (`fromX`), or on the other where that is clearly nearer (FAR_SIDE). Only when there is no such room
+ * either side does it take the nearest spot as it always did. Every spot is one the body fits, so none
+ * is ever inside rock.
  */
-function spotBeside(world: World, partner: Partner, w: number, h: number): Pt | null {
+function spotBeside(world: World, partner: Partner, w: number, h: number, fromX: number): Pt | null {
   // feet level with the partner's, so the two of them end up standing on the same ground
   const y0 = partner.y + partner.h / 2 - h / 2;
-  const search = (standing: boolean) => {
+  // far enough out that the two bodies don't overlap at all, with a little air between them
+  const apart = (w + partner.w) / 2 + BESIDE_GAP;
+  // (straight down onto them, it comes back on their right)
+  const side = fromX < partner.x ? -1 : 1;
+  const search = (standing: boolean, beside: boolean) => {
     let best: Pt | null = null;
     let bestD = Infinity;
     // (every row of the search sits 2 px clear of the ground a tile-aligned ledge would offer, so a
     // spot on any ledge within reach is both free and standing on it — as freeSpotNear's offsets are)
     for (let dy = -2 - BESIDE_UP; dy <= T - 2; dy += 8) {
       for (let dx = -BESIDE_X; dx <= BESIDE_X; dx += 8) {
-        const near = dx * dx + 2 * dy * dy;
+        if (beside && Math.abs(dx) < apart) continue;
+        const near = Math.sqrt(dx * dx + 2 * dy * dy) + (beside && Math.sign(dx) !== side ? FAR_SIDE : 0);
         if (near >= bestD) continue;
         const x = partner.x + dx;
         const y = y0 + dy;
         if (!world.boxFree(x, y, w + 2, h + 2)) continue;
         if (!(standing ? footing(world, x, y, w, h) : overGround(world, x, y, w, h))) continue;
-        const d = near + (sees(world, partner.x, partner.y, x, y) ? 0 : OUT_OF_SIGHT);
+        const seen = sees(world, partner.x, partner.y, x, y);
+        // (room beside them is room in their sight: behind a tile, the vine tied afresh would need repairing)
+        if (beside && !seen) continue;
+        const d = near + (seen ? 0 : OUT_OF_SIGHT);
         if (d >= bestD) continue;
         bestD = d;
         best = { x, y };
@@ -980,7 +1014,12 @@ function spotBeside(world: World, partner: Partner, w: number, h: number): Pt | 
     }
     return best;
   };
-  return search(true) ?? search(false);
+  // (a spot beside them is a spot, so the plain search goes first: when it finds nothing — a seed waiting
+  // by a partner in mid-air, ten looks a second — the one for a spot beside them isn't made at all)
+  const onFeet = search(true, false);
+  if (onFeet) return search(true, true) ?? onFeet;
+  const toFall = search(false, false);
+  return toFall && (search(false, true) ?? toFall);
 }
 
 /** Is there anything at all to land on below this spot, or is it a fall out of the world? */

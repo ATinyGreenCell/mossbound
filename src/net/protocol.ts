@@ -19,8 +19,12 @@ export const APP_ID = 'mossbound/coop/v1';
 export type Role = 'host' | 'guest';
 
 /** Where a continued level picks up (mirrors save.ts Run). */
-/** Where a continued run picks up — and which fresh start of the level it belongs to (see save.ts). */
-export type Resume = { cp: number; seeds: number[]; feathers: number; time: number; gen?: number; grown?: number[] };
+/**
+ * Where a continued run picks up — and which fresh start of the level it belongs to (see save.ts).
+ * `tied`: the sprouts come back with the vine tied between them (1.11; older builds leave it out, and
+ * a guest on one comes back untied — the host's vine sync ties theirs within a couple of seconds).
+ */
+export type Resume = { cp: number; seeds: number[]; feathers: number; time: number; gen?: number; grown?: number[]; tied?: boolean };
 
 export type Profile = {
   name: string;
@@ -32,7 +36,8 @@ export type Profile = {
 export type CtrlMsg =
   /** `ack` marks a reply, which is never answered (so two hellos can't ping-pong) */
   /** `with`: the partner the sender is already paired with (a hello naming someone else isn't an offer) */
-  | { t: 'hello'; v: number; role: Role; id: string; with?: string; ack?: 1 }
+  /** `tab`: the sender's tab (core/tab.ts), the same after a reload of it — how a partner back from one proves it (1.11; older builds send none) */
+  | { t: 'hello'; v: number; role: Role; id: string; tab?: string; with?: string; ack?: 1 }
   | { t: 'full' }
   | { t: 'bye' }
   | { t: 'profile'; p: Profile }
@@ -65,7 +70,11 @@ export type CtrlMsg =
   | { t: 'clear'; n: number; time: number }
   /** clock sync: ping with sender time, pong echoes it plus the replier's time */
   | { t: 'ping'; a: number }
-  | { t: 'pong'; a: number; b: number };
+  /**
+   * `r`: the receiver's report — the latest of the pinger's bird snapshots (its count) heard over the
+   * direct path and over the relay, 0 for none (see NetLink.judgeDirect; 1.11, older builds send none)
+   */
+  | { t: 'pong'; a: number; b: number; r?: [number, number] };
 
 export type GameEvent =
   /** yank the receiver toward the sender */

@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { BRAND } from './src/brand';
 
 const version: string = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 
@@ -13,6 +15,53 @@ function versionFile() {
     name: 'mossbound-version',
     generateBundle(this: { emitFile: (f: { type: 'asset'; fileName: string; source: string }) => void }) {
       this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version }) + '\n' });
+    },
+  };
+}
+
+/**
+ * The game's name (src/brand.ts) in the page's title and in the install manifest, so a rename is
+ * that one file. The manifest is made here, not kept in public/: the dev server serves this one and
+ * the build emits it. Only the words come from the brand. The `id` is the installed app's identity
+ * and never changes, or every phone that installed the game would see a different app.
+ */
+function brand() {
+  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const manifest = () =>
+    JSON.stringify(
+      {
+        name: BRAND.name,
+        id: 'mossbound-game',
+        short_name: BRAND.name,
+        description: BRAND.blurb,
+        start_url: './',
+        scope: './',
+        display: 'fullscreen',
+        orientation: 'landscape',
+        background_color: '#1d2b4a',
+        theme_color: '#1d2b4a',
+        icons: [
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml' },
+        ],
+      },
+      null,
+      2,
+    ) + '\n';
+  return {
+    name: 'mossbound-brand',
+    transformIndexHtml: (html: string) => html.replaceAll('__GAME_NAME__', esc(BRAND.name)),
+    configureServer(server: { middlewares: { use: (fn: (req: { url?: string }, res: { setHeader: (k: string, v: string) => void; end: (s: string) => void }, next: () => void) => void) => void } }) {
+      server.middlewares.use((req, res, next) => {
+        if (!(req.url ?? '').split('?')[0].endsWith('/manifest.webmanifest')) return next();
+        res.setHeader('Content-Type', 'application/manifest+json');
+        res.end(manifest());
+      });
+    },
+    generateBundle(this: { emitFile: (f: { type: 'asset'; fileName: string; source: string }) => void }) {
+      this.emitFile({ type: 'asset', fileName: 'manifest.webmanifest', source: manifest() });
     },
   };
 }
@@ -184,7 +233,12 @@ export default defineConfig({
   base: './',
   // the running build's own version, which update.ts compares with the site's version.json
   define: { __APP_VERSION__: JSON.stringify(version) },
-  plugins: [versionFile(), serviceWorker()],
+  plugins: [brand(), versionFile(), serviceWorker()],
+  // the agents' worktrees live under this checkout's .claude/: an edit there (an index.html above all)
+  // must not reload the pages of a test run served from here. Only this checkout's own .claude/, by its
+  // full path: '**/.claude/**' also matched every file of a server run from inside a worktree, which then
+  // never saw its own edits and served stale code.
+  server: { watch: { ignored: [fileURLToPath(new URL('./.claude/', import.meta.url)) + '**'] } },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 1500,

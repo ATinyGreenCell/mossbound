@@ -153,6 +153,8 @@ export class Session implements Screen {
   private runUrgent = false;
   /** `time` when the run was last saved */
   private savedTime = -1;
+  /** whether the vine was tied in the run last saved (a tie or untie is worth saving on its own: see flushRun) */
+  private savedTied = false;
   private readonly runGen: number;
   private readonly sig: string;
   private readonly offFlush: () => void;
@@ -254,6 +256,15 @@ export class Session implements Screen {
       // (somewhere each body fits: a lantern's spot can sit by a rock a bigger sprout would be inside)
       for (const b of this.birds) b.placeFree(this.world, this.home(b.idx));
       this.tether.reset(this.birds[0], this.birds[1]);
+      // tied when the run was saved: tied again. Online, both screens start from the host's resume, and
+      // both count the tie as the vine's first change, made by the host — so the vine sync (see vineFrom)
+      // agrees with itself here, and ties the vine of a guest on a build that doesn't read `tied`
+      if (r.tied === true) {
+        this.tether.tie(this.birds[0], this.birds[1]);
+        this.tieSeq = 1;
+        this.tieBy = 0;
+        this.savedTied = true;
+      }
     }
     const id = this.L.def.id;
     this.runGen = opts.runGen ?? (r ? (save.runs[id]?.gen ?? 1) : freshGen(id));
@@ -817,13 +828,13 @@ export class Session implements Screen {
     this.ropeOffUntil = this.time + 1.5;
   }
 
-  /** What a continued run needs: lantern, seeds, grown plants, feathers, time. */
+  /** What a continued run needs: lantern, seeds, grown plants, feathers, time — and whether the vine is tied. */
   resumeState(): Resume {
     const seeds: number[] = [];
     this.seedTaken.forEach((v, i) => v && seeds.push(i));
     const grown: number[] = [];
     this.world.grown.forEach((v, i) => v && grown.push(i));
-    return { cp: this.checkpoint, seeds, feathers: this.feathers, time: this.time, gen: this.runGen, grown };
+    return { cp: this.checkpoint, seeds, feathers: this.feathers, time: this.time, gen: this.runGen, grown, ...(this.tether.tied ? { tied: true } : {}) };
   }
 
   private saveRun() {
@@ -837,16 +848,21 @@ export class Session implements Screen {
     if (r.cp < 0 && !r.seeds.length && !r.grown?.length && !r.feathers && r.time < 20) return;
     // both names (the run is shared: "with" reads the same on either device)
     const [a, b] = this.profiles;
-    const run = { cp: r.cp, seeds: r.seeds, grown: r.grown ?? [], feathers: r.feathers, time: r.time, with: this.online ? [a.name, b.name].filter(Boolean).join(' & ') : '', sig: this.sig };
+    const run = { cp: r.cp, seeds: r.seeds, grown: r.grown ?? [], feathers: r.feathers, time: r.time, with: this.online ? [a.name, b.name].filter(Boolean).join(' & ') : '', sig: this.sig, tied: r.tied === true };
     setRun(this.L.def.id, this.runGen, run, now);
     this.savedTime = r.time;
+    this.savedTied = run.tied;
     this.flow.shareSave();
   }
 
-  /** Save the run now if anything (even just time) has happened since it was last saved. */
+  /**
+   * Save the run now if anything (even just time) has happened since it was last saved. Tying or untying
+   * the vine counts on its own: a pair who let go and left a moment later came back tied, because under
+   * a second of play since the last save looked like nothing.
+   */
   private flushRun() {
     if (this.state !== 'play') return;
-    if (this.runDirty || this.time - this.savedTime > 1) {
+    if (this.runDirty || this.time - this.savedTime > 1 || this.tether.tied !== this.savedTied) {
       this.runUrgent = true;
       this.saveRun();
     }
@@ -924,8 +940,18 @@ export class Session implements Screen {
    * them are, which is what the rope solver already expects of every screen.
    */
   private tieVine(b: Bird, mine = true) {
-    this.tether.tie(this.birds[0], this.birds[1]);
     const o = this.birds[1 - b.idx];
+    // Knot to knot through open air, or not at all. Tied through a floor or a wall, the vine ran
+    // straight through the rock (and was measured through it) until something dragged it round — so a
+    // press there is refused as a shot at nothing is: a puff toward the partner, and a moment lost. A tie
+    // the partner's screen made (`mine` false) was looked at there, and is taken as it comes.
+    if (mine && !this.tether.los(b.x, b.y + b.ropeOff, o.x, o.y + o.ropeOff)) {
+      const d = Math.hypot(o.x - b.x, o.y - b.y) || 1;
+      this.fx.burst(PK.Dust, b.x + ((o.x - b.x) / d) * 14, b.y + b.ropeOff + ((o.y - b.y) / d) * 14, 4, 70, 0.3, 4, '#dfeec4', 0, 3);
+      audio.play('bonk', 0.25, 0, 1.4);
+      return;
+    }
+    this.tether.tie(this.birds[0], this.birds[1]);
     audio.play('grab', 0.55, 0, 0.95);
     this.fx.burst(PK.Leaf, (b.x + o.x) / 2, (b.y + o.y) / 2 - 4, 7, 90, 0.5, 5, '#9fd36a', -30, 2.5);
     if (mine && b.local) this.send({ k: 'tie', s: this.noteVine() });
@@ -1091,8 +1117,13 @@ export class Session implements Screen {
 
   private tug(b: Bird) {
     if (b.ghost || b.tugCd > 0) return;
-    // no vine, nothing to tug on — the sprouts are two separate creatures until one ties it
-    if (!this.tether.tied) return;
+    // No vine, nothing to tug on — the sprouts are two separate creatures until one ties it. TUG is a
+    // "come here" then: a wave and a chirp to the partner (the hey their own button sends, so it reaches
+    // their screen as one), and nothing is pulled. Mashed, it waves once a second at most.
+    if (!this.tether.tied) {
+      if (b.beckon()) this.emote(b, 'hey', true);
+      return;
+    }
     // a tug needs something to pull against: feet on the ground, a grip on a wall, or a hand on the
     // string. Two sprouts tugging each other in mid-air would make height out of nothing, and climb
     // clean out of the level.
@@ -1340,7 +1371,7 @@ export class Session implements Screen {
           ? `${last ? '<div class="btn" data-act="ending">THE END ♥</div>' : '<div class="btn" data-act="next">NEXT LEVEL</div>'}
              <div class="btn small" data-act="again">PLAY AGAIN</div>
              <div class="btn small" data-act="levels">LEVELS</div>`
-          : `<p class="ov-note">waiting for ${esc(partner)} to pick what's next…</p><div class="btn small" data-act="leave">LEAVE ROOM</div>`;
+          : `<p class="ov-note">waiting for ${esc(partner)} to pick what's next…</p><div class="btn small" data-act="leave" data-confirm>LEAVE ROOM</div>`;
         this.openOverlay(
           `<div class="ov-title">home sweet pot!</div>
            <div class="ov-stats"><span><i class="seed-ico"></i> ${seeds} / ${this.L.seeds.length}</span><span class="feathers">${stars}</span><span>⏱ ${fmtTime(time)}</span></div>
@@ -1356,12 +1387,14 @@ export class Session implements Screen {
           'clear',
         );
         // nobody asked for this card: the sprouts stop answering when a level clears, so the players
-        // are still tapping Ⓐ — and the seeds, fireflies and time on it are here to be read
-        this.overlay?.list.arm();
+        // are still tapping Ⓐ — and the seeds, fireflies and time on it are here to be read. Half a
+        // second of that: the card comes up a second after the clear, and NEXT LEVEL takes Ⓐ 1.5 s in.
+        this.overlay?.list.arm(500);
         // (the guest's only button leaves the room: a jump still held from the landing mustn't press it)
         if (!lead) this.overlay?.list.disarm();
       },
-      1600 / ceremony(1),
+      // (long enough for the hearts at the nest to be seen, and no longer)
+      1000 / ceremony(1),
     );
   }
 
@@ -1374,6 +1407,8 @@ export class Session implements Screen {
     this.paused = !this.online;
     this.app.touch?.setPlayActive(false);
     const leave = this.online ? (this.me === 0 ? 'BACK TO LEVELS' : 'LEAVE ROOM') : this.practice ? 'QUIT TO THE TITLE' : 'QUIT TO LEVELS';
+    // (LEAVE ROOM ends the game for both: it asks first — see ButtonList)
+    const asks = this.online && this.me === 1 ? ' data-confirm' : '';
     this.openOverlay(
       `<div class="ov-title">${this.online ? 'menu' : 'paused'}</div>
        ${this.online ? `<p class="ov-note">the game keeps going for ${esc(this.profiles[1 - this.me]?.name || 'your partner')}</p>` : ''}
@@ -1385,7 +1420,7 @@ export class Session implements Screen {
          ${this.practice && this.birds[0].kind !== this.birds[1].kind ? `<div class="btn small" data-act="swap">PRACTISE AS THE ${this.birds[0].kind === 'tall' ? 'SMALL' : 'TALL'} SPROUT</div>` : ''}
          ${this.online && this.me === 1 ? '' : `<div class="btn small" data-act="restart">${this.practice ? 'START THE GROUND OVER' : 'START THE LEVEL OVER'}</div>`}
          <div class="btn small" data-act="controls">HOW TO PLAY</div>
-         <div class="btn small" data-act="quit">${leave}</div>
+         <div class="btn small" data-act="quit"${asks}>${leave}</div>
        </div>`,
       (a) => {
         if (a === 'resume') this.closeOverlay();
@@ -1427,6 +1462,8 @@ export class Session implements Screen {
     this.app.ui.appendChild(el);
     const list = new ButtonList(el, act, back);
     this.overlay = { el, list };
+    // (a direction held as it opened — a sprout walking, climbing down — doesn't scroll it)
+    this.app.input.stopRepeats();
   }
 
   private closeOverlay() {

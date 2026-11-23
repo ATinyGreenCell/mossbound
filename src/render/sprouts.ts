@@ -237,6 +237,9 @@ function glideLeaf(ctx: CanvasRenderingContext2D, top: number, t: number, ink: s
   ctx.stroke();
 }
 
+/** a "come here" waves for as long as more than this much of its bubble is left (an emote shows for 2.2 s) */
+const BECKON_LEFT = 1;
+
 /** Arm angles for what the sprout is doing (0 = straight ahead, negative = up). */
 function armPose(b: Bird): [number, number] {
   const walk = Math.sin(b.walkPhase);
@@ -245,6 +248,9 @@ function armPose(b: Bird): [number, number] {
   if (b.cling !== 0) return [-0.9, -0.5];
   if (b.dashT > 0) return [2.4, 2.6];
   if (b.anchored) return [0.35, 0.55];
+  // a hey (its own button, or TUG with no vine: see Session.tug): the near arm up and out, waving the
+  // partner over while the bubble is new. (No further out than a walking sprout's arms reach.)
+  if (b.emote === 'hey' && b.emoteT > BECKON_LEFT) return [b.grounded ? 0.9 + walk * 0.5 : b.vy < 0 ? -1.2 : -0.5, -0.75 + Math.sin(b.emoteT * 15) * 0.4];
   if (!b.grounded) return b.vy < 0 ? [-1.2, -0.9] : [-0.5, -0.2];
   return [0.9 + walk * 0.5, 1.2 - walk * 0.5];
 }

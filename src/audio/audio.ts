@@ -22,6 +22,12 @@ const WAIT_MS = 400;
  */
 const WORKER_OPTS: WorkerOptions = import.meta.env.DEV ? { type: 'module' } : {};
 
+/**
+ * The whole mix's level at the master. 0.9, and the +0.28 dB that the master compressor this replaced
+ * lifted everything by (its automatic makeup gain — measured in Chrome on anything below 0.3, and still
+ * +0.13 dB at 0.7): with the compressor gone the game is as loud as it was.
+ */
+const MASTER = 0.9 * 10 ** (0.28 / 20);
 /** One sound on its own peaks at about 0.65 at full volume: under this, the ceiling isn't there at all. */
 const CEILING_KNEE = 0.85;
 /** the ceiling's curve reaches this many times full scale (the shaper sees the signal divided by it) */
@@ -29,12 +35,15 @@ const CEILING_RANGE = 4;
 let ceiling: Float32Array<ArrayBuffer> | null = null;
 
 /**
- * A ceiling at full scale, for when several effects land at once (a yank landing: the tug, the catch
- * and a landing peaked at 1.1; ten at once at 2.2, all of it clipped by the speakers). A WaveShaper
- * whose curve is the identity up to CEILING_KNEE and bends smoothly (tanh) towards 1 above it: no
- * lookahead, so no latency, and a sound on its own never reaches the bend, so it comes out exactly
- * as it went in. (The compressor before it, with its 30 dB knee and gain makeup, shapes the mix but
- * never stopped a pile-up going over.)
+ * The limiter: a ceiling at full scale, for when several effects land at once (a yank landing: the tug,
+ * the catch and a landing peaked at 1.1; ten at once at 2.2, all of it clipped by the speakers). A
+ * WaveShaper whose curve is the identity up to CEILING_KNEE and bends smoothly (tanh) towards 1 above
+ * it: no lookahead, so no latency, and a sound on its own never reaches the bend, so it comes out
+ * exactly as it went in.
+ *
+ * It is the master's only dynamics. There was a DynamicsCompressor before it, whose 30 dB knee shaped
+ * almost nothing (a few tenths of a dB) and never stopped a pile-up going over — and whose 6 ms of
+ * lookahead delayed every sound in the game. Its makeup gain is kept, in MASTER.
  */
 function ceilingCurve() {
   if (ceiling) return ceiling;
@@ -125,6 +134,27 @@ class Audio {
   /** development builds: each piece of main-thread work the sound engine did, and how long it took (for the tests) */
   readonly work: { what: string; at: number; ms: number }[] = [];
 
+  constructor() {
+    if (!NO_AUDIO && typeof document !== 'undefined') document.addEventListener('visibilitychange', () => this.onShow());
+  }
+
+  /**
+   * The page was hidden, or shown again. Hidden, the sound stops: the level pauses itself, but the music
+   * and the forest played on — a creek from a pocket with the screen off, and a fifth of a laptop core
+   * on the audio thread for nobody. Shown, it carries on from where it was, but only if a press has
+   * started the sound: the context made at boot waits for one, as ever. If the browser won't let it
+   * resume without a press (iOS may not), the next press does it — its listeners stay for that.
+   */
+  private onShow() {
+    const c = this.c;
+    if (!c || c.state === 'closed') return;
+    if (document.visibilityState === 'hidden') {
+      if (c.state === 'running') void c.suspend().catch(() => undefined);
+    } else if (this.unlocked && c.state !== 'running') {
+      void Promise.resolve(c.resume()).catch(() => undefined);
+    }
+  }
+
   /** The context the sound plays on, once a press has started it (null until then). */
   get ctx() {
     return this.unlocked ? this.c : null;
@@ -190,17 +220,14 @@ class Audio {
     this.ready = false;
     old?.stop();
     try {
-      const comp = c.createDynamicsCompressor();
-      comp.threshold.value = -10;
-      comp.ratio.value = 4;
       const master = c.createGain();
-      master.gain.value = 0.9;
+      master.gain.value = MASTER;
       const pre = c.createGain();
       pre.gain.value = 1 / CEILING_RANGE;
       const top = c.createWaveShaper();
       top.curve = ceilingCurve();
       top.oversample = 'none';
-      master.connect(comp).connect(pre).connect(top).connect(c.destination);
+      master.connect(pre).connect(top).connect(c.destination);
       const sfxBus = c.createGain();
       const musicBus = c.createGain();
       sfxBus.connect(master);
@@ -212,7 +239,10 @@ class Audio {
       return;
     }
     c.onstatechange = () => {
-      if (c === this.c && c.state === 'running') this.flush();
+      if (c !== this.c || c.state !== 'running') return;
+      // (a press's resume that only finished once the page was hidden: hidden means quiet)
+      if (document.visibilityState === 'hidden') void c.suspend().catch(() => undefined);
+      else this.flush();
     };
     // until a press asks for sound there is none, even where the browser would let it start (as it always was)
     if (!this.unlocked && c.state === 'running') void c.suspend().catch(() => undefined);

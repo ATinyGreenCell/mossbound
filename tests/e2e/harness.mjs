@@ -188,12 +188,26 @@ export async function slowFrames(page, ms = 260) {
 /** Resolve after `n` animation frames (gamepads are polled once a frame). */
 export const frames = (page, n) => page.evaluate((n) => new Promise((done) => { const step = (k) => (k ? requestAnimationFrame(() => step(k - 1)) : done()); step(n); }), n);
 
-/** Press a fake gamepad button for a couple of whole frames. */
+/**
+ * Press a fake gamepad button for `hold` whole frames: the game reads it down in exactly that many polls.
+ *
+ * Pressed and let go from inside the frames themselves, each time after the game's own frame. Letting go
+ * from out here took a round trip after the frames were counted, and on a machine drawing three frames
+ * a second the game polled again before it landed: a two-frame press was read down for three or four
+ * frames — over a second there, which is a held direction, and a held direction repeats in a menu.
+ */
 export async function padPress(page, pad, button, hold = 2) {
-  await page.evaluate((p, b) => { window.__pads[p].buttons[b] = { pressed: true, touched: true, value: 1 }; }, pad, button);
-  await frames(page, hold);
-  await page.evaluate((p, b) => { window.__pads[p].buttons[b] = { pressed: false, touched: false, value: 0 }; }, pad, button);
-  await frames(page, 2);
+  await page.evaluate((p, b, hold) => new Promise((done) => {
+    const set = (on) => { window.__pads[p].buttons[b] = { pressed: on, touched: on, value: on ? 1 : 0 }; };
+    let k = 0;
+    const f = () => {
+      if (k === 0) set(true);
+      else if (k === hold) set(false);
+      if (k++ < hold + 2) requestAnimationFrame(f);
+      else done();
+    };
+    requestAnimationFrame(f);
+  }), pad, button, hold);
 }
 
 export const padAxis = (page, pad, x, y = 0) => page.evaluate((p, x, y) => { window.__pads[p].axes[0] = x; window.__pads[p].axes[1] = y; }, pad, x, y);

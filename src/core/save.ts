@@ -10,7 +10,9 @@
  *   (`clock`), never on their wall clocks, which can be hours apart.
  * Every write first merges whatever is already stored (another tab, an older build), so a stale copy
  * never overwrites newer progress; a stored copy this build can't read is set aside, never destroyed.
- * A save code (copy / paste) moves it to a new device.
+ * Every write goes to IndexedDB as well (see the mirror, below), and what's there is merged back in at
+ * boot: the game shares its localStorage with every other page on its origin, and any of them could
+ * clear it. A save code (copy / paste) moves it to a new device.
  */
 import { LEVELS } from '../game/levels';
 
@@ -41,6 +43,11 @@ export type Run = {
   with: string;
   /** the level's layout it was saved on (an update that changes the map moves the seeds) */
   sig: string;
+  /**
+   * the vine was tied between the two sprouts (1.11): a run carried on carries on tied. A run saved
+   * before 1.11 has none, and comes back untied as it always did.
+   */
+  tied: boolean;
 };
 
 /** One level's run. `run` is null once the level is finished: a marker, so an older copy can't bring it back. */
@@ -116,7 +123,9 @@ function makeRun(r: Run): Run {
   // sorted because a merge can pool two copies of one run's plants, and a pooled list has to come out
   // the same on both devices — the game's own runs are already in this order, counted up the soil.)
   const grown = [...new Set(r.grown ?? [])].sort((a, b) => a - b);
-  return { cp: r.cp, seeds: [...r.seeds], grown, feathers: r.feathers, time: r.time, with: r.with, sig: r.sig };
+  // (`tied` is always written, false too: a copy laid over a stored one — see overlay — must say "untied"
+  // for itself, or the stored copy's "tied" would outlive the untie)
+  return { cp: r.cp, seeds: [...r.seeds], grown, feathers: r.feathers, time: r.time, with: r.with, sig: r.sig, tied: r.tied === true };
 }
 
 function cleanRun(raw: unknown): Run | null {
@@ -132,6 +141,7 @@ function cleanRun(raw: unknown): Run | null {
     time: num(o.time, 0, 360000),
     with: clip(o.with, 40),
     sig: typeof o.sig === 'string' ? o.sig.slice(0, 16) : '',
+    tied: o.tied === true,
   });
 }
 
@@ -176,10 +186,10 @@ export function cleanSave(raw: unknown): Save | null {
 
 /**
  * A run's identity for the dead-heat tie-break, in a fixed shape. It deliberately leaves out anything
- * added after 1.0.1 (`grown`, and whatever comes next): the whole run's JSON would make the answer
- * depend on which fields the build knows about, and two devices on different versions would then
- * settle the same dead heat differently. Two runs alike but for a later field are a true tie, which
- * `mergeInto` settles by pooling those fields rather than picking a side.
+ * added after 1.0.1 (`grown`, `tied`, and whatever comes next): the whole run's JSON would make the
+ * answer depend on which fields the build knows about, and two devices on different versions would
+ * then settle the same dead heat differently. Two runs alike but for a later field are a true tie,
+ * which `mergeInto` settles by pooling those fields rather than picking a side.
  */
 const runKey = (r: Run | null) => (r ? `${r.cp}|${r.time}|${r.feathers}|${r.seeds.join(',')}|${r.with}|${r.sig}` : '');
 
@@ -190,8 +200,11 @@ function newer(a: RunSlot, b: RunSlot) {
   return runKey(a.run) > runKey(b.run);
 }
 
-/** Two copies of one run the tie-break can't separate: the same run but for a field added later. */
-const tied = (a: RunSlot, b: RunSlot) => a.gen === b.gen && a.at === b.at && runKey(a.run) === runKey(b.run);
+/**
+ * Two copies of one run the tie-break can't separate: the same run but for a field added later. (Named
+ * for the dead heat, not for the vine: a run's `tied` is one of those later fields.)
+ */
+const deadHeat = (a: RunSlot, b: RunSlot) => a.gen === b.gen && a.at === b.at && runKey(a.run) === runKey(b.run);
 
 /**
  * Merge `o` into `s`; true if `s` changed. `foreign`: it came from the partner or a pasted save code,
@@ -218,11 +231,14 @@ function mergeInto(s: Save, o: Save, foreign = false): boolean {
     if (slot.at > lead) continue;
     const mine = s.runs[id];
     if (!mine || newer(slot, mine)) s.runs[id] = { gen: slot.gen, at: slot.at, run: slot.run && makeRun(slot.run) };
-    // A dead heat means the two runs are the same but for their plants, since runKey is all the rest of
-    // the run. A plant is a step you keep, so the two lists are pooled: whichever way round the merge
-    // happens both devices come away with the same save, which picking a side would never give them.
-    else if (mine.run && slot.run && tied(slot, mine)) {
+    // A dead heat means the two runs are the same but for their plants (and the vine), since runKey is
+    // all the rest of the run. A plant is a step you keep, so the two lists are pooled: whichever way
+    // round the merge happens both devices come away with the same save, which picking a side would
+    // never give them. The vine is pooled the same way — tied if either copy says so — which is just as
+    // much the same answer from either side, and the same again however often it's taken in.
+    else if (mine.run && slot.run && deadHeat(slot, mine)) {
       mine.run.grown = [...new Set([...mine.run.grown, ...slot.run.grown])].sort((x, y) => x - y).slice(0, MAX_SOILS);
+      mine.run.tied ||= slot.run.tied;
     }
   }
   if (o.clock <= lead) s.clock = Math.max(s.clock, o.clock);
@@ -339,8 +355,9 @@ let pending = 0;
 function write() {
   window.clearTimeout(pending);
   pending = 0;
+  let stored: string | null = null;
   try {
-    const stored = localStorage.getItem(KEY);
+    stored = localStorage.getItem(KEY);
     if (stored && stored !== written) {
       // another tab (or an older build) wrote meanwhile: take in what it has before writing over it
       const theirs = parse(stored);
@@ -351,11 +368,14 @@ function write() {
     const out = JSON.stringify(overlay(json(stored), save));
     if (out !== stored) localStorage.setItem(KEY, out);
     written = out;
+    mirror(out);
     if (!storageOk) {
       storageOk = true;
       changed();
     }
   } catch {
+    // (the mirror keeps it all the same: a full or refused localStorage needn't cost the next visit)
+    mirror(JSON.stringify(overlay(json(stored), save)));
     if (storageOk) {
       storageOk = false;
       changed();
@@ -409,6 +429,138 @@ if (typeof window !== 'undefined') {
   document.addEventListener('freeze', flushSave);
 }
 
+// ------------------------------------------------------------------ the mirror (IndexedDB)
+//
+// Mossbound is served from a shared origin (atinygreencell.github.io), and every other project there
+// shares its localStorage: a `localStorage.clear()` in any of them wipes the journal. IndexedDB is a
+// separate store that clear() never touches. Every write goes there too, and at boot whatever it holds
+// is merged back in — the merge only ever adds, in whatever order copies arrive, so a copy that's
+// older than localStorage's changes nothing, and a wiped localStorage comes back whole. Where IndexedDB
+// is missing or refuses (private modes, old Safari), or never answers, the game simply goes without.
+
+const IDB_NAME = 'mossbound';
+const IDB_STORE = 'journal';
+
+let mirrorDb: Promise<IDBDatabase | null> | null = null;
+
+function openMirror(): Promise<IDBDatabase | null> {
+  if (mirrorDb) return mirrorDb;
+  mirrorDb = new Promise<IDBDatabase | null>((resolve) => {
+    try {
+      if (typeof indexedDB === 'undefined' || !indexedDB) {
+        resolve(null);
+        return;
+      }
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        try {
+          if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE);
+        } catch {
+          // the open fails below and the game goes without
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        // (a later build upgrading the database from another tab: make way, and go without here)
+        db.onversionchange = () => {
+          db.close();
+          mirrorDb = Promise.resolve(null);
+        };
+        resolve(db);
+      };
+      req.onerror = () => resolve(null);
+      req.onblocked = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+  return mirrorDb;
+}
+
+/** One request against the mirror; null for anything that fails (or a mirror that isn't there). */
+async function mirrorDo(mode: IDBTransactionMode, f: (s: IDBObjectStore) => IDBRequest): Promise<unknown> {
+  const db = await openMirror();
+  if (!db) return null;
+  return new Promise<unknown>((resolve) => {
+    try {
+      const tx = db.transaction(IDB_STORE, mode);
+      const req = f(tx.objectStore(IDB_STORE));
+      tx.oncomplete = () => resolve(req.result ?? null);
+      tx.onerror = tx.onabort = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/** The mirror's copy, read back once at boot and merged in (see restore): nothing is written to it before. */
+let restored: Promise<void> = Promise.resolve();
+/** The newest copy waiting to go to the mirror (one write at a time, and only ever the newest). */
+let mirrorWant: string | null = null;
+let mirrorBusy = false;
+
+function mirror(out: string) {
+  mirrorWant = out;
+  if (mirrorBusy) return;
+  mirrorBusy = true;
+  void (async () => {
+    try {
+      // (never over the mirror's copy before it has been read: it may hold what localStorage lost)
+      await restored;
+      while (mirrorWant !== null) {
+        const v = mirrorWant;
+        mirrorWant = null;
+        await mirrorDo('readwrite', (st) => st.put(v, KEY));
+      }
+    } catch {
+      // the mirror is a spare: without it the game carries on as before
+    }
+    mirrorBusy = false;
+  })();
+}
+
+/**
+ * Boot: take in the mirror's copy. Where localStorage lost the journal (another page on the origin
+ * cleared it) the copy goes back in as it was — with whatever a newer build wrote in it too (see
+ * overlay) — and is then taken in like another tab's write. A mirror with nothing in it yet (the first
+ * visit since it arrived) is given what we have.
+ */
+async function restore() {
+  const raw = await mirrorDo('readonly', (st) => st.get(KEY));
+  const theirs = typeof raw === 'string' ? parse(raw) : null;
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(KEY);
+    if (!stored && theirs && storageOk) localStorage.setItem(KEY, raw as string);
+  } catch {
+    // refused: the copy is still merged into this page's journal below
+  }
+  if (theirs && mergeInto(save, theirs)) {
+    persist();
+    changed();
+  } else if (theirs && !stored && storageOk) write();
+  const has = save.unlocked || Object.keys(save.levels).length || Object.keys(save.runs).length;
+  if (has && raw !== written) {
+    let now = written;
+    try {
+      now = localStorage.getItem(KEY) ?? written;
+    } catch {
+      // (what this page holds, then)
+    }
+    mirror(now || JSON.stringify(save));
+  }
+}
+
+if (typeof window !== 'undefined') restored = restore().catch(() => undefined);
+
+/**
+ * Wait (at most `ms`) for the mirror's copy to be taken in, so the first screen is drawn from the whole
+ * journal. Past that the game goes on; whatever arrives later redraws what shows it (see onSaveChange).
+ */
+export function saveRestored(ms: number) {
+  return Promise.race([restored, new Promise<void>((r) => setTimeout(r, ms))]);
+}
+
 let askedToKeep = false;
 
 /** Ask the browser to spare our storage when it cleans up (once; the browser decides quietly, or asks). */
@@ -450,13 +602,17 @@ export function latestRun(): { index: number; slot: RunSlot & { run: Run } } | n
   return best;
 }
 
-/** What continuing level `index` needs, or null when it has no run. (After an update that changed the map, the seeds and the plants start over: both are indices into a map that has moved under them.) */
-export function resumeOf(index: number): { cp: number; seeds: number[]; grown: number[]; feathers: number; time: number; gen: number } | null {
+/**
+ * What continuing level `index` needs, or null when it has no run. (After an update that changed the map,
+ * the seeds and the plants start over: both are indices into a map that has moved under them. The vine
+ * doesn't: tied is tied, wherever the lantern now stands.)
+ */
+export function resumeOf(index: number): { cp: number; seeds: number[]; grown: number[]; feathers: number; time: number; gen: number; tied?: boolean } | null {
   const slot = runSlot(LEVELS[index]?.id ?? '');
   if (!slot?.run) return null;
   const r = slot.run;
   const same = !r.sig || r.sig === levelSig(index);
-  return { cp: r.cp, seeds: same ? [...r.seeds] : [], grown: same ? [...r.grown] : [], feathers: same ? r.feathers : 0, time: r.time, gen: slot.gen };
+  return { cp: r.cp, seeds: same ? [...r.seeds] : [], grown: same ? [...r.grown] : [], feathers: same ? r.feathers : 0, time: r.time, gen: slot.gen, ...(r.tied ? { tied: true } : {}) };
 }
 
 /**

@@ -20,12 +20,15 @@ body.touch #app {
 
 /* ---- left-thumb floating joystick ---- */
 
+/* (18 px in from the left edge: that strip is Android's back gesture, and a thumb landing in it is
+   the system's, not the stick's — the stick's resting spot stays where it was) */
 .tc-zone {
+  --inset: 18px;
   position: absolute;
-  left: 0;
+  left: var(--inset);
   top: 84px;
   bottom: 0;
-  width: 46%;
+  width: calc(46% - var(--inset));
   pointer-events: auto;
   touch-action: none;
 }
@@ -34,7 +37,7 @@ body.touch #app {
   --size: calc(124px * var(--s));
   position: absolute;
   /* resting spot (faded) until a thumb lands — then it jumps under the thumb */
-  left: calc(env(safe-area-inset-left) + 118px * var(--s));
+  left: calc(env(safe-area-inset-left) + 118px * var(--s) - var(--inset));
   top: calc(100% - env(safe-area-inset-bottom) - 108px * var(--s));
   width: var(--size);
   height: var(--size);

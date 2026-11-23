@@ -11,7 +11,12 @@
 //   - Each bar's pad was eight live oscillators and an automated filter on the audio thread; it is the
 //     same voice rendered ahead of time now, so it must still be the same voice.
 //   - Music at volume 0 still ran the whole graph.
-//   - Overlapping effects went over full scale.
+//   - Overlapping effects went over full scale, and a compressor that never stopped them delayed every
+//     sound by 6 ms: a limiter with no lookahead does the job now, at the same loudness.
+//   - The reverb was a 2.2 s stereo convolver, about 60% of the audio thread's work: it rings for 1 s.
+//   - A song change faded the song being left with a 0.15 s time constant, ringing on for a second: it
+//     fades to silence over 0.3 s now.
+//   - The music and the forest played on in a hidden tab (a creek from a pocket, a fifth of a core).
 //   - A closed AudioContext was never replaced.
 //   - Without a worker the library was rendered in pieces of up to 260 ms on a phone-speed CPU, a
 //     stalled worker's work was thrown away after 15 s, and a song asked for in the middle of that
@@ -57,10 +62,50 @@ const WATCH = (mode) => {
   }
   window.__final = new Map();
   window.__comp = new Map();
+  // (what feeds each node — the last thing connected to it — so a test can walk back up the master chain)
+  window.__into = new WeakMap();
   const connect = AudioNode.prototype.connect;
   AudioNode.prototype.connect = function (dst, ...rest) {
     if (dst instanceof AudioDestinationNode && this.context instanceof AudioContext && !window.__final.has(this.context)) window.__final.set(this.context, this);
+    if (dst instanceof AudioNode) window.__into.set(dst, this);
     return connect.call(this, dst, ...rest);
+  };
+  // A recorder on any node's output, each block stamped with its first frame on the context's clock, so
+  // two recorders' takes line up to the sample. Returns a function that stops it: [frame, samples | null][].
+  const stamped = new WeakMap();
+  window.__tap = async (ctx, node) => {
+    if (!stamped.has(ctx)) {
+      const code = `class S extends AudioWorkletProcessor {
+        constructor() { super(); this.chunks = []; this.port.onmessage = () => { this.port.postMessage(this.chunks); this.chunks = []; }; }
+        process(inputs) { const ch = inputs[0] && inputs[0][0]; this.chunks.push([currentFrame, ch ? ch.slice(0) : null]); return true; }
+      }
+      registerProcessor('stamped', S);`;
+      stamped.set(ctx, ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: 'application/javascript' }))));
+    }
+    await stamped.get(ctx);
+    const m = new AudioWorkletNode(ctx, 'stamped', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
+    const z = ctx.createGain();
+    z.gain.value = 0;
+    node.connect(m).connect(z).connect(ctx.destination);
+    return async () => {
+      const chunks = await new Promise((res) => { m.port.onmessage = (e) => res(e.data); m.port.postMessage(0); });
+      node.disconnect(m);
+      z.disconnect();
+      return chunks;
+    };
+  };
+  /** the samples of a take from frame f0 up to f1 (silence where nothing came in) */
+  window.__span = (chunks, f0, f1) => {
+    const out = new Float32Array(Math.max(0, f1 - f0));
+    for (const [f, d] of chunks) if (d) for (let i = 0; i < d.length; i++) if (f + i >= f0 && f + i < f1) out[f + i - f0] = d[i];
+    return out;
+  };
+  window.__rms = (x) => { let s = 0; for (let i = 0; i < x.length; i++) s += x[i] * x[i]; return Math.sqrt(s / Math.max(1, x.length)); };
+  // the page hidden or shown again, as another tab or a phone's lock button does it
+  window.__setVis = (v) => {
+    Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
+    Object.defineProperty(document, 'hidden', { value: v === 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
   };
   const comp = BaseAudioContext.prototype.createDynamicsCompressor;
   BaseAudioContext.prototype.createDynamicsCompressor = function () {
@@ -256,23 +301,161 @@ const lib = (page) => page.evaluate(() => ({ sfx: window.__fb.audio.buffers.size
       node.connect(m).connect(z).connect(ctx.destination);
       return () => new Promise((res) => { m.port.onmessage = (e) => res(e.data); m.port.postMessage(0); });
     };
-    const out = meter(window.__final.get(ctx));
-    const comp = meter(window.__comp.get(ctx));
+    const final = window.__final.get(ctx);
+    const out = meter(final);
+    // (what reaches the ceiling: whatever feeds the gain in front of it)
+    const into = meter(window.__into.get(window.__into.get(final)));
     a.music(null);
     await new Promise((r) => setTimeout(r, 2500));
     await out();
-    await comp();
+    await into();
     a.play('uiSelect', 1);
     await new Promise((r) => setTimeout(r, 400));
-    const one = { out: await out(), comp: await comp() };
+    const one = { out: await out(), into: await into() };
     for (const [n, v, p, r] of [['jump', 0.55], ['jump', 0.55, 0, 1.08], ['land', 0.9], ['land', 0.9], ['tug', 0.9], ['catch', 0.8], ['grab', 0.75, 0, 1.05], ['zip', 0.8], ['snap', 0.65], ['die', 0.7]]) a.play(n, v, p ?? 0, r ?? 1);
     await new Promise((r) => setTimeout(r, 1200));
-    const pile = { out: await out(), comp: await comp() };
+    const pile = { out: await out(), into: await into() };
     a.music('garden');
-    return { onePeakOut: +one.out.toFixed(4), onePeakCompressor: +one.comp.toFixed(4), pilePeakOut: +pile.out.toFixed(4), pilePeakCompressor: +pile.comp.toFixed(4) };
+    return { onePeakOut: +one.out.toFixed(4), onePeakIn: +one.into.toFixed(4), pilePeakOut: +pile.out.toFixed(4), pilePeakIn: +pile.into.toFixed(4) };
   });
   t.check('a pile-up of effects never goes over full scale', clip.pilePeakOut > 0 && clip.pilePeakOut <= 1, clip);
-  t.check('one sound alone comes out exactly as it went in', Math.abs(clip.onePeakOut - clip.onePeakCompressor) < 1e-3 && clip.onePeakOut > 0.1, clip);
+  t.check('one sound alone comes out exactly as it went in', Math.abs(clip.onePeakOut - clip.onePeakIn) < 1e-3 && clip.onePeakOut > 0.1, clip);
+
+  // the reverb: a second long, still in stereo. (2.2 s of stereo convolution was about 60% of the
+  // audio thread's work — crackles on a phone's slow core — and 23-109 ms of main-thread work to set up.)
+  const verb = await page.evaluate(() => {
+    const a = window.__fb.audio;
+    const b = a.seq?.verb?.buffer ?? null;
+    const setUp = (a.work ?? []).filter((w) => w.what === 'reverb').map((w) => +w.ms.toFixed(1));
+    return b ? { seconds: +b.duration.toFixed(4), channels: b.numberOfChannels, rate: b.sampleRate, setUpMs: setUp } : { none: true };
+  });
+  t.check('the reverb rings for a second, in stereo (it was 2.2 s)', !verb.none && verb.seconds >= 0.99 && verb.seconds <= 1 + 1 / verb.rate && verb.channels === 2, verb);
+
+  // the master chain: a limiter with no lookahead in place of the compressor — no compressor made at all,
+  // an effect reaches the speakers in the very sample it is played (the compressor held every sound 6 ms),
+  // and the mix as loud as the compressor's makeup gain left it
+  const chain = await page.evaluate(async () => {
+    const a = window.__fb.audio;
+    const ctx = a.ctx;
+    const rate = ctx.sampleRate;
+    const final = window.__final.get(ctx);
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    a.music(null);
+    await wait(2500);
+    // a single sample into the effects bus, recorded where the chain starts and where it ends
+    let inT = await window.__tap(ctx, a.sfxBus);
+    let outT = await window.__tap(ctx, final);
+    const one = ctx.createBuffer(1, 1, rate);
+    one.getChannelData(0)[0] = 0.5;
+    const click = ctx.createBufferSource();
+    click.buffer = one;
+    click.connect(a.sfxBus);
+    const at = Math.round((ctx.currentTime + 0.1) * rate);
+    click.start(at / rate);
+    await wait(500);
+    const peakAt = (chunks) => {
+      const x = window.__span(chunks, at - 1024, at + 4096);
+      let best = 0;
+      let k = -1;
+      for (let i = 0; i < x.length; i++) if (Math.abs(x[i]) > best) { best = Math.abs(x[i]); k = i; }
+      return k < 0 ? null : k - 1024;
+    };
+    const inAt = peakAt(await inT());
+    const outAt = peakAt(await outT());
+    // a quiet steady tone through the chain, against today's chain (0.9, then a compressor at -10 dB,
+    // ratio 4, whose makeup gain lifted it) rendered offline from the same tone
+    inT = await window.__tap(ctx, a.sfxBus);
+    outT = await window.__tap(ctx, final);
+    const tone = ctx.createOscillator();
+    tone.frequency.value = 440;
+    const tg = ctx.createGain();
+    tg.gain.value = 0.1;
+    tone.connect(tg).connect(a.sfxBus);
+    const t0 = Math.round((ctx.currentTime + 0.1) * rate);
+    tone.start(t0 / rate);
+    tone.stop(t0 / rate + 0.6);
+    await wait(900);
+    const steady = [t0 + Math.round(0.2 * rate), t0 + Math.round(0.5 * rate)];
+    const gainDb = 20 * Math.log10(window.__rms(window.__span(await outT(), ...steady)) / window.__rms(window.__span(await inT(), ...steady)));
+    const oc = new OfflineAudioContext(1, rate, rate);
+    const o = oc.createOscillator();
+    o.frequency.value = 440;
+    const og = oc.createGain();
+    og.gain.value = 0.09;
+    const m = oc.createGain();
+    m.gain.value = 0.9;
+    const comp = oc.createDynamicsCompressor();
+    comp.threshold.value = -10;
+    comp.ratio.value = 4;
+    o.connect(og).connect(m).connect(comp).connect(oc.destination);
+    o.start();
+    const ref = (await oc.startRendering()).getChannelData(0).slice(Math.round(0.5 * rate));
+    const wasDb = 20 * Math.log10(window.__rms(ref) / (0.09 / Math.SQRT2));
+    return { compressor: window.__comp.has(ctx), delayFrames: inAt === null || outAt === null ? null : outAt - inAt, gainDb: +gainDb.toFixed(3), wasDb: +wasDb.toFixed(3) };
+  });
+  t.check('no compressor on the master: an effect is heard in the very sample it is played (the compressor delayed every one 6 ms)', !chain.compressor && chain.delayFrames === 0, chain);
+  t.check('…and the mix is as loud as before (within 0.1 dB of the compressor’s makeup gain)', Math.abs(chain.gainDb - chain.wasDb) <= 0.1, chain);
+
+  // a song change: the song being left fades from where it is to silence over 0.3 s, while the next comes up
+  const fade = await page.evaluate(async () => {
+    const a = window.__fb.audio;
+    const ctx = a.ctx;
+    const rate = ctx.sampleRate;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    a.music('garden');
+    await wait(2500);
+    // (the song's own output: everything it plays goes out through it, and only what it plays)
+    const stop = await window.__tap(ctx, a.seq.songBus);
+    await wait(700);
+    const f0 = Math.round(ctx.currentTime * rate);
+    a.music('woods');
+    await wait(1000);
+    const chunks = await stop();
+    const before = window.__rms(window.__span(chunks, f0 - Math.round(0.5 * rate), f0));
+    const early = window.__rms(window.__span(chunks, f0, f0 + Math.round(0.1 * rate)));
+    let last = -1;
+    for (const [f, d] of chunks) if (d) for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 1e-6) last = Math.max(last, f + i);
+    return { rmsBefore: +before.toFixed(4), first100msOfBefore: +(early / before).toFixed(2), silentAfterMs: Math.round(((last - f0) / rate) * 1000) };
+  });
+  t.check('a song change crossfades: the song left fades from where it was to silence over 0.3 s (it rang on for a second)', fade.rmsBefore > 0.001 && fade.first100msOfBefore > 0.4 && fade.silentAfterMs >= 270 && fade.silentAfterMs <= 330, fade);
+
+  // the page hidden: the sound stops (the context suspended, nothing new played); shown again, it carries on
+  const vis = await page.evaluate(async () => {
+    const a = window.__fb.audio;
+    const c = a.ctx;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const before = c.state;
+    window.__setVis('hidden');
+    await wait(400);
+    const hidden = c.state;
+    const from = performance.now();
+    await wait(1500);
+    const playedHidden = window.__starts.filter((s) => s.ctx === c && s.at >= from).length;
+    window.__setVis('visible');
+    await wait(400);
+    const shown = c.state;
+    const back = performance.now();
+    await wait(1500);
+    return { before, hidden, playedHidden, shown, playedShown: window.__starts.filter((s) => s.ctx === c && s.at >= back).length, song: a.seq?.songId ?? null };
+  });
+  t.check('the sound stops while the page is hidden (the context suspended, nothing played) and carries on when it shows', vis.before === 'running' && vis.hidden === 'suspended' && vis.playedHidden === 0 && vis.shown === 'running' && vis.playedShown > 0 && vis.song === 'woods', vis);
+  // …and where the browser won't let it resume without a press (iOS may not), the next press does
+  const refused = await page.evaluate(async () => {
+    const c = window.__fb.audio.ctx;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    window.__setVis('hidden');
+    await wait(300);
+    c.resume = () => Promise.reject(new DOMException('only inside a press', 'NotAllowedError'));
+    window.__setVis('visible');
+    await wait(300);
+    delete c.resume;
+    delete document.visibilityState;
+    delete document.hidden;
+    return c.state;
+  });
+  await page.mouse.click(40, 40);
+  const pressed = await waitFor(() => page.evaluate(() => window.__fb.audio.state === 'running'), 3000, 'a press resumes it').catch(() => false);
+  t.check('…and where the browser won’t resume it without a press (iOS), the next press does', refused === 'suspended' && !!pressed, { stateBeforeThePress: refused, runningAfter: !!pressed });
 
   // the sounds still play (a buffer source per voice, and the voice cap still holds)
   const played = await page.evaluate(() => {
@@ -374,6 +557,19 @@ const lib = (page) => page.evaluate(() => ({ sfx: window.__fb.audio.buffers.size
 {
   const page = await gamePage('worker', { pads: 1 });
   await waitFor(() => libraryDone(page), 10000, 'library').catch(() => undefined);
+  // nobody has pressed anything: the page hidden and shown again must not start the sound by itself
+  const boot = await page.evaluate(async () => {
+    const a = window.__fb.audio;
+    window.__setVis('hidden');
+    await new Promise((r) => setTimeout(r, 300));
+    window.__setVis('visible');
+    await new Promise((r) => setTimeout(r, 500));
+    const out = { context: a.c?.state ?? 'none', unlocked: a.unlocked };
+    delete document.visibilityState;
+    delete document.hidden;
+    return out;
+  });
+  t.check('showing the page doesn\u2019t start the sound by itself: the engine made at boot still waits for a press', boot.context === 'suspended' && boot.unlocked === false, boot);
   await page.evaluate(() => {
     const app = window.__fb.app;
     const orig = app.onPadPress;

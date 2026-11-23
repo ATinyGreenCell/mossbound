@@ -57,7 +57,8 @@ holds for both.
   whenever the Xbox guide opens. If the controllers stop responding (full screen can take the focus
   away), press the Xbox button twice.
 
-Progress lives in a shared **garden journal**. Each device keeps a copy, and the copies merge whenever you
+Progress lives in a shared **garden journal**. Each device keeps a copy (with a spare tucked away, in
+case the browser's storage for the site is ever wiped), and the copies merge whenever you
 play together: cleared levels, fireflies and best times are never lost, whoever played. Every level
 remembers where you got to, so **Continue** (or that level's own card) picks it back up from its last
 lit lantern, and replaying another level for a missing firefly never costs you that. A level can be
@@ -85,7 +86,8 @@ arrows, `/` jump, `.` hold, `,` tug, `;` dash, `[` vine, `M` ♥. The backquote 
 meter. Climbing walls (small sprout): push into a wall in the air to cling to it, up / down to climb,
 jump to leap off it. Kicking off a wall (either sprout): jump the moment you brush one in mid-air.
 The vine shot reaches for a ring, a branch or a corner you can't jump to — and, for the small sprout,
-a patch of soil, which grows a leaf you can both stand on.
+a patch of soil, which grows a leaf you can both stand on. The vine ties when you're beside each other
+with nothing in between; untied, TUG waves "come here" to your partner.
 
 ## Levels
 
@@ -111,12 +113,15 @@ straw hat, beret, star).
 - **Two paths at once.** A direct WebRTC connection (found through public Nostr relays) carries the
   game over an unordered, no-retransmit channel, so one lost packet never holds up the next. If a
   direct link can't be made (strict hotel or mobile networks), everything rides an end-to-end
-  encrypted relay over public MQTT brokers instead (AES-GCM, key derived from the room code). The
-  game switches between them automatically.
+  encrypted relay over public MQTT brokers instead (AES-GCM, key derived from the room code), one of
+  them on port 443 for networks that block everything else. The game switches between them
+  automatically, and each side reports what it hears, so a direct path that only fails one way is
+  noticed too.
 - **Dropouts are survivable.** If a partner goes quiet, the level holds still and says so, then carries
-  on when they're back — even after a long absence. If a page reloads, rejoin with the same code (the
-  host reopens the room): both continue from the last lantern. Moving platforms run on a shared
-  clock, so they match on both screens.
+  on when they're back — even after a long absence. A page that reloads goes back into its room by
+  itself (the host reopens it), and you both continue from the last lantern — tied, if you were. While
+  a partner's Wi-Fi blips, their seat stays theirs. Moving platforms run on a shared clock, so they
+  match on both screens.
 - If neither path works on some network, *Settings* takes the details of a TURN server.
 
 ## Development
@@ -143,6 +148,9 @@ or set `CHROME_PATH`.
 
 Development-only URL switches (stripped from production builds): `?fast`, `?noaudio`, `?grace=N`,
 `?relay`, `?p2p`, `?brokers=url,url`, `?norender`.
+
+The game's name is a working title. It lives in one file, `src/brand.ts`, and
+[docs/RENAMING.md](docs/RENAMING.md) covers a rename, including what must keep the old name.
 
 ### The debug ground
 

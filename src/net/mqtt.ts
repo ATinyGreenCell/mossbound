@@ -77,6 +77,8 @@ export class MqttClient {
   constructor(
     readonly url: string,
     private readonly timing: MqttTiming = TIMING,
+    /** a broker that asks every client to log in, even with a public name and password (see relay.ts) */
+    private readonly login?: { user: string; pass: string },
   ) {}
 
   connect() {
@@ -94,8 +96,10 @@ export class MqttClient {
     this.openedAt = this.lastRx = performance.now();
     ws.onopen = () => {
       const id = 'fb' + Math.random().toString(36).slice(2, 14);
-      // protocol "MQTT" v4, clean session, keepalive
-      ws.send(packet(0x10, str('MQTT'), [4, 2, 0, this.timing.keepalive], str(id)));
+      // protocol "MQTT" v4, clean session (and a user name and password, when the broker wants them), keepalive
+      const login = this.login;
+      const flags = 2 | (login ? 0xc0 : 0);
+      ws.send(packet(0x10, str('MQTT'), [4, flags, 0, this.timing.keepalive], str(id), ...(login ? [str(login.user), str(login.pass)] : [])));
     };
     ws.onmessage = (e) => {
       this.lastRx = performance.now();

@@ -110,6 +110,11 @@ export const LIFT_SPEED = 0.55;
 export const TUG_COOLDOWN = 0.75;
 /** the string must be at least this long for a tug to do anything */
 export const TUG_MIN = 2.2 * T;
+/**
+ * With no vine to tug, TUG is a "come here": a wave and a chirp to the partner (see Session.tug). This
+ * often at most, however fast it's pressed — a wave each press, mashed, would be a wall of chirps.
+ */
+export const HEY_COOLDOWN = 1;
 
 // ---- the vine shot (a grapple): hook a ring or a branch and swing, climb or haul your partner up
 /**

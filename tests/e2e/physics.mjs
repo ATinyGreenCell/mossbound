@@ -952,9 +952,27 @@ const honest = await page.evaluate(() => {
     sim.secs(0.5);
     const tied = sim.tether.tied;
     const apart = +(Math.abs(a.x - b.x) / T).toFixed(1);
+    // (what this screen tells the partner's)
+    const sent = [];
+    sim.s.send = (e) => sent.push(e);
+    const heys = () => sent.filter((e) => e.k === 'emote' && e.e === 'hey').length;
     sim.c[0].tugPressed = true;
     sim.frame();
     const thrown = Math.round(Math.hypot(b.vx, b.vy));
+    // …it is a "come here" instead: the tugger waves, and the partner's screen is told (the hey emote)
+    const waved = { emote: a.emote, partnerEmote: b.emote, told: heys() };
+    // mashed for 0.9 s — a press every third frame — it doesn't wave again; a second after the first, it does
+    for (let k = 0; k < 54; k++) {
+      if (k % 3 === 0) sim.c[0].tugPressed = true;
+      sim.frame();
+    }
+    waved.toldWhileMashed = heys() - waved.told;
+    sim.secs(0.2);
+    sim.c[0].tugPressed = true;
+    sim.frame();
+    waved.toldASecondLater = heys() - waved.told - waved.toldWhileMashed;
+    waved.partnerStill = Math.round(Math.hypot(b.vx, b.vy));
+    out.untiedHey = waved;
     sim.secs(0.5);
     sim.s.handleEvent({ k: 'tug' });
     const yankedNeverTied = Math.round(Math.hypot(a.vx, a.vy));
@@ -999,14 +1017,39 @@ const honest = await page.evaluate(() => {
   }
   // Tying the vine across a floor a tile thick — one on Fern Falls' roots arch, one under it, near
   // enough to tie — ran it straight through the rock (the route around needs two corners, and only one
-  // was ever tried) until someone happened to drag it round
+  // was ever tried) until someone happened to drag it round. VINE ties with a clear line between the
+  // two knots or not at all: refused, the press gets what any refused vine gets — a puff and a bonk.
   {
     const sim = __sim(1, ['tall', 'small']);
+    const au = window.__fb.audio;
+    const heard = [];
+    const play = au.play;
+    au.play = function (n, ...rest) { heard.push(n); return play.call(this, n, ...rest); };
+    let puffs = 0;
+    const burst = sim.s.fx.burst.bind(sim.s.fx);
+    sim.s.fx.burst = (...a) => { puffs++; return burst(...a); };
     sim.place(0, 131, 16);
     sim.place(1, 131, 18);
     sim.secs(0.3);
+    heard.length = 0;
+    puffs = 0;
     sim.shoot(1);
-    out.tieThrough = { tied: sim.tether.tied, ...through(sim) };
+    out.tieThrough = { tied: sim.tether.tied, bonk: heard.includes('bonk'), grab: heard.includes('grab'), puffs, ...through(sim) };
+    // up on the arch beside them, the same press ties
+    if (sim.tether.tied) sim.s.untieVine(sim.birds[0], false);
+    sim.place(1, 133, 16);
+    sim.secs(0.3);
+    heard.length = 0;
+    sim.shoot(1);
+    out.tieBeside = { tied: sim.tether.tied, grab: heard.includes('grab'), ...through(sim) };
+    // a tie the partner's screen made is taken as it comes, wherever their sprout is here: the two
+    // screens never disagree about the vine (the vine itself goes round the rock as best it can)
+    sim.s.untieVine(sim.birds[0], false);
+    sim.place(1, 131, 18);
+    sim.secs(0.3);
+    sim.s.vineFrom(true, sim.s.tieSeq + 1, 1);
+    out.tieFromPartner = { tied: sim.tether.tied };
+    au.play = play;
   }
   // Holding on ends the step your feet leave the ground. Planted on Fern Falls' cracking bridge as it
   // gives way, a sprout used to stay "holding on" for the rest of that step — in the air — which the
@@ -1064,19 +1107,109 @@ const waiting = await page.evaluate(async () => {
   return { boxTestsPerSecondWaiting: perSecond, stillWaiting, cameBackAfter: +(k / 120).toFixed(3), back: !g.ghost };
 });
 t.check(`a seed waiting for somewhere to land doesn't search every step (${waiting.boxTestsPerSecondWaiting} box tests a second), and comes back as soon as there is somewhere`, waiting.stillWaiting && waiting.boxTestsPerSecondWaiting < 20000 && waiting.back && waiting.cameBackAfter <= 0.15, waiting);
+
+// ---- a seed comes back BESIDE its partner (the 1.9 gameplay audit, design question 2). The nearest free
+// spot of all is the partner's own — feet level with theirs, dx = 0 — and that is where seeds came back,
+// on top of them, on every level the audit tried. Now: clear of their body, on the side the seed came
+// from, then the other; as before only when there is no room either side, and never inside rock.
+const beside = await page.evaluate(() => {
+  const T = 32;
+  const out = { levels: [], maps: {} };
+  /** where a seed came back, against its partner `a` (it died at fromX) */
+  const where = (world, a, b, fromX) => ({
+    back: !b.ghost,
+    dx: +(b.x - a.x).toFixed(1),
+    clear: Math.abs(b.x - a.x) >= (a.w + b.w) / 2,
+    fromSide: Math.sign(b.x - a.x) === Math.sign(fromX - a.x),
+    feetDy: +(b.y + b.h / 2 - (a.y + a.h / 2)).toFixed(1),
+    fits: world.boxFree(b.x, b.y, b.w, b.h),
+  });
+  // the shipped levels, the two of them at the start: each in turn falls and comes back
+  for (const li of [0, 1, 2]) {
+    for (const who of [1, 0]) {
+      const sim = __sim(li, ['tall', 'small']);
+      sim.secs(0.5);
+      const a = sim.birds[1 - who];
+      const b = sim.birds[who];
+      const fromX = b.x;
+      b.die('fall');
+      sim.until(() => !b.ghost, 3);
+      const at = where(sim.world, a, b, fromX);
+      // and once it has landed from its little hop: standing on the ground beside them, not on their head
+      sim.secs(0.6);
+      out.levels.push({ level: sim.L.def.id, who, ...at, landed: b.grounded, apartLanded: +(Math.abs(b.x - a.x) - (a.w + b.w) / 2).toFixed(1), feetDyLanded: +(b.y + b.h / 2 - (a.y + a.h / 2)).toFixed(1) });
+    }
+  }
+  // made-up ground: floor at row 14, edited by `f(x0, y0, x1, y1, char)`
+  const ground = (edit) => {
+    const W = 50, H = 18;
+    const g = Array.from({ length: H }, (_, y) => (y >= 14 ? '#' : ' ').repeat(W).split(''));
+    edit((x0, y0, x1, y1, c) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) g[y][x] = c; });
+    g[13][2] = '1'; g[13][4] = '2'; g[13][47] = 'N';
+    return { id: 'beside', name: 'b', subtitle: '', theme: 'garden', song: 'garden', map: g.map((r) => r.join('')), movers: [] };
+  };
+  /** the partner standing at column `partnerCol`; the other sprout falls at x = fromX and comes back */
+  const comeBack = (def, partnerCol, fromX, kinds = ['tall', 'small']) => {
+    const s = __rig(def, kinds);
+    s.tether.untie();
+    const [a, b] = s.birds;
+    s.place(0, partnerCol, 14);
+    s.secs(0.3);
+    b.x = fromX;
+    b.die('fall');
+    s.until(() => !b.ghost, 3);
+    return where(s.world, a, b, fromX);
+  };
+  const open = ground(() => {});
+  out.maps.fromLeft = comeBack(open, 20, 14 * T);
+  out.maps.fromRight = comeBack(open, 20, 27 * T);
+  out.maps.evenFromLeft = comeBack(open, 20, 14 * T, ['even', 'even']);
+  // straight down onto them: on their right
+  out.maps.fromAbove = comeBack(open, 20, 20 * T + 16);
+  // a wall five tiles high on its own side: no room there, so the other side
+  out.maps.wallOnItsSide = comeBack(ground((f) => f(10, 9, 19, 13, '#')), 20, 15 * T);
+  // it fell in the pit at the partner's feet: back on the ground beside them, not across the pit it fell in
+  out.maps.pitOnItsSide = comeBack(ground((f) => f(18, 14, 19, 17, ' ')), 20, 18.5 * T);
+  // a shaft a tile wide, walls four high: no room either side, so the nearest spot as ever — one its body fits
+  out.maps.noRoom = comeBack(ground((f) => { f(14, 10, 19, 13, '#'); f(21, 10, 26, 13, '#'); }), 20, 15 * T);
+  return out;
+});
+t.check(
+  'a seed comes back beside its partner, not on top of them: clear of their body, on the side it came from, standing level with them (garden, Fern Falls, the mill; each sprout in turn)',
+  beside.levels.every((r) => r.back && r.clear && r.fromSide && r.fits && Math.abs(r.feetDy) <= 4 && r.landed && r.apartLanded >= 0 && Math.abs(r.feetDyLanded) <= 1),
+  beside.levels,
+);
+t.check(
+  '…from either side, and from straight above (then on their right)',
+  ['fromLeft', 'fromRight', 'evenFromLeft', 'fromAbove'].every((k) => beside.maps[k].back && beside.maps[k].clear && (k === 'fromAbove' ? beside.maps[k].dx > 0 : beside.maps[k].fromSide) && beside.maps[k].fits),
+  beside.maps,
+);
+t.check(
+  '…on the other side when its own has no room, or only room across the pit it fell in',
+  ['wallOnItsSide', 'pitOnItsSide'].every((k) => beside.maps[k].back && beside.maps[k].clear && !beside.maps[k].fromSide && beside.maps[k].fits && Math.abs(beside.maps[k].dx) < 64),
+  { wall: beside.maps.wallOnItsSide, pit: beside.maps.pitOnItsSide },
+);
+t.check('…and with no room either side, somewhere its body fits, as before (never in rock)', beside.maps.noRoom.back && beside.maps.noRoom.fits, beside.maps.noRoom);
 t.check(
   'a ring dropped when the vine is tied afresh is let go of by its sprout too: pushing up doesn’t reel it into its partner',
   honest.staleHook.held && !honest.staleHook.flag && !honest.staleHook.vine && honest.staleHook.crept < 4 && honest.staleHook.gap1 > honest.staleHook.gap0 + 32,
   honest.staleHook,
 );
 t.check(
-  `a TUG with no vine tied does nothing, on either screen (sprouts ${honest.untiedTug.apart} tiles apart, partner thrown at ${honest.untiedTug.thrown} px/s)`,
+  `a TUG with no vine tied pulls nothing, on either screen (sprouts ${honest.untiedTug.apart} tiles apart, partner thrown at ${honest.untiedTug.thrown} px/s)`,
   !honest.untiedTug.tied && honest.untiedTug.apart > 2.2 && honest.untiedTug.thrown < 1 && honest.untiedTug.yankedNeverTied < 1 && honest.untiedTug.yankedAfterUntie < 1,
   honest.untiedTug,
 );
 t.check('a ring the partner shot, heard while this vine is untied, bends nothing', !honest.untiedHook.tied && honest.untiedHook.bends === 0 && honest.untiedHook.limit === 256 && !honest.untiedHook.partnerHolds, honest.untiedHook);
 t.check('a ring shot past a ledge with the partner below its lip: the vine goes round the corner, not through it', honest.shotLeg.hooked && honest.shotLeg.legsThroughRock === 0, honest.shotLeg);
-t.check('tying the vine across a floor a tile thick takes it round the end, not through the rock', honest.tieThrough.tied && honest.tieThrough.legsThroughRock === 0, honest.tieThrough);
+t.check(
+  'a TUG with no vine is a "come here": the tugger waves, the partner is told (the hey emote) and stays put — once a second at most, however fast it is pressed',
+  honest.untiedHey.emote === 'hey' && honest.untiedHey.told === 1 && honest.untiedHey.toldWhileMashed === 0 && honest.untiedHey.toldASecondLater === 1 && honest.untiedHey.partnerStill < 1 && honest.untiedHey.partnerEmote === null,
+  honest.untiedHey,
+);
+t.check('VINE across a floor a tile thick doesn’t tie (no clear line between the two): a puff and a bonk, as any refused vine', !honest.tieThrough.tied && honest.tieThrough.bonk && !honest.tieThrough.grab && honest.tieThrough.puffs >= 1, honest.tieThrough);
+t.check('…while beside each other on the same floor, the same press ties', honest.tieBeside.tied && honest.tieBeside.grab && honest.tieBeside.legsThroughRock === 0, honest.tieBeside);
+t.check('…and a tie the partner’s screen made is taken as it comes (the two screens never disagree about the vine)', honest.tieFromPartner.tied, honest.tieFromPartner);
 t.check('holding on lets go the step the ground goes from under you', honest.anchorFalls.anchored === false && honest.anchorFalls.afterSecs > 0.3, honest.anchorFalls);
 
 await browser.close();

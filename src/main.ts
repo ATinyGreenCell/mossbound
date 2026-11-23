@@ -5,15 +5,18 @@ import '@fontsource/fredoka/latin-600.css';
 import '@fontsource/fredoka/latin-700.css';
 import './style.css';
 import { App } from './app';
+import { BRAND } from './brand';
+import { esc } from './ui/menu';
 import { audio } from './audio/audio';
 import { registerWorker, watchInstall } from './core/install';
 import { IS_XBOX } from './core/platform';
 import { settings } from './core/settings';
 import { debugOn } from './core/debug';
 import { TouchControls } from './core/touch';
-import { Flow } from './flow';
+import { Flow, takeRoomNote } from './flow';
 import { preloadNet } from './net/link';
 import { comeBack, watchUpdates } from './update';
+import { saveRestored } from './core/save';
 
 // an invite link means online play is coming: fetch the networking code while the rest boots
 const invite = /(?:^|[#&])join=([A-Za-z0-9]{4})/.exec(location.hash);
@@ -70,13 +73,14 @@ watchInstall();
 
 async function boot() {
   const root = document.getElementById('app')!;
-  await loadFonts();
+  // (and the journal's spare copy, which a wiped localStorage comes back from: see core/save.ts)
+  await Promise.all([loadFonts(), saveRestored(600)]);
   let app: App;
   try {
     app = new App(root);
   } catch (err) {
     console.error(err);
-    root.innerHTML = `<div class="fatal"><b>mossbound</b><p>This browser can't draw the game. Try a recent Chrome, Safari, Edge or Firefox.</p></div>`;
+    root.innerHTML = `<div class="fatal"><b>${esc(BRAND.logo.join(''))}</b><p>This browser can't draw the game. Try a recent Chrome, Safari, Edge or Firefox.</p></div>`;
     return;
   }
   app.touch = new TouchControls(root, app.input);
@@ -87,14 +91,18 @@ async function boot() {
     armBackGuard();
   };
   const flow = new Flow(app);
+  // the online room this tab was in when it went away (a reload, by hand or by an update; a phone that
+  // dropped the page): taken here whatever this load does, since anywhere else it goes leaves it behind
+  const room = takeRoomNote();
   // invite links look like …/#join=K7QX — drop straight into that room
   if (invite) {
     history.replaceState(null, '', location.pathname + location.search);
     flow.online({ joinCode: invite[1].toUpperCase() });
   } else if (debugLevel && debugOn()) {
     flow.debug(Number(debugLevel[1]) - 1);
-  } else if (!comeBack(app, flow)) {
-    // (comeBack: this load is an update taking effect — it puts the players back where they were)
+  } else if (!comeBack(app, flow) && !(room && flow.rejoinRoom(room))) {
+    // (comeBack: this load is an update taking effect — it puts the players back where they were;
+    // rejoinRoom: back into the room, as REJOIN / REOPEN would)
     flow.title();
   }
   app.start();
