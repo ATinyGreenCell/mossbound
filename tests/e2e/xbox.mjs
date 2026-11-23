@@ -4,7 +4,7 @@
 // - controller buttons can also arrive as key presses, with no key code or as ENTER;
 // - Edge may keep ☰ for its own menu;
 // - focus can be lost to full screen or the guide, and then no controller reaches the page.
-import { XBOX_UA, frames, launch, open, padAxis, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
+import { XBOX_UA, frames, gameTime, launch, mapHere, mapStill, open, padAxis, padPress, reporter, screenName, sleep, storyOpen, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const page = await open(browser, { ua: XBOX_UA, pads: 2, hidePads: true });
@@ -29,12 +29,22 @@ for (let i = 0; i < 2; i++) {
 const stay = await page.evaluate(() => ({ href: location.href, screen: window.__fb?.app?.current?.constructor?.name ?? null })).catch((e) => ({ error: String(e) }));
 t.check('Ⓑ in browsing controls ("back a page") never leaves the game', stay.href === href && stay.screen === 'TitleScreen', stay);
 
-// the press that shows the controllers to the page is the player's first move: ↓ to PLAY ON ONE SCREEN
+// the press that shows the controllers to the page is the player's first move: ↓ to PLAY ON ONE SCREEN.
+// (Down for two frames exactly, pressed and let go from inside them, as padPress does: held any longer,
+// on a machine drawing three frames a second, it is a held direction, and a held direction repeats.)
 const sel0 = await page.evaluate(() => window.__fbTitle.list.sel);
-await page.evaluate((b) => { window.__pads[0].buttons[b] = { pressed: true, touched: true, value: 1 }; window.__padsHidden = false; }, DOWN);
-await frames(page, 3);
-await press(0, DOWN, false);
-await frames(page, 2);
+await page.evaluate((b) => new Promise((done) => {
+  let k = 0;
+  const f = () => {
+    if (k === 0) {
+      window.__pads[0].buttons[b] = { pressed: true, touched: true, value: 1 };
+      window.__padsHidden = false;
+    } else if (k === 2) window.__pads[0].buttons[b] = { pressed: false, touched: false, value: 0 };
+    if (k++ < 4) requestAnimationFrame(f);
+    else done();
+  };
+  requestAnimationFrame(f);
+}), DOWN);
 const sel1 = await page.evaluate(() => window.__fbTitle.list.sel);
 t.check('the press that shows a controller to the page counts', sel0 === 0 && sel1 === 1, { sel0, sel1 });
 
@@ -81,7 +91,14 @@ await padPress(page, 0, A);
 await waitFor(async () => (await screenName(page)) === 'LevelSelect', 5000, 'level select');
 const seats = await page.evaluate(() => window.__fb.flow.seats);
 t.check('each controller takes a sprout', seats[0] === 'pad1' && seats[1] === 'pad0', seats);
-await sleep(500);
+await waitFor(() => storyOpen(page), 5000, 'the storybook');
+await gameTime(page, 0.4);
+await padPress(page, 0, A);
+await waitFor(async () => !(await storyOpen(page)), 5000, 'the storybook closed');
+await gameTime(page, 0.5);
+await padPress(page, 0, 15);
+await mapStill(page);
+t.check('the d-pad walks the pair to Mossy Creek', (await mapHere(page)) === 'garden', await mapHere(page));
 await padPress(page, 0, A);
 await waitFor(async () => (await screenName(page)) === 'Session', 5000, 'session');
 await sleep(800);

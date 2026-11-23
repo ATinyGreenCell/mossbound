@@ -1,7 +1,7 @@
 // Two players on one screen with two (emulated) Xbox controllers: claim seats, pick a level, both
 // birds move independently, pause/resume, tug, controllers dropping out and coming back (in each
 // other's slots, too), level clear.
-import { frames, gameTime, launch, open, padAxis, padPress, reporter, screenName, sleep, waitFor } from './harness.mjs';
+import { frames, gameTime, launch, mapHere, mapStill, open, padAxis, padPress, reporter, screenName, sleep, storyOpen, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const page = await open(browser, { pads: 2 });
@@ -33,13 +33,16 @@ await waitFor(async () => (await screenName(page)) === 'LevelSelect', 5000, 'lev
 const seats = await page.evaluate(() => window.__fb.flow.seats);
 t.check('each controller claims a seat', seats[0] === 'pad0' && seats[1] === 'pad1', seats);
 await sleep(400);
-// a fresh journal lights the two-player test course, the first card (course.mjs covers it): this is
-// about The Garden, one card along, whose clear is saved and whose NEXT LEVEL is Woodland Rings
-const lit = () => page.evaluate(() => document.querySelector('.levels-screen .card.sel')?.dataset.act ?? null);
-const litFirst = await lit();
+// a fresh journal opens the map at Home, its storybook open: Ⓐ closes it, the d-pad walks to Mossy
+// Creek (whose clear is saved), and Ⓐ goes in (map.mjs covers the map itself)
+await waitFor(() => storyOpen(page), 5000, 'the storybook');
+await gameTime(page, 0.4);
+await padPress(page, 0, A);
+await waitFor(async () => !(await storyOpen(page)), 5000, 'the storybook closed');
+await gameTime(page, 0.5);
 await padPress(page, 0, RIGHT);
-await waitFor(async () => (await lit()) === 'lvl:0', 3000, 'the garden lit').catch(() => undefined);
-t.check(`the d-pad steps from the test course to The Garden (${litFirst} → ${await lit()})`, litFirst === 'course' && (await lit()) === 'lvl:0');
+await mapStill(page);
+t.check(`the d-pad walks from Home to Mossy Creek (${await mapHere(page)})`, (await mapHere(page)) === 'garden');
 await padPress(page, 0, A);
 await waitFor(async () => (await screenName(page)) === 'Session', 5000, 'session');
 await sleep(800);
@@ -130,11 +133,21 @@ const cleared = await waitFor(() => page.evaluate(() => !!document.querySelector
 // of a second, half a second of waiting is one poll, so a single press here landed inside the
 // hold-off and was dropped exactly as designed. Pressing once and concluding the level would not
 // advance was the test mistaking that for a fault.
+const back = await waitFor(async () => {
+  await padPress(page, 0, A);
+  return page.evaluate(() => window.__fb.app.current?.constructor.name === 'LevelSelect');
+}, 8000, 'back on the map').catch(() => false);
+const onStop = await mapHere(page);
+t.check('both in the nest clears the level; NEXT LEVEL goes back to the map, on Mossy Creek', cleared && back && onStop === 'garden', { onStop });
+// …where the path to Fern Falls has opened: the d-pad walks there and Ⓐ goes in
+await gameTime(page, 0.8);
+await padPress(page, 0, RIGHT);
+await mapStill(page);
 const next = await waitFor(async () => {
   await padPress(page, 0, A);
   return page.evaluate(() => window.__fbSession?.L?.index === 1);
 }, 8000, 'level 2').catch(() => false);
-t.check('both in the nest clears the level; NEXT LEVEL', cleared && next);
+t.check('the d-pad walks on to Fern Falls, and Ⓐ goes in', next, await mapHere(page));
 const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('mossbound.save.v3') ?? '{}'));
 t.check('the clear is saved', saved.unlocked >= 1 && saved.levels?.garden?.clears === 1, { unlocked: saved.unlocked });
 await page.screenshot({ path: `${process.env.E2E_OUT ?? './.out'}/local-level2.png` });

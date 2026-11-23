@@ -1,5 +1,6 @@
 import { rng, TAU } from '../core/math';
-import { canvasEpoch } from './renderer';
+import { canvasEpoch, settle } from './renderer';
+import { prepareTilesSoon } from './tiles';
 import type { Theme } from './theme';
 
 interface LayerCanvas {
@@ -13,12 +14,13 @@ interface LayerCanvas {
 }
 
 /**
- * Paint, and note which part of the canvas the paint touched: the bounding box (device pixels) of every
- * fill, stroke, rect and image — conservatively (a curve's box takes in its control points, an arc its
+ * Watch what's painted, noting which part of the canvas it touched: the bounding box (device pixels)
+ * of every fill, stroke, rect and image — conservatively (a curve's box takes in its control points, an arc its
  * whole circle, a stroke its width and any mitre), so the box always holds every pixel painted. Null when
  * nothing was painted. Something it can't bound (text, pixels put straight in) counts as everything.
+ * The painting may go on over several steps: the function returned ends the watch and gives the box.
  */
-function paintedBox(ctx: CanvasRenderingContext2D, w: number, h: number, paint: () => void): [number, number, number, number] | null {
+function watch(ctx: CanvasRenderingContext2D, w: number, h: number): () => [number, number, number, number] | null {
   const P = CanvasRenderingContext2D.prototype;
   let box: [number, number, number, number] | null = null;
   // the current path's box, and whether it has a corner a mitred stroke could poke out of
@@ -140,12 +142,10 @@ function paintedBox(ctx: CanvasRenderingContext2D, w: number, h: number, paint: 
     };
   }
   Object.assign(ctx, own);
-  try {
-    paint();
-  } finally {
+  return () => {
     for (const k of Object.keys(own)) delete (ctx as unknown as Record<string, unknown>)[k];
-  }
-  return box;
+    return box;
+  };
 }
 
 /** A theme's scenery painted for one screen height: what every Backdrop of that theme draws. */
@@ -191,7 +191,12 @@ function tidy() {
   for (const p of idle.slice(KEEP_IDLE)) free(p);
 }
 
-function paint(th: Theme, H: number): Painting {
+/**
+ * A theme's scenery painted for height H, a step at a time: the sky, sun and clouds first, then a layer
+ * a step (a layer is most of the work). See Backdrop.prepare.
+ */
+function* paint(th: Theme, H: number, stepped = false): Generator<void, Painting> {
+  const epoch = canvasEpoch;
   // sky: a tall gradient strip, stretched to the screen each frame
   const sky = document.createElement('canvas');
   sky.width = 4;
@@ -225,29 +230,6 @@ function paint(th: Theme, H: number): Painting {
   // blitting the clear part every frame was a full screen of blending for nothing (a software renderer
   // pays ~6 ms a layer at 720p). So each is painted whole, then only the part with anything in it is
   // kept, copied pixel for pixel into a canvas of its own.
-  const layers = th.layers.map((layer, i) => {
-    const w = Math.ceil(layer.period * H);
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = H;
-    const ctx = canvas.getContext('2d')!;
-    const b = paintedBox(ctx, w, H, () => layer.paint(ctx, w, H, rng(1000 + i * 77)));
-    if (!b) {
-      canvas.width = canvas.height = 0;
-      return { canvas, w, left: 0, top: H };
-    }
-    const left = Math.max(0, Math.floor(b[0]));
-    const top = Math.max(0, Math.floor(b[1]));
-    const right = Math.min(w, Math.ceil(b[2]));
-    const bottom = Math.min(H, Math.ceil(b[3]));
-    if (left === 0 && top === 0 && right === w && bottom === H) return { canvas, w, left: 0, top: 0 };
-    const part = document.createElement('canvas');
-    part.width = Math.max(1, right - left);
-    part.height = Math.max(1, bottom - top);
-    part.getContext('2d')!.drawImage(canvas, left, top, part.width, part.height, 0, 0, part.width, part.height);
-    canvas.width = canvas.height = 0;
-    return { canvas: part, w, left, top };
-  });
   // clouds
   const clouds: HTMLCanvasElement[] = [];
   if (th.clouds) {
@@ -271,7 +253,59 @@ function paint(th: Theme, H: number): Painting {
       clouds.push(c);
     }
   }
-  return { theme: th, H, epoch: canvasEpoch, sky, sunGlow, clouds, layers, users: new Set(), used: ++clock };
+  // (each step has the GPU paint what it drew there and then: see settle)
+  if (stepped) for (const c of [sunGlow, ...clouds]) if (c) settle(c);
+  yield;
+  const layers: LayerCanvas[] = [];
+  for (const [i, layer] of th.layers.entries()) {
+    layers.push(yield* paintLayer(layer, i, H, stepped));
+    if (i < th.layers.length - 1) yield;
+  }
+  return { theme: th, H, epoch, sky, sunGlow, clouds, layers, users: new Set(), used: ++clock };
+}
+
+
+/** A parallax layer painted whole, then only the part of it with anything in it kept. */
+function* paintLayer(layer: Theme['layers'][number], i: number, H: number, stepped: boolean): Generator<void, LayerCanvas> {
+  {
+    const w = Math.ceil(layer.period * H);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+    // (a step at a time where the layer can, when the painting is being done a step at a time)
+    const done = watch(ctx, w, H);
+    let b: [number, number, number, number] | null;
+    try {
+      if (stepped && layer.steps) {
+        for (const step of layer.steps(ctx, w, H, rng(1000 + i * 77))) {
+          settle(canvas);
+          yield step;
+        }
+      } else layer.paint(ctx, w, H, rng(1000 + i * 77));
+    } finally {
+      b = done();
+    }
+    if (!b) {
+      canvas.width = canvas.height = 0;
+      return { canvas, w, left: 0, top: H };
+    }
+    const left = Math.max(0, Math.floor(b[0]));
+    const top = Math.max(0, Math.floor(b[1]));
+    const right = Math.min(w, Math.ceil(b[2]));
+    const bottom = Math.min(H, Math.ceil(b[3]));
+    if (left === 0 && top === 0 && right === w && bottom === H) {
+      if (stepped) settle(canvas);
+      return { canvas, w, left: 0, top: 0 };
+    }
+    const part = document.createElement('canvas');
+    part.width = Math.max(1, right - left);
+    part.height = Math.max(1, bottom - top);
+    part.getContext('2d')!.drawImage(canvas, left, top, part.width, part.height, 0, 0, part.width, part.height);
+    canvas.width = canvas.height = 0;
+    if (stepped) settle(part);
+    return { canvas: part, w, left, top };
+  }
 }
 
 /**
@@ -288,6 +322,8 @@ function paint(th: Theme, H: number): Painting {
 export class Backdrop {
   private stars: Float32Array;
   private p: Painting | null = null;
+  /** a painting under way a step at a time (see prepare), and the height it's for */
+  private job: { H: number; steps: Generator<void, Painting> } | null = null;
 
   constructor(readonly theme: Theme) {
     const r = rng(777);
@@ -333,21 +369,68 @@ export class Backdrop {
   }
 
   /** The painting to draw at height H: this one's own if it still fits, another's of the theme, or a new one. */
-  private paintingFor(H: number, exact: boolean): Painting {
-    let p = this.p;
-    if (!p || p.epoch !== canvasEpoch || !fits(p.H, H, exact)) {
-      p = paintings.find((q) => q.theme === this.theme && q.epoch === canvasEpoch && fits(q.H, H, exact)) ?? null;
-      if (!p) {
-        p = paint(this.theme, H);
-        paintings.push(p);
-      }
-      if (this.p && this.p !== p) this.p.users.delete(this);
-      p.users.add(this);
-      this.p = p;
-      tidy();
+  private paintingFor(ctx: CanvasRenderingContext2D, W: number, H: number, exact: boolean): Painting {
+    let p = this.ready(H, exact);
+    if (!p) {
+      // (a painting under way for this height is finished now; any other is started and finished)
+      if (!this.job || this.job.H !== H) this.job = { H, steps: paint(this.theme, H) };
+      let n = this.job.steps.next();
+      while (!n.done) n = this.job.steps.next();
+      p = this.adopt(n.value, W, ctx);
     }
     p.used = ++clock;
     return p;
+  }
+
+  /** This backdrop's painting for height H if it has one, or another backdrop of the theme does (then shared). */
+  private ready(H: number, exact: boolean): Painting | null {
+    const own = this.p;
+    if (own && own.epoch === canvasEpoch && fits(own.H, H, exact)) return own;
+    const p = paintings.find((q) => q.theme === this.theme && q.epoch === canvasEpoch && fits(q.H, H, exact));
+    if (!p) return null;
+    if (own && own !== p) own.users.delete(this);
+    p.users.add(this);
+    this.p = p;
+    tidy();
+    return p;
+  }
+
+  /** A painting just finished: it's this backdrop's, and anyone's of the theme. */
+  private adopt(p: Painting, W: number, screen: CanvasRenderingContext2D): Painting {
+    this.job = null;
+    paintings.push(p);
+    if (this.p && this.p !== p) this.p.users.delete(this);
+    p.users.add(this);
+    this.p = p;
+    tidy();
+    // (and the theme's tiles in a moment, a step at a time: the first frame of play then paints neither)
+    prepareTilesSoon(this.theme, W, p.H, screen);
+    return p;
+  }
+
+  /**
+   * Get the painting for a W × H screen ready a step at a time — the sky, sun and clouds, then a layer
+   * a call — rather than in the one frame that first draws it: true once it is (drawing then paints
+   * nothing). A level entered with no painting of its scenery yet calls this a frame at a time.
+   */
+  prepare(ctx: CanvasRenderingContext2D, W: number, H: number): boolean {
+    if (this.ready(H, false)) return true;
+    if (this.job && this.job.H !== H) this.job = null;
+    this.job ??= { H, steps: paint(this.theme, H, true) };
+    const n = this.job.steps.next();
+    if (!n.done) return false;
+    this.adopt(n.value, W, ctx);
+    return true;
+  }
+
+  /** The sky alone, from the theme's colours (no painting needed): the curtain a level is revealed from. */
+  drawSky(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, this.theme.sky[0]);
+    g.addColorStop(0.55, this.theme.sky[1]);
+    g.addColorStop(1, this.theme.sky[2]);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
   }
 
   /**
@@ -358,8 +441,10 @@ export class Backdrop {
    * kept for good, like the title's still, wants it crisp)
    */
   draw(ctx: CanvasRenderingContext2D, W: number, H: number, camX: number, camBottom: number, levelBottom: number, scale: number, t: number, exact = false) {
-    const p = this.paintingFor(H, exact);
+    const p = this.paintingFor(ctx, W, H, exact);
     const th = this.theme;
+    // (all of it at the alpha it's asked for: a level's curtain fades out as this)
+    const alpha = ctx.globalAlpha;
     // how much bigger the screen is than what was painted (1: drawn as painted, pixel for pixel)
     const k = H / p.H;
     // The sky strip is one pixel row per screen row whenever the screen is 64–1024 rows tall: drawn
@@ -373,18 +458,18 @@ export class Backdrop {
       ctx.drawImage(sky, 0, 0, W, H);
       ctx.imageSmoothingEnabled = true;
     } else ctx.drawImage(sky, 0, 0, W, H);
-    // the higher the camera, the further the backdrop sinks (most visible on the tower)
+    // the higher the camera, the further the backdrop sinks (most visible on the great falls, a climb)
     const rise = Math.max(0, levelBottom - camBottom) * scale;
     if (th.stars) {
       // (the colour is the same for every star: setting it per star cost a colour parse each time)
       ctx.fillStyle = '#fff8e0';
       for (let i = 0; i < th.stars; i++) {
         const a = 0.35 + 0.65 * Math.abs(Math.sin(t * 0.8 + this.stars[i * 3 + 2]));
-        ctx.globalAlpha = a;
+        ctx.globalAlpha = alpha * a;
         const s = i % 9 === 0 ? 2.4 : 1.4;
         ctx.fillRect(this.stars[i * 3] * W, this.stars[i * 3 + 1] * H, s, s);
       }
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = alpha;
     }
     if (p.sunGlow && th.sun) {
       const sw = p.sunGlow.width * k;
@@ -410,7 +495,7 @@ export class Backdrop {
       ctx.fill();
     }
     if (th.clouds && p.clouds.length) {
-      ctx.globalAlpha = th.clouds.alpha;
+      ctx.globalAlpha = alpha * th.clouds.alpha;
       for (let i = 0; i < th.clouds.count; i++) {
         const c = p.clouds[i % p.clouds.length];
         const cw = c.width * k;
@@ -420,7 +505,7 @@ export class Backdrop {
         if (k === 1) ctx.drawImage(c, x, y);
         else ctx.drawImage(c, x, y, cw, c.height * k);
       }
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = alpha;
     }
     for (let i = 0; i < p.layers.length; i++) {
       const L = p.layers[i];

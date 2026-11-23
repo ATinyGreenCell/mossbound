@@ -1,7 +1,7 @@
 // Menus with every kind of input: keyboard through the title and settings (which persist), a
 // controller through the controls card and out of the room-code and name boxes, phone layout, Xbox,
 // the level select's CONTINUE, a fresh room code over an old one, and guards against a stray Ⓐ.
-import { SLOW, XBOX_UA, frames, launch, open, padPress, reporter, screenName, slowFrames, sleep, waitFor } from './harness.mjs';
+import { SLOW, STORIES_SEEN, XBOX_UA, frames, gameTime, launch, mapHere, mapStill, open, padPress, reporter, screenName, slowFrames, sleep, storyOpen, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -145,91 +145,62 @@ const guestRoom = (page) => page.evaluate(() => {
   await page.evaluate(() => { window.__fb.flow.mode = 'local'; window.__fb.flow.levels(); });
   await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
   await sleep(300);
-  const panel = await page.evaluate(() => { const p = document.querySelector('.panel'); const r = p.getBoundingClientRect(); return { inside: r.top >= 0 && r.bottom <= innerHeight + 1, scrolls: p.scrollHeight > p.clientHeight }; });
-  t.check('level select fits (scrolls inside its card if it must)', panel.inside, panel);
+  const panel = await page.evaluate(() => {
+    const box = (el) => el.getBoundingClientRect();
+    const card = document.querySelector('.map-screen .ow-card');
+    const side = [...document.querySelectorAll('.map-screen .map-side > *')];
+    const all = [card, ...side].filter(Boolean).map(box);
+    const c = box(card);
+    const s = side.map(box);
+    return { inside: all.every((r) => r.top >= 0 && r.bottom <= innerHeight + 1 && r.left >= 0 && r.right <= innerWidth + 1), apart: s.every((r) => r.left >= c.right || r.top >= c.bottom || r.bottom <= c.top), n: all.length };
+  });
+  t.check('the map’s card and its corner fit a phone held sideways, side by side', panel.inside && panel.apart && panel.n >= 2, panel);
   await page.screenshot({ path: './.out/menus-phone-levels.png' });
   t.check('no errors (phone)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
 
-// ---- level select: a run to continue is what Ⓐ picks; the highlight survives the partner's save
+// ---- the map: it opens on the run to continue (Ⓐ continues it), the partner's save leaves the pair where
+// they stand, and walking back over ground already painted paints nothing again
 {
   const run = { level: 1, cp: 0, seeds: [1, 2], feathers: 0, time: 30, with: 'Pip & Bo' };
-  const page = await open(browser, { storage: { 'mossbound.save.v2': { unlocked: 6, levels: {}, finished: false, run, runAt: 1 } } });
+  // (PERFORMANCE: high — the resolution stays put: a machine drawing three frames a second would have the
+  // governor step it down, and a map drawn at a new size is painted again at that size, walking or not)
+  const page = await open(browser, { storage: { 'mossbound.save.v2': { unlocked: 6, levels: {}, finished: false, run, runAt: 1 }, 'mossbound.settings.v1': { ...STORIES_SEEN, perf: 'high' } } });
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
   await page.evaluate(() => { window.__fb.flow.mode = 'local'; window.__fb.flow.levels(); });
   await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
-  await sleep(300);
-  const act = () => page.evaluate(() => document.querySelector('.sel')?.dataset.act ?? null);
-  const first = await act();
-  await key(page, 'ArrowRight');
-  const moved = await act();
+  await gameTime(page, 0.5);
+  const first = await mapHere(page);
+  const card = await page.evaluate(() => { const c = document.querySelector('.map-screen .ow-card'); return { act: c?.dataset.act ?? null, text: c?.textContent.replace(/\s+/g, ' ') ?? '' }; });
+  await key(page, 'ArrowLeft');
+  await mapStill(page);
+  const moved = await mapHere(page);
   await page.evaluate(() => window.__fb.app.current.onSave());
-  const kept = await act();
-  t.check('CONTINUE is highlighted; a rebuild keeps the highlight where it was', first === 'continue' && moved !== 'continue' && kept === moved, { first, moved, kept });
-  // scrolling through the levels doesn't repaint the scenery behind them at every step
-  // (first the scenery for the step above settles and paints — that one isn't part of the scroll)
-  await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'scenery settled');
-  await frames(page, 3);
-  await page.evaluate(() => {
-    const get = HTMLCanvasElement.prototype.getContext;
-    window.__paints = 0;
-    HTMLCanvasElement.prototype.getContext = function (...a) { if (this.id !== 'view') window.__paints++; return get.apply(this, a); };
-  });
-  // (one frame between presses — quick scrolling: a frame is at most 0.1 s of game time, inside the
-  // highlight's 0.15 s settle, however slow a busy machine makes the frames)
-  // ←/→ walk along a row of cards (↑/↓ go between rows), so the scroll starts at the first card of the
-  // longest row of levels, and takes as many steps as that row has room for — up to four
-  const steps = await page.evaluate(() => {
-    const L = window.__fb.app.current.list;
-    const cards = L.items().filter((el) => el.dataset.act?.startsWith('lvl:'));
-    const rows = new Map();
-    for (const el of cards) rows.set(el.offsetTop, [...(rows.get(el.offsetTop) ?? []), el]);
-    const row = [...rows.values()].sort((a, b) => b.length - a.length)[0];
-    L.sel = L.items().indexOf(row[0]);
-    L.highlight();
-    return Math.min(4, row.length - 1);
-  });
-  // (a frame first: the new highlight starts its settle in the game's next frame, and a look before that
-  // finds the old settle long over. Software rendering draws frames in pairs, one 5 ms after the other,
-  // and the start card's scenery then painted inside the quick scroll below: 17 paints, not 8)
   await frames(page, 2);
-  await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'scenery settled again').catch(() => undefined);
-  await frames(page, 3);
-  const from = await act();
-  // Quick: four steps in four frames, driven from inside the page. It used to be page.keyboard.press
-  // in a loop out here, and each of those is a round trip to the browser — nothing on a machine
-  // drawing sixty frames a second, but a whole frame of game time on one drawing three, which let the
-  // highlight's 0.15 s settle elapse between steps and repaint the scenery at every one. The point of
-  // the check is that a QUICK scroll paints once, so the scroll has to actually be quick, and the only
-  // way to guarantee that is to stop leaving the page between presses.
-  await page.evaluate(() => { window.__paints = 0; });
-  await page.evaluate((steps) => new Promise((done) => {
-    let n = 0;
-    const press = () => {
-      if (n++ >= steps) return done();
-      for (const type of ['keydown', 'keyup']) window.dispatchEvent(new KeyboardEvent(type, { code: 'ArrowRight', key: 'ArrowRight', bubbles: true }));
-      requestAnimationFrame(press);
-    };
-    requestAnimationFrame(press);
-  }), steps);
-  const to = await act();
-  await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, 'the scenery settles once').catch(() => undefined);
-  await frames(page, 3);
-  const quick = await page.evaluate(() => window.__paints);
-  // Slow: the same four steps back, each one allowed to settle before the next. That is what "a
-  // backdrop per step" costs, measured on the machine that is actually running — so what the check
-  // compares is one paint against four, not a number against a ceiling. The ceiling was 10, fitted
-  // to one renderer on one machine: it says nothing about the behaviour either way, and it fails the
-  // day a theme gains a layer. (It was reading 12 and 19 on a runner drawing software frames.)
-  await page.evaluate(() => { window.__paints = 0; });
-  for (let i = 0; i < steps; i++) {
-    await key(page, 'ArrowLeft');
-    await waitFor(() => page.evaluate(() => window.__fb.app.current.settle <= 0), 3000, `step ${i + 1} settles`).catch(() => undefined);
-    await frames(page, 3);
-  }
-  const slow = await page.evaluate(() => window.__paints);
-  t.check('a quick scroll paints one backdrop where a slow one paints at every step', steps >= 2 && quick * 2 <= slow && to !== from, { steps, quick, slow, from, to });
+  const kept = await mapHere(page);
+  t.check('the map opens on the run to continue, its card is CONTINUE (Ⓐ); the partner’s save leaves the pair where they stand', first === 'woods' && card.act === 'continue' && /continue from lantern 1/.test(card.text) && /Pip & Bo/.test(card.text) && moved === 'garden' && kept === 'garden', { first, card, moved, kept });
+  // there and back: the way back is painted already. (The map is painted in square chunks, kept while
+  // they're near; with nothing to do it paints one more just off screen, the way the camera is heading —
+  // new ground, which is fine. What mustn't happen is painting a chunk it already has.)
+  await key(page, 'ArrowRight');
+  await mapStill(page);
+  await gameTime(page, 0.5);
+  await page.evaluate(() => { window.__chunks = new Map(window.__fb.app.current.map.chunks.map); });
+  await key(page, 'ArrowLeft');
+  await mapStill(page);
+  await gameTime(page, 0.5);
+  const back = await page.evaluate(() => {
+    const now = window.__fb.app.current.map.chunks.map;
+    let again = 0;
+    let gone = 0;
+    for (const [k, c] of window.__chunks) {
+      if (!now.has(k)) gone++;
+      else if (now.get(k) !== c) again++;
+    }
+    return { again, gone, had: window.__chunks.size, has: now.size };
+  });
+  t.check(`walking back over the map just walked paints none of it again (${back.again} of ${back.had} chunks)`, back.had > 0 && back.again === 0 && back.gone === 0, back);
   t.check('no errors (level select)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -513,17 +484,23 @@ const guestRoom = (page) => page.evaluate(() => {
   await key(page, 'Enter');
   const went = await waitFor(async () => (await screenName(page)) === 'LocalScreen', 3000, 'one-screen lobby').catch(() => false);
   t.check('a mouse resting on a button takes the highlight; ENTER presses that one', title.sel === 'local' && title.like.length === 1 && !!went, { title, went: !!went });
-  // the level-select cards the same way, and the picked level follows the highlight
+  // the map's buttons the same way: a pointer resting on SWAP takes the highlight, and ENTER presses SWAP
+  // rather than going into the level the pair stands on
   await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.levels(); });
   await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
-  await sleep(450);
-  const c = await middleOf('.card[data-act="lvl:3"]');
+  await gameTime(page, 0.5);
+  if (await storyOpen(page)) {
+    await key(page, 'Enter');
+    await gameTime(page, 0.5);
+  }
+  const k0 = await page.evaluate(() => window.__fb.flow.kinds().join());
+  const c = await middleOf('.map-screen [data-act="swap"]');
   await page.mouse.move(c.x - 40, c.y);
   await page.mouse.move(c.x, c.y, { steps: 4 });
   await sleep(300);
-  const cards = await gold('.levels-screen .card');
-  const picked = await page.evaluate(() => document.querySelector('.card.picked')?.dataset.act ?? null);
-  t.check('and on the level-select cards (the pick follows the highlight)', cards.sel === 'lvl:3' && cards.like.length === 1 && picked === 'lvl:3', { cards, picked });
+  await key(page, 'Enter');
+  const k1 = await page.evaluate(() => ({ kinds: window.__fb.flow.kinds().join(), screen: window.__fb.app.current.constructor.name }));
+  t.check('and on the map: ENTER presses the button the pointer rests on, not the level', k1.kinds !== k0 && k1.screen === 'LevelSelect', { k0, k1 });
   t.check('no errors (mouse highlight)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -562,21 +539,22 @@ const guestRoom = (page) => page.evaluate(() => {
   await page.close();
 }
 
-// ---- the level select rebuilds whenever news arrives from the partner: a tap just after one of
-// those mustn't be swallowed by the guard meant for the tap that opened the screen
+// ---- the map takes news from the partner (their save, a profile): a tap just after one of those mustn't
+// be swallowed by the guard meant for the tap that opened the screen
 {
-  const page = await open(browser);
+  const page = await open(browser, { storage: { 'mossbound.settings.v1': STORIES_SEEN } });
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
   await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.levels(); });
   await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
   await sleep(500);
+  await page.evaluate(() => window.__fb.app.current.map.standOn('garden'));
   // the partner's half of the save arrives (a profile, a sprout swap or a connection blip does the
-  // same), and the player taps a level a frame or two later
+  // same), and the player taps the card a frame or two later
   await page.evaluate(() => window.__fb.app.current.onSave());
   await frames(page, 2);
-  await page.click('.card[data-act="lvl:0"]');
+  await page.click('.map-screen .ow-card[data-act="go"]');
   const started = await waitFor(async () => (await screenName(page)) === 'Session', 3000, 'the level').catch(() => false);
-  t.check('a tap on a level card right after the partner’s save arrives starts the level', !!started, { screen: await screenName(page) });
+  t.check('a tap on the card right after the partner’s save arrives starts the level', !!started, { screen: await screenName(page) });
   t.check('no errors (rebuilt level select)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }
@@ -673,42 +651,8 @@ const guestRoom = (page) => page.evaluate(() => {
   await page.close();
 }
 
-// ---- the level select's highlight is unmistakable. Whatever else a card wears — the dashed outline of
-// the level the scenery shows, CONTINUE's gold one, the test course's dashed border — the card Ⓐ will
-// press looks like the highlighted card, and no other card does.
-{
-  const page = await open(browser);
-  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
-  const looks = () => page.evaluate(() => [...document.querySelectorAll('.levels-screen .card')].map((c) => {
-    const s = getComputedStyle(c);
-    return { act: c.dataset.act ?? 'locked', sel: c.classList.contains('sel'), look: `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor} ${s.outlineOffset}` };
-  }));
-  const toLevels = async () => {
-    await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.levels(); });
-    await waitFor(() => page.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 5000, 'level select');
-    await sleep(300);
-  };
-  await toLevels();
-  const fresh = await looks();
-  const highlight = fresh.find((c) => c.sel)?.look;
-  // a run under way in Fern Falls (from its first lantern): CONTINUE is what Ⓐ picks
-  await page.evaluate(() => { const s = window.__fb.save.save; s.unlocked = 2; s.levels.garden = { clears: 1, feathers: 1, time: 90 }; window.__fb.flow.enterLevel(1); });
-  await waitFor(() => page.evaluate(() => window.__fbSession?.L.index === 1 && window.__fb.app.current === window.__fbSession), 8000, 'Fern Falls');
-  await sleep(300);
-  await page.evaluate(() => window.__fbSession.light(0, true));
-  await toLevels();
-  const run = await looks();
-  await key(page, 'ArrowRight');
-  await key(page, 'ArrowRight');
-  const moved = await looks();
-  const plain = (state) => {
-    const on = state.find((c) => c.sel);
-    return !!on && on.look === highlight && state.filter((c) => c.look === highlight).length === 1;
-  };
-  t.check('the highlighted level card looks highlighted — over CONTINUE, the picked level and the test course — and no other card does', !!highlight && plain(fresh) && plain(run) && plain(moved), { highlight, fresh, run, moved });
-  t.check('no errors (level select highlight)', !page.errors.length, page.errors.join('\n'));
-  await page.close();
-}
+// ---- (the level select's cards and their highlight went with the map: what Ⓐ goes into is the stop the
+// pair stands on, which its card names — see map.mjs)
 
 // ---- the symbols the menus draw (✦ ▶ ⏱ 🔒 Ⓐ ☰ …) aren't in the game's font, and the first time one is
 // laid out the browser looks through the system's fonts for it — inside the layout of whatever screen
@@ -826,7 +770,7 @@ const guestRoom = (page) => page.evaluate(() => {
   // the badge ignores the pointer; let it answer for a moment, to ask what is drawn on top where it meets BACK
   const onTop = () => page.evaluate(() => {
     const badge = document.querySelector('.version-badge');
-    const back = document.querySelector('.levels-screen .panel');
+    const back = document.querySelector('.map-screen .ow-card');
     const a = badge.getBoundingClientRect();
     const b = back.getBoundingClientRect();
     const x = (Math.max(a.left, b.left) + Math.min(a.right, b.right)) / 2;
@@ -835,7 +779,7 @@ const guestRoom = (page) => page.evaluate(() => {
     badge.style.pointerEvents = 'auto';
     const hit = document.elementFromPoint(x, y);
     badge.style.pointerEvents = '';
-    return { meet, top: hit === badge ? 'badge' : hit?.closest('.panel') ? 'panel' : hit?.className ?? null };
+    return { meet, top: hit === badge ? 'badge' : hit?.closest('.ow-card, .map-side') ? 'panel' : hit?.className ?? null };
   });
   await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.levels(); });
   await waitFor(() => page.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 5000, 'levels');
@@ -860,7 +804,7 @@ const guestRoom = (page) => page.evaluate(() => {
     };
     requestAnimationFrame(f);
   }));
-  t.check('the version badge is never drawn over a card (the level select at 667×375), nor under the frame-rate meter, and leaves with the level', atBack.meet && atBack.top === 'panel' && meter && gone, { atBack, meterClear: meter, goneInLevel: gone });
+  t.check('the version badge is never drawn over the map’s card (at 667×375), nor under the frame-rate meter, and leaves with the level', (!atBack.meet || atBack.top === 'panel') && meter && gone, { atBack, meterClear: meter, goneInLevel: gone });
   t.check('no errors (version badge)', !page.errors.length, page.errors.join('\n'));
   await page.close();
 }

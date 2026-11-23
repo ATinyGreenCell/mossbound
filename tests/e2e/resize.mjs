@@ -8,6 +8,9 @@ const page = await open(browser, { storage: { 'mossbound.settings.v1': { perf: '
 const t = reporter();
 await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.playLevel(0); });
 await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'), 5000, 'session');
+// (a level in play: shown, its scenery got ready behind a curtain first — seconds of long frames on a
+// software renderer, each longer than the waits below)
+await waitFor(() => page.evaluate(() => window.__fbSession?.revealed !== false), 30000, 'the level shown');
 const SIZES = [
   [1280, 720, 1],
   [844, 390, 3],

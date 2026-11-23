@@ -1,8 +1,9 @@
-import { hash2, TAU } from '../core/math';
+import { hash2 } from '../core/math';
 import { isSolidTile, Tile, type LevelData } from '../game/level';
-import { T } from '../game/tuning';
-import { canvasEpoch } from './renderer';
+import { T, VIEW_TILES_H, VIEW_TILES_MAX_W, VIEW_TILES_MIN_W } from '../game/tuning';
+import { canvasEpoch, settle } from './renderer';
 import type { Theme } from './theme';
+import { anchor, kitFor, kitStep, MOSS_DOWN, MOSS_UP, PLANK_H, stamp, stoneKind, stoneMossy, stretch, type Kit, type Sprite } from './tileart';
 
 /** Tiles per chunk side. */
 export const CHUNK = 8;
@@ -159,7 +160,7 @@ export class TileCache {
     const ctx = canvas.getContext('2d')!;
     const k = px / CHUNK_PX;
     ctx.setTransform(k, 0, 0, k, -cx * CHUNK_PX * k, -cy * CHUNK_PX * k);
-    paintRegion(ctx, this.L, this.theme, cx * CHUNK - 1, cy * CHUNK - 1, cx * CHUNK + CHUNK, cy * CHUNK + CHUNK);
+    paintRegion(ctx, this.L, this.theme, k, cx * CHUNK - 1, cy * CHUNK - 1, cx * CHUNK + CHUNK, cy * CHUNK + CHUNK);
     const c = { canvas, px, used: this.frame, near: old?.near ?? 0 };
     this.chunks.set(key, c);
     return c;
@@ -198,11 +199,119 @@ export class TileCache {
     this.chunks.delete(key);
   }
 
+  /**
+   * A step more of getting the tiles ready to paint at the camera's full scale (see tilesStep): true
+   * once they are. A level entered without its scenery painted calls this a frame at a time.
+   */
+  prepare(full: number, screen: CanvasRenderingContext2D) {
+    return tilesStep(this.theme, Math.max(1, Math.round(CHUNK_PX * full)) / CHUNK_PX, screen);
+  }
+
+  /**
+   * Paint one more of the chunks the view (as draw takes it) would show and hasn't got yet, and have the
+   * GPU paint it now (see settle): true once it has them all. Behind a level's curtain, a step at a time,
+   * so the frame that lifts the curtain only draws them.
+   */
+  prebake(scale: number, full: number, ox: number, oy: number, viewW: number, viewH: number) {
+    if (this.epoch !== canvasEpoch) {
+      this.epoch = canvasEpoch;
+      this.clear();
+    }
+    this.px = Math.max(1, Math.round(CHUNK_PX * Math.max(scale, full)));
+    const D = CHUNK_PX * scale;
+    const cx1 = Math.min(Math.ceil(this.L.w / CHUNK) - 1, Math.floor((ox + viewW) / D));
+    const cy1 = Math.min(Math.ceil(this.L.h / CHUNK) + 1, Math.floor((oy + viewH) / D));
+    for (let cy = Math.max(0, Math.floor(oy / D)); cy <= cy1; cy++) {
+      for (let cx = Math.max(0, Math.floor(ox / D)); cx <= cx1; cx++) {
+        const c = this.chunks.get(cy * 4096 + cx);
+        if ((c && c.px === this.px) || this.emptyAt(cx, cy)) continue;
+        settle(this.bake(cx, cy).canvas);
+        return false;
+      }
+    }
+    return true;
+  }
+
   /** Let go of everything (the level is over, or the pixels are gone). */
   clear() {
     for (const k of [...this.chunks.keys()]) this.drop(k);
   }
 }
+
+let soon: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Get a theme's tiles ready for a W × H screen in a moment (see prepareTiles). The backdrop asks as it
+ * paints a theme's scenery — the level select paints a level's before play starts — so the first frame
+ * of the level doesn't also pay for the kit, nor the frame the scenery was painted in. Asked again
+ * before then (the level select scrolled on to another level), only the latest is got ready.
+ */
+export function prepareTilesSoon(th: Theme, W: number, H: number, screen: CanvasRenderingContext2D) {
+  clearTimeout(soon);
+  const k = tileScale(W, H);
+  // (a step a task: what's drawn between them stays smooth)
+  const step = () => {
+    if (!tilesStep(th, k, screen)) soon = setTimeout(step, 0);
+  };
+  soon = setTimeout(step, 150);
+}
+
+/**
+ * Stop getting tiles ready on the side: a level's curtain is up, and it gets them ready itself, a step a
+ * frame (a few tasks' steps between two of its frames would make one long frame of them).
+ */
+export function stopTilesSoon() {
+  clearTimeout(soon);
+}
+
+/** Device px per world px the tiles of a W × H screen are painted at (as the camera works it out, zoomed in all the way). */
+function tileScale(W: number, H: number) {
+  let s = H / (VIEW_TILES_H * T);
+  s = Math.min(s, W / (VIEW_TILES_MIN_W * T));
+  s = Math.max(s, W / (VIEW_TILES_MAX_W * T));
+  s = Math.max(1, Math.round(s * 256)) / 256;
+  return Math.max(1, Math.round(CHUNK_PX * s)) / CHUNK_PX;
+}
+
+/**
+ * A step more of getting a theme's tiles ready at k device px per world px: a piece of its kit, or the
+ * warm-up (a scrap of level painted with the kit, so whatever the GPU sets up the first time it draws
+ * a pattern, a stretched picture or a blend is set up then, not in the first frame of play). True
+ * once there's nothing left to do.
+ */
+export function tilesStep(th: Theme, k: number, screen?: CanvasRenderingContext2D): boolean {
+  if (!th.layers.length || th.id === 'creek') return true;
+  const kit = kitStep(th, k);
+  if (!kit) return false;
+  if (warmed === kit) return true;
+  // (the warm-up a step of its own, not on top of the kit's last)
+  if (seen !== kit) {
+    seen = kit;
+    return false;
+  }
+  warmed = kit;
+  const L = { w: 4, h: 3, tiles: new Uint8Array([0, 0, 0, 0, 0, Tile.Ground, Tile.Ground, Tile.Plank, 0, Tile.Ground, Tile.Spikes, 0]), soilAt: new Int16Array(12).fill(-1) } as unknown as LevelData;
+  scrap ??= document.createElement('canvas');
+  scrap.width = scrap.height = 32;
+  const g = scrap.getContext('2d')!;
+  g.setTransform(32 / (4 * T), 0, 0, 32 / (4 * T), 0, 0);
+  paintRegion(g, L, th, k, -1, -1, 4, 3);
+  // (and the scrap drawn onto the screen, too faint to see: a canvas never drawn anywhere is never
+  // painted at all, and the GPU would meet all of it for the first time in the first frame of play)
+  if (screen) {
+    screen.save();
+    screen.setTransform(1, 0, 0, 1, 0, 0);
+    screen.globalAlpha = 0.004;
+    screen.drawImage(scrap, 0, 0, 8, 8);
+    screen.restore();
+  }
+  return false;
+}
+
+/** the last kit prepareTiles warmed up (and the last it saw finished), and the scrap of canvas it was warmed up on */
+let warmed: Kit | null = null;
+let seen: Kit | null = null;
+let scrap: HTMLCanvasElement | null = null;
 
 /** Does paintRegion paint this tile? (Doors, crumbling blocks and grown leaves come and go: the session draws those.) */
 const paints = (t: Tile) => t !== Tile.Empty && t !== Tile.Door && t !== Tile.Crumble && t !== Tile.Leaf;
@@ -226,542 +335,277 @@ const tileAt = (L: LevelData, tx: number, ty: number) => {
   return L.tiles[ty * L.w + tx];
 };
 
-function roundedTilePath(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, tl: number, tr: number, br: number, bl: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + tl, y);
-  ctx.lineTo(x + s - tr, y);
-  if (tr) ctx.quadraticCurveTo(x + s, y, x + s, y + tr);
-  ctx.lineTo(x + s, y + s - br);
-  if (br) ctx.quadraticCurveTo(x + s, y + s, x + s - br, y + s);
-  ctx.lineTo(x + bl, y + s);
-  if (bl) ctx.quadraticCurveTo(x, y + s, x, y + s - bl);
-  ctx.lineTo(x, y + tl);
-  if (tl) ctx.quadraticCurveTo(x, y, x + tl, y);
-  ctx.closePath();
-}
+/** A patch of soil (the session draws it, and what grows from it): bare earth, no moss. */
+const soilPatch = (L: LevelData, tx: number, ty: number) => ty < L.h && L.soilAt[ty * L.w + tx] >= 0;
 
-/** Paint tiles in [x0, x1] × [y0, y1] (world transform already set up). */
-export function paintRegion(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, x0: number, y0: number, x1: number, y1: number) {
-  // pass 1: bodies; pass 2: lips and decorations on top (so they overlap neighbours cleanly)
-  for (let pass = 0; pass < 2; pass++) {
-    for (let ty = y0; ty <= y1; ty++) {
+/** Does this tile wear the moss cushion along its top? */
+const mossTop = (L: LevelData, th: Theme, tx: number, ty: number) => {
+  if (ty < 0 || solidAt(L, tx, ty - 1)) return false;
+  const t = tileAt(L, tx, ty);
+  return t === Tile.Ground ? !soilPatch(L, tx, ty) : t === Tile.Stone && stoneMossy(th);
+};
+
+/** One of a sprite's variants, chosen by the tile. */
+const pick = (list: Sprite[], tx: number, ty: number, salt: number) => list[Math.floor(hash2(tx, ty, salt) * list.length)];
+
+/** How dark the earth gets `d` tiles under the surface (the alpha of the theme's `deep` over it). */
+const DARK = (d: number) => 0.46 * (1 - Math.exp(-d / 3.2));
+/** how deep that's reckoned (deeper is as dark) */
+const DEPTH_MAX = 8;
+
+let shade: { c: HTMLCanvasElement; g: CanvasRenderingContext2D; img: ImageData } | null = null;
+
+/**
+ * Paint tiles in [x0, x1] × [y0, y1] — a chunk and the one-tile margin round it whose moss, drips and
+ * strands reach into it — with the world transform set up at k device px per world px.
+ *
+ * Bodies first (soil, rock, crates, vents), then shading laid over only what's painted (the earth
+ * darkening with depth, a dark rim along every exposed face, the shade under the moss), then the tops
+ * a row at a time (rootlets, the moss cushion and its rounded ends, tufts and flowers, moss creeping down
+ * faces and hanging off overhangs, planks), and the thorns over everything. All of it from the world's
+ * tile coordinates and hashes of them, in the same order in every chunk: what a chunk paints in its
+ * margin is exactly what its neighbour paints there.
+ */
+export function paintRegion(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, k: number, x0: number, y0: number, x1: number, y1: number) {
+  const kit = kitFor(th, k);
+  const s = kit.s;
+  // Edges on the device's pixel grid: neighbouring fills meet exactly, with no seam of half-covered
+  // pixels between them (the chunk's own origin is a whole pixel).
+  const sn = (v: number) => Math.round(v * k) / k;
+  const ya = Math.max(0, y0);
+  const earth = anchor(kit.earth, 0, 0);
+  const rock = kit.stone ? anchor(kit.stone, 0, 0) : null;
+
+  // ---- bodies: a run of the same tile at a time, rounded where two open sides meet
+  for (let ty = ya; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; ) {
+      const t = tileAt(L, tx, ty);
+      if (t === Tile.Ground || (t === Tile.Stone && rock)) {
+        let ex = tx;
+        while (ex < x1 && tileAt(L, ex + 1, ty) === t) ex++;
+        ctx.fillStyle = t === Tile.Ground ? earth : rock!;
+        bodyRun(ctx, L, t === Tile.Ground ? 7 : 5, tx, ex, ty, sn);
+        tx = ex + 1;
+        continue;
+      }
+      if (t === Tile.Stone) stamp(ctx, kit, s.crate[0], tx * T, ty * T);
+      else if (t === Tile.Vent) stamp(ctx, kit, s.vent[0], tx * T, ty * T);
+      tx++;
+    }
+  }
+
+  // ---- pebbles in the earth, then shading: all of it over the bodies only
+  ctx.globalCompositeOperation = 'source-atop';
+  if (th.ground.kind === 'soil') {
+    for (let ty = ya; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        if (ty < 0) continue;
-        const t = tileAt(L, tx, ty);
-        if (!paints(t)) continue;
-        const x = tx * T;
-        const y = ty * T;
-        if (t === Tile.Ground) paintGround(ctx, L, th, tx, ty, x, y, pass);
-        else if (t === Tile.Stone) {
-          if (pass === 0) paintStone(ctx, L, th, tx, ty, x, y);
-        } else if (t === Tile.Vent) {
-          if (pass === 0) paintVent(ctx, th, x, y);
-        } else if (pass === 1) {
-          if (t === Tile.Plank) paintPlank(ctx, L, th, tx, ty, x, y);
-          else if (t === Tile.Spikes) paintSpikes(ctx, th, x, y, false);
-          else if (t === Tile.CeilSpikes) paintSpikes(ctx, th, x, y, true);
-        }
+        if (tileAt(L, tx, ty) !== Tile.Ground || hash2(tx, ty, 51) > 0.42) continue;
+        // (clear of the moss on a top)
+        const top = !solidAt(L, tx, ty - 1);
+        stamp(ctx, kit, pick(s.gravel, tx, ty, 52), tx * T + 8 + hash2(tx, ty, 53) * 16, ty * T + (top ? 20 + hash2(tx, ty, 54) * 6 : 6 + hash2(tx, ty, 54) * 20));
       }
+    }
+  }
+  shadeDepth(ctx, L, th, x0 + 1, y0 + 1);
+  for (let ty = ya; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; tx++) {
+      const t = tileAt(L, tx, ty);
+      if (t !== Tile.Ground && !(t === Tile.Stone && rock)) continue;
+      const x = tx * T;
+      const y = ty * T;
+      const X0 = sn(x);
+      const X1 = sn(x + T);
+      const Y0 = sn(y);
+      const Y1 = sn(y + T);
+      if (!solidAt(L, tx - 1, ty)) stretch(ctx, kit, s.edgeL[0], X0, Y0, sn(x + 9) - X0, Y1 - Y0);
+      if (!solidAt(L, tx + 1, ty)) stretch(ctx, kit, s.edgeR[0], sn(x + T - 9), Y0, X1 - sn(x + T - 9), Y1 - Y0);
+      if (!solidAt(L, tx, ty + 1)) stretch(ctx, kit, s.edgeB[0], X0, sn(y + T - 9), X1 - X0, Y1 - sn(y + T - 9));
+      if (mossTop(L, th, tx, ty)) stretch(ctx, kit, s.shade[0], X0, y + 11, X1 - X0, 18);
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // ---- tops, faces, undersides and planks, a row at a time
+  for (let ty = ya; ty <= y1; ty++) {
+    const y = ty * T;
+    // moss spreading into the earth and rootlets, under where the cushion goes
+    for (let tx = x0; tx <= x1; tx++) {
+      if (tileAt(L, tx, ty) !== Tile.Ground || !mossTop(L, th, tx, ty)) continue;
+      if (hash2(tx, ty, 60) < 0.8) stamp(ctx, kit, pick(s.creep, tx, ty, 59), tx * T, y);
+      if (hash2(tx, ty, 61) < 0.5) stamp(ctx, kit, pick(s.root, tx, ty, 62), tx * T, y);
+    }
+    // the moss cushion, a run at a time, with a rounded end wherever the run really ends (not where
+    // this region cuts it off)
+    for (let tx = x0; tx <= x1; ) {
+      if (!mossTop(L, th, tx, ty)) {
+        tx++;
+        continue;
+      }
+      let ex = tx;
+      while (ex < x1 && mossTop(L, th, ex + 1, ty)) ex++;
+      const endL = !mossTop(L, th, tx - 1, ty);
+      const endR = !mossTop(L, th, ex + 1, ty);
+      const a = sn(tx * T + (endL ? 6 : 0));
+      const b = sn((ex + 1) * T - (endR ? 6 : 0));
+      ctx.fillStyle = anchor(kit.moss, 0, y - MOSS_UP);
+      ctx.fillRect(a, y - MOSS_UP, b - a, MOSS_UP + MOSS_DOWN);
+      if (endL) stamp(ctx, kit, pick(s.capL, tx, ty, 63), tx * T, y);
+      if (endR) stamp(ctx, kit, pick(s.capR, ex, ty, 63), (ex + 1) * T, y);
+      tx = ex + 1;
+    }
+    // planks: a strip a run, its ends sawn
+    for (let tx = x0; tx <= x1; ) {
+      if (tileAt(L, tx, ty) !== Tile.Plank) {
+        tx++;
+        continue;
+      }
+      let ex = tx;
+      while (ex < x1 && tileAt(L, ex + 1, ty) === Tile.Plank) ex++;
+      const a = sn(tx * T);
+      ctx.fillStyle = anchor(kit.plank, 0, y);
+      ctx.fillRect(a, y, sn((ex + 1) * T) - a, PLANK_H);
+      if (tileAt(L, tx - 1, ty) !== Tile.Plank) stamp(ctx, kit, s.plankL[0], tx * T, y);
+      if (tileAt(L, ex + 1, ty) !== Tile.Plank) stamp(ctx, kit, s.plankR[0], (ex + 1) * T, y);
+      tx = ex + 1;
+    }
+    // what grows on the tops, creeps down the faces and hangs off the undersides
+    for (let tx = x0; tx <= x1; tx++) {
+      const t = tileAt(L, tx, ty);
+      const mossy = t === Tile.Ground || (t === Tile.Stone && stoneMossy(th));
+      if (!mossy) {
+        if (t === Tile.Stone && stoneKind(th) === 'bark' && !solidAt(L, tx, ty - 1)) stamp(ctx, kit, s.ring[0], tx * T, y);
+        continue;
+      }
+      const x = tx * T;
+      if (mossTop(L, th, tx, ty) && tileAt(L, tx, ty - 1) === Tile.Empty) decorate(ctx, kit, th, tx, ty, x, y);
+      const lf = tileAt(L, tx - 1, ty) === Tile.Empty && !solidAt(L, tx - 1, ty);
+      const rt = tileAt(L, tx + 1, ty) === Tile.Empty && !solidAt(L, tx + 1, ty);
+      if (lf || rt) {
+        // how far down the face this is: moss creeps furthest near the top
+        let dep = 0;
+        while (dep < 4 && solidAt(L, tx, ty - 1 - dep)) dep++;
+        const chance = [0.9, 0.7, 0.5, 0.32, 0.2][dep];
+        if (lf) face(ctx, kit, s.dripL, s.pebL, tx, ty, x, y, dep, chance, 0);
+        if (rt) face(ctx, kit, s.dripR, s.pebR, tx, ty, x + T, y, dep, chance, 1);
+      }
+      if (tileAt(L, tx, ty + 1) === Tile.Empty && !solidAt(L, tx, ty + 1) && hash2(tx, ty, 71) < 0.8) stamp(ctx, kit, pick(s.strand, tx, ty, 72), x, y + T);
+    }
+  }
+
+  // ---- thorns, over everything
+  for (let ty = ya; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; tx++) {
+      const t = tileAt(L, tx, ty);
+      if (t === Tile.Spikes) stamp(ctx, kit, s.thorn[0], tx * T, ty * T + T);
+      else if (t === Tile.CeilSpikes) stamp(ctx, kit, s.thornC[0], tx * T, ty * T);
     }
   }
 }
 
-function paintGround(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, tx: number, ty: number, x: number, y: number, pass: number) {
-  const p = th.ground;
-  const up = !solidAt(L, tx, ty - 1);
-  const dn = !solidAt(L, tx, ty + 1);
-  const lf = !solidAt(L, tx - 1, ty);
-  const rt = !solidAt(L, tx + 1, ty);
-  const R = 7;
-  if (th.id === 'tower') return paintGirder(ctx, th, x, y, up, dn, lf, rt, pass, tx, ty);
-  if (pass === 0) {
-    // body, rounded where two exposed sides meet
-    roundedTilePath(ctx, x - 0.3, y - 0.3, T + 0.6, up && lf ? R : 0, up && rt ? R : 0, dn && rt ? R : 0, dn && lf ? R : 0);
-    ctx.fillStyle = p.body;
-    ctx.fill();
-    if (th.id === 'paris') {
-      paintFacade(ctx, th, tx, ty, x, y, up, dn);
-    } else if (th.id === 'mill') {
-      // stone wall courses
-      ctx.strokeStyle = p.bodyDark;
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      const off = (ty & 1) * (T / 2);
-      ctx.moveTo(x, y + T / 2);
-      ctx.lineTo(x + T, y + T / 2);
-      ctx.moveTo(x + off + 0.5, y);
-      ctx.lineTo(x + off + 0.5, y + T / 2);
-      ctx.moveTo(x + ((off + T / 2) % T) + 0.5, y + T / 2);
-      ctx.lineTo(x + ((off + T / 2) % T) + 0.5, y + T);
-      ctx.stroke();
-    } else {
-      // specks and pebbles
-      for (let k = 0; k < 3; k++) {
-        const h = hash2(tx, ty, k);
-        if (h < 0.45) continue;
-        ctx.fillStyle = k === 0 ? p.speck2 : p.speck;
-        const px = x + 4 + hash2(tx, ty, k + 7) * (T - 8);
-        const py = y + (up ? 12 : 4) + hash2(tx, ty, k + 13) * (T - (up ? 16 : 8));
-        ctx.beginPath();
-        ctx.ellipse(px, py, 1.6 + h * 1.6, 1.2 + h, 0, 0, TAU);
-        ctx.fill();
-      }
-    }
-    // shading toward exposed sides
-    ctx.fillStyle = p.bodyDark;
-    if (dn) ctx.fillRect(x + (lf ? R * 0.6 : 0), y + T - 4, T - (lf ? R * 0.6 : 0) - (rt ? R * 0.6 : 0), 4);
-    if (lf) ctx.fillRect(x, y + (up ? R : 0), 2.5, T - (up ? R : 0) - (dn ? R : 0));
-    if (rt) ctx.fillRect(x + T - 2.5, y + (up ? R : 0), 2.5, T - (up ? R : 0) - (dn ? R : 0));
+/** A run of ground (or rock) from tile ax to bx in row ty, its corners rounded where two open sides meet. */
+function bodyRun(ctx: CanvasRenderingContext2D, L: LevelData, R: number, ax: number, bx: number, ty: number, sn: (v: number) => number) {
+  const y = ty * T;
+  const lf = !solidAt(L, ax - 1, ty);
+  const rt = !solidAt(L, bx + 1, ty);
+  const tl = lf && !solidAt(L, ax, ty - 1) ? R : 0;
+  const bl = lf && !solidAt(L, ax, ty + 1) ? R : 0;
+  const tr = rt && !solidAt(L, bx, ty - 1) ? R : 0;
+  const br = rt && !solidAt(L, bx, ty + 1) ? R : 0;
+  const X0 = sn(ax * T);
+  const X1 = sn((bx + 1) * T);
+  const Y0 = sn(y);
+  const Y1 = sn(y + T);
+  if (!(tl || tr || br || bl)) {
+    ctx.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
     return;
   }
-  if (!up) return;
-  // the lip on top: grass / moss / zinc roof
-  if (th.id === 'paris') {
-    ctx.fillStyle = p.topDark;
-    ctx.fillRect(x - (lf ? 2 : 0), y - 1, T + (lf ? 2 : 0) + (rt ? 2 : 0), 9);
-    ctx.fillStyle = p.top;
-    ctx.fillRect(x - (lf ? 2 : 0), y - 1, T + (lf ? 2 : 0) + (rt ? 2 : 0), 5);
-    ctx.fillStyle = '#c9d6e6';
-    ctx.fillRect(x - (lf ? 2 : 0), y - 1, T + (lf ? 2 : 0) + (rt ? 2 : 0), 1.5);
-    // seams of the zinc sheets
-    ctx.fillStyle = p.topDark;
-    ctx.fillRect(x + 15, y + 1, 1.2, 7);
-    if (hash2(tx, ty, 5) < 0.18 && !lf && !rt) {
-      // a chimney pot
-      ctx.fillStyle = th.stone.face;
-      ctx.fillRect(x + 8, y - 12, 9, 12);
-      ctx.fillStyle = th.stone.dark;
-      ctx.fillRect(x + 7, y - 13, 11, 3);
-      ctx.fillStyle = '#d97a4a';
-      ctx.fillRect(x + 10, y - 17, 5, 5);
-    }
-    return;
-  }
-  const lipH = 8;
-  const x0 = x - (lf ? 1.5 : 0.5);
-  const x1 = x + T + (rt ? 1.5 : 0.5);
-  // the wave is a function of world x, so neighbouring lips join seamlessly
-  const wave = (wx: number) => y + lipH + 2.2 * Math.sin(wx * 0.21) + 1.2 * Math.sin(wx * 0.077);
-  ctx.fillStyle = p.topDark;
   ctx.beginPath();
-  ctx.moveTo(x0, y);
-  for (let k = 0; k <= 8; k++) {
-    const sx = x0 + ((x1 - x0) * k) / 8;
-    ctx.lineTo(sx, wave(sx));
-  }
-  ctx.lineTo(x1, y);
+  ctx.moveTo(X0 + tl, Y0);
+  ctx.lineTo(X1 - tr, Y0);
+  if (tr) ctx.quadraticCurveTo(X1, Y0, X1, Y0 + tr);
+  ctx.lineTo(X1, Y1 - br);
+  if (br) ctx.quadraticCurveTo(X1, Y1, X1 - br, Y1);
+  ctx.lineTo(X0 + bl, Y1);
+  if (bl) ctx.quadraticCurveTo(X0, Y1, X0, Y1 - bl);
+  ctx.lineTo(X0, Y0 + tl);
+  if (tl) ctx.quadraticCurveTo(X0, Y0, X0 + tl, Y0);
   ctx.closePath();
   ctx.fill();
-  ctx.fillStyle = p.top;
-  roundedTilePath(ctx, x0, y - 1.5, x1 - x0, lf ? 5 : 0, rt ? 5 : 0, 0, 0);
-  ctx.save();
-  ctx.clip();
-  ctx.fillRect(x0 - 1, y - 2, x1 - x0 + 2, lipH - 1);
-  ctx.restore();
-  // blades and decorations poking up
-  ctx.fillStyle = p.top;
-  for (let k = 0; k < 4; k++) {
-    if (hash2(tx, ty, 20 + k) < 0.5) continue;
-    const bx = x + 3 + k * 7.5 + hash2(tx, ty, 30 + k) * 3;
-    ctx.beginPath();
-    ctx.moveTo(bx - 1.6, y + 0.5);
-    ctx.lineTo(bx + hash2(tx, ty, 40 + k) * 2 - 1, y - 3 - hash2(tx, ty, 50 + k) * 3);
-    ctx.lineTo(bx + 1.6, y + 0.5);
-    ctx.fill();
-  }
-  const d = hash2(tx, ty, 99);
-  if (tileAt(L, tx, ty - 1) !== Tile.Empty) return;
-  if (th.id === 'garden' && d < 0.22) {
-    const fx = x + 6 + hash2(tx, ty, 98) * 20;
-    ctx.strokeStyle = '#4f9a3c';
-    ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    ctx.moveTo(fx, y + 1);
-    ctx.lineTo(fx, y - 8);
-    ctx.stroke();
-    const c = ['#ff8fb1', '#ffffff', '#ffd45a', '#b48cff'][Math.floor(hash2(tx, ty, 97) * 4)];
-    ctx.fillStyle = c;
-    for (let k = 0; k < 5; k++) {
-      const a = (k / 5) * TAU;
-      ctx.beginPath();
-      ctx.arc(fx + Math.cos(a) * 2.6, y - 9 + Math.sin(a) * 2.6, 1.9, 0, TAU);
-      ctx.fill();
-    }
-    ctx.fillStyle = '#ffcf3a';
-    ctx.beginPath();
-    ctx.arc(fx, y - 9, 1.5, 0, TAU);
-    ctx.fill();
-  } else if (th.id === 'woods' && d < 0.14) {
-    const fx = x + 8 + hash2(tx, ty, 98) * 16;
-    ctx.fillStyle = '#f2e6d6';
-    ctx.fillRect(fx - 1.5, y - 6, 3, 6);
-    ctx.fillStyle = hash2(tx, ty, 96) < 0.5 ? '#e0603f' : '#c48a3a';
-    ctx.beginPath();
-    ctx.ellipse(fx, y - 6, 5.5, 3.6, 0, Math.PI, 0);
-    ctx.fill();
-  } else if (th.id === 'mill' && d < 0.12) {
-    ctx.fillStyle = '#9e978a';
-    ctx.beginPath();
-    ctx.ellipse(x + 10 + hash2(tx, ty, 98) * 12, y - 1.5, 4.5, 3, 0, Math.PI, 0);
-    ctx.fill();
-  } else if ((th.id === 'cascade' || th.id === 'falls') && d < 0.2) {
-    const fx = x + 6 + hash2(tx, ty, 98) * 20;
-    if (th.id === 'falls' && hash2(tx, ty, 95) < 0.4) {
-      // a toadstool that glows a little in the dark
-      ctx.fillStyle = '#e8f5ff';
-      ctx.fillRect(fx - 1, y - 5, 2, 5);
-      ctx.fillStyle = '#9fe0ff';
-      ctx.beginPath();
-      ctx.ellipse(fx, y - 5, 4, 2.6, 0, Math.PI, 0);
-      ctx.fill();
-    } else {
-      // a little fern
-      ctx.strokeStyle = th.ground.topDark;
-      ctx.lineWidth = 1.2;
-      for (const a of [-0.6, 0, 0.6]) {
-        ctx.beginPath();
-        ctx.moveTo(fx, y + 1);
-        ctx.quadraticCurveTo(fx + a * 6, y - 6, fx + a * 9, y - 9 + Math.abs(a) * 3);
-        ctx.stroke();
-      }
-    }
-  }
 }
 
-/** Paris: building fronts with tall windows, some lit for the evening. */
-function paintFacade(ctx: CanvasRenderingContext2D, th: Theme, tx: number, ty: number, x: number, y: number, up: boolean, dn: boolean) {
-  if (up) {
-    // mansard: slate-blue slope under the zinc lip, with a dormer window now and then
-    ctx.fillStyle = '#6f7d9c';
-    ctx.fillRect(x, y + 6, T, T - 6);
-    if (hash2(tx, ty, 3) < 0.5) {
-      ctx.fillStyle = '#efdcc2';
-      ctx.fillRect(x + 10, y + 12, 12, 14);
-      ctx.fillStyle = hash2(tx, ty, 4) < 0.45 ? '#ffd98a' : '#4f5f80';
-      ctx.fillRect(x + 12, y + 15, 8, 10);
+/**
+ * The earth darkening with depth, over the chunk whose top-left tile is (cx0, cy0): a darkness for every
+ * tile corner (from how deep under the surface the tiles meeting there are), stretched smoothly over the
+ * chunk in one drawImage. A corner's darkness comes from the tiles alone, so neighbouring chunks agree
+ * along their shared edge.
+ */
+function shadeDepth(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, cx0: number, cy0: number) {
+  const N = CHUNK + 2;
+  const dep = new Int8Array(N * N).fill(-1);
+  let solid = false;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const tx = cx0 - 1 + i;
+      const ty = cy0 - 1 + j;
+      if (!solidAt(L, tx, ty)) continue;
+      let d = 0;
+      while (d < DEPTH_MAX && solidAt(L, tx, ty - 1 - d)) d++;
+      dep[j * N + i] = d;
+      solid = true;
     }
-    return;
   }
-  if (dn) return;
-  ctx.fillStyle = th.ground.bodyDark;
-  ctx.fillRect(x, y + 29, T, 3);
-  const lit = hash2(tx, ty, 6) < 0.33;
-  ctx.fillStyle = '#d9c4a6';
-  ctx.fillRect(x + 7, y + 4, 18, 22);
-  ctx.fillStyle = lit ? '#ffd98a' : '#5c6c8e';
-  ctx.fillRect(x + 9, y + 6, 14, 18);
-  ctx.fillStyle = lit ? '#ffecb8' : '#7b8bab';
-  ctx.fillRect(x + 9, y + 6, 14, 4);
-  ctx.fillStyle = '#d9c4a6';
-  ctx.fillRect(x + 15.4, y + 6, 1.2, 18);
-  // a little wrought-iron balcony
-  ctx.fillStyle = '#3b3a50';
-  ctx.fillRect(x + 6, y + 22, 20, 1.6);
-  for (let k = 0; k < 5; k++) ctx.fillRect(x + 7 + k * 4.4, y + 22, 1, 5);
+  if (!solid) return;
+  const n = CHUNK + 1;
+  if (!shade) {
+    const c = document.createElement('canvas');
+    c.width = c.height = n;
+    const g = c.getContext('2d')!;
+    shade = { c, g, img: g.createImageData(n, n) };
+  }
+  const data = shade.img.data;
+  const [r, gr, b] = rgbOf(th.ground.deep);
+  for (let gy = 0; gy < n; gy++) {
+    for (let gx = 0; gx < n; gx++) {
+      // the tiles meeting at this corner: the two above it (at their bottoms), the two below (at their tops)
+      let sum = 0;
+      let cnt = 0;
+      for (let q = 0; q < 4; q++) {
+        const i = gx + (q & 1);
+        const j = gy + (q >> 1);
+        const d = dep[j * N + i];
+        if (d < 0) continue;
+        sum += DARK(q < 2 ? d + 1 : d);
+        cnt++;
+      }
+      const o = (gy * n + gx) * 4;
+      data[o] = r;
+      data[o + 1] = gr;
+      data[o + 2] = b;
+      data[o + 3] = cnt ? Math.round((sum / cnt) * 255) : 0;
+    }
+  }
+  shade.g.putImageData(shade.img, 0, 0);
+  // (from the first corner's centre to the last's: every pixel of the chunk lies between four of them)
+  ctx.drawImage(shade.c, 0.5, 0.5, CHUNK, CHUNK, cx0 * T, cy0 * T, CHUNK * T, CHUNK * T);
 }
 
-/** Tower: iron lattice you can see the night through. */
-function paintGirder(ctx: CanvasRenderingContext2D, th: Theme, x: number, y: number, up: boolean, dn: boolean, lf: boolean, rt: boolean, pass: number, tx: number, ty: number) {
-  const p = th.ground;
-  if (pass === 0) {
-    ctx.strokeStyle = p.body;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + T, y + T);
-    ctx.moveTo(x + T, y);
-    ctx.lineTo(x, y + T);
-    ctx.stroke();
-    ctx.fillStyle = p.bodyDark;
-    if (lf || (tx & 1) === 0) ctx.fillRect(x - 0.5, y - 0.5, 4, T + 1);
-    if (rt) ctx.fillRect(x + T - 3.5, y - 0.5, 4, T + 1);
-    if (dn || (ty & 1) === 0) ctx.fillRect(x - 0.5, y + T - 3.5, T + 1, 4);
-    ctx.fillStyle = p.speck;
-    ctx.globalAlpha = 0.5;
-    ctx.fillRect(x + 1, y + 1, 2, 2);
-    ctx.fillRect(x + T - 3, y + T - 3, 2, 2);
-    ctx.globalAlpha = 1;
-    return;
-  }
-  if (!up) return;
-  ctx.fillStyle = p.topDark;
-  ctx.fillRect(x - (lf ? 1 : 0), y, T + (lf ? 1 : 0) + (rt ? 1 : 0), 7);
-  ctx.fillStyle = p.top;
-  ctx.fillRect(x - (lf ? 1 : 0), y, T + (lf ? 1 : 0) + (rt ? 1 : 0), 3);
-  ctx.fillStyle = p.speck2;
-  for (let k = 0; k < 4; k++) ctx.fillRect(x + 3 + k * 8, y + 4, 1.6, 1.6);
+const rgbOf = (c: string) => {
+  const v = parseInt(c.slice(1, 7), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+};
+
+/** Moss creeping down an open face from its top (a long way near the top of the face), and a pebble set in it. */
+function face(ctx: CanvasRenderingContext2D, kit: Kit, drips: Sprite[], pebs: Sprite[], tx: number, ty: number, x: number, y: number, dep: number, chance: number, side: number) {
+  if (hash2(tx, ty, 73 + side) < chance) stamp(ctx, kit, pick(drips, tx, ty, 75 + side), x, y + (dep ? 1 + hash2(tx, ty, 77 + side) * 12 : 19));
+  if (hash2(tx, ty, 79 + side) < 0.22) stamp(ctx, kit, pick(pebs, tx, ty, 81 + side), x, y + 8 + hash2(tx, ty, 83 + side) * 18);
 }
 
-function paintStone(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, tx: number, ty: number, x: number, y: number) {
-  const s = th.stone;
-  const up = !solidAt(L, tx, ty - 1);
-  const dn = !solidAt(L, tx, ty + 1);
-  const lf = !solidAt(L, tx - 1, ty);
-  const rt = !solidAt(L, tx + 1, ty);
-  const R = 5;
-  roundedTilePath(ctx, x - 0.3, y - 0.3, T + 0.6, up && lf ? R : 0, up && rt ? R : 0, dn && rt ? R : 0, dn && lf ? R : 0);
-  ctx.fillStyle = s.face;
-  ctx.fill();
-  ctx.save();
-  ctx.clip();
-  switch (th.id) {
-    case 'woods': {
-      // bark: vertical grain
-      ctx.strokeStyle = s.dark;
-      ctx.lineWidth = 1.5;
-      for (let k = 0; k < 4; k++) {
-        const gx = x + 4 + k * 8 + hash2(tx, ty, k) * 3;
-        ctx.beginPath();
-        ctx.moveTo(gx, y);
-        ctx.bezierCurveTo(gx + 2, y + 10, gx - 2, y + 20, gx + 1, y + T);
-        ctx.stroke();
-      }
-      if (up) {
-        ctx.fillStyle = s.light;
-        ctx.beginPath();
-        ctx.ellipse(x + T / 2, y + 3, T / 2, 4, 0, 0, TAU);
-        ctx.fill();
-        ctx.strokeStyle = s.line;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.ellipse(x + T / 2, y + 3, T / 4, 2, 0, 0, TAU);
-        ctx.stroke();
-      }
-      break;
-    }
-    case 'mill': {
-      // a wooden crate
-      ctx.strokeStyle = s.dark;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x + 2, y + 2, T - 4, T - 4);
-      ctx.beginPath();
-      ctx.moveTo(x + 3, y + T - 3);
-      ctx.lineTo(x + T - 3, y + 3);
-      ctx.stroke();
-      ctx.fillStyle = s.light;
-      ctx.fillRect(x + 2, y + 2, T - 4, 2);
-      break;
-    }
-    case 'cascade':
-    case 'falls': {
-      // wet rock: a crack or two, and moss wherever the top is open to the air
-      ctx.strokeStyle = s.line;
-      ctx.lineWidth = 1.2;
-      const h = hash2(tx, ty, 3);
-      ctx.beginPath();
-      ctx.moveTo(x + 4 + h * 10, y + 5);
-      ctx.lineTo(x + 10 + h * 8, y + 15);
-      ctx.lineTo(x + 6 + h * 12, y + T - 4);
-      if (hash2(tx, ty, 5) < 0.5) {
-        ctx.moveTo(x + T - 6, y + 9);
-        ctx.lineTo(x + T - 14, y + 19);
-      }
-      ctx.stroke();
-      ctx.fillStyle = s.light;
-      ctx.fillRect(x + 3, y + 3, 6, 1.5);
-      if (up) {
-        ctx.fillStyle = th.ground.topDark;
-        ctx.beginPath();
-        ctx.ellipse(x + T / 2, y + 2, T / 2 + 2, 5, 0, 0, TAU);
-        ctx.fill();
-        ctx.fillStyle = th.ground.top;
-        ctx.fillRect(x + 3, y, T - 6, 2.5);
-      }
-      break;
-    }
-    case 'tower': {
-      ctx.fillStyle = s.light;
-      ctx.fillRect(x, y, T, 2);
-      ctx.fillStyle = s.dark;
-      ctx.fillRect(x, y + T - 2, T, 2);
-      ctx.fillStyle = s.line;
-      for (const [rx, ry] of [
-        [5, 5],
-        [T - 7, 5],
-        [5, T - 7],
-        [T - 7, T - 7],
-      ]) {
-        ctx.beginPath();
-        ctx.arc(x + rx + 1, y + ry + 1, 1.8, 0, TAU);
-        ctx.fill();
-      }
-      break;
-    }
-    default: {
-      // bricks (paris) / stone blocks (garden)
-      const rows = th.id === 'paris' ? 4 : 2;
-      const rh = T / rows;
-      ctx.fillStyle = s.light;
-      for (let r = 0; r < rows; r++) {
-        const off = ((r + ty) & 1) * (T / (rows === 4 ? 4 : 2));
-        const bw = rows === 4 ? T / 2 : T;
-        for (let bx = -bw; bx < T + bw; bx += bw) ctx.fillRect(x + bx + off + 1, y + r * rh + 1, bw - 2, 1.5);
-      }
-      ctx.strokeStyle = s.line;
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      for (let r = 1; r < rows; r++) {
-        ctx.moveTo(x, y + r * rh);
-        ctx.lineTo(x + T, y + r * rh);
-      }
-      for (let r = 0; r < rows; r++) {
-        const off = ((r + ty) & 1) * (T / (rows === 4 ? 4 : 2));
-        const bw = rows === 4 ? T / 2 : T;
-        for (let bx = off; bx < T; bx += bw) {
-          if (bx <= 0.5) continue;
-          ctx.moveTo(x + bx, y + r * rh);
-          ctx.lineTo(x + bx, y + (r + 1) * rh);
-        }
-      }
-      ctx.stroke();
-    }
-  }
-  ctx.restore();
-  ctx.fillStyle = s.dark;
-  if (dn) ctx.fillRect(x + (lf ? R : 0), y + T - 3, T - (lf ? R : 0) - (rt ? R : 0), 3);
-}
-
-function paintPlank(ctx: CanvasRenderingContext2D, L: LevelData, th: Theme, tx: number, ty: number, x: number, y: number) {
-  const p = th.plank;
-  const lf = tileAt(L, tx - 1, ty) !== Tile.Plank;
-  const rt = tileAt(L, tx + 1, ty) !== Tile.Plank;
-  if (th.id === 'paris') {
-    // a stone ledge with a wrought-iron railing
-    ctx.fillStyle = '#d8c3a5';
-    ctx.fillRect(x, y, T, 5);
-    ctx.fillStyle = '#b9a383';
-    ctx.fillRect(x, y + 5, T, 2);
-    ctx.fillStyle = p.top;
-    ctx.fillRect(x, y - 10, T, 1.6);
-    for (let k = 0; k < 4; k++) {
-      ctx.fillRect(x + 2 + k * 8, y - 10, 1.3, 10);
-      ctx.beginPath();
-      ctx.arc(x + 6 + k * 8, y - 5, 2.2, 0, TAU);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = p.top;
-      ctx.stroke();
-    }
-    return;
-  }
-  ctx.fillStyle = p.dark;
-  ctx.fillRect(x, y + 6, T, 3);
-  ctx.fillStyle = p.side;
-  ctx.fillRect(x, y, T, 8);
-  ctx.fillStyle = p.top;
-  ctx.fillRect(x, y, T, 3);
-  ctx.fillStyle = p.dark;
-  ctx.fillRect(x + 15.5, y + 1, 1, 6);
-  ctx.fillStyle = th.id === 'tower' ? th.ground.speck2 : '#6b6b6b';
-  ctx.fillRect(x + 4, y + 3.5, 1.6, 1.6);
-  ctx.fillRect(x + 26, y + 3.5, 1.6, 1.6);
-  if (lf) {
-    ctx.fillStyle = p.dark;
-    ctx.fillRect(x, y, 2, 9);
-  }
-  if (rt) {
-    ctx.fillStyle = p.dark;
-    ctx.fillRect(x + T - 2, y, 2, 9);
-  }
-}
-
-function paintSpikes(ctx: CanvasRenderingContext2D, th: Theme, x: number, y: number, ceiling: boolean) {
-  const thorny = th.id === 'garden' || th.id === 'woods' || th.id === 'cascade' || th.id === 'falls';
-  ctx.save();
-  if (ceiling) {
-    ctx.translate(x + T / 2, y + T / 2);
-    ctx.scale(1, -1);
-    ctx.translate(-(x + T / 2), -(y + T / 2));
-  }
-  const base = y + T;
-  if (thorny) {
-    // a bramble: a dark vine with sharp thorns
-    ctx.fillStyle = th.spikes.b;
-    ctx.beginPath();
-    ctx.ellipse(x + T / 2, base - 5, T / 2 + 1, 6, 0, 0, TAU);
-    ctx.fill();
-    ctx.fillStyle = th.spikes.a;
-    for (let k = 0; k < 4; k++) {
-      const bx = x + 3 + k * 8.5;
-      ctx.beginPath();
-      ctx.moveTo(bx - 3, base - 6);
-      ctx.lineTo(bx + 1, base - 17 - (k & 1) * 3);
-      ctx.lineTo(bx + 3, base - 6);
-      ctx.closePath();
-      ctx.fill();
-    }
-  } else {
-    ctx.fillStyle = th.spikes.b;
-    ctx.fillRect(x + 1, base - 4, T - 2, 4);
-    for (let k = 0; k < 4; k++) {
-      const bx = x + 4 + k * 8;
-      ctx.fillStyle = th.spikes.a;
-      ctx.beginPath();
-      ctx.moveTo(bx - 3.6, base - 3);
-      ctx.lineTo(bx, base - 15);
-      ctx.lineTo(bx + 3.6, base - 3);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.beginPath();
-      ctx.moveTo(bx - 1, base - 4);
-      ctx.lineTo(bx, base - 14);
-      ctx.lineTo(bx + 0.4, base - 4);
-      ctx.fill();
-    }
-  }
-  ctx.restore();
-}
-
-function paintVent(ctx: CanvasRenderingContext2D, th: Theme, x: number, y: number) {
-  if (th.id === 'paris') {
-    // a big brick chimney stack, open at the top
-    ctx.fillStyle = th.stone.face;
-    ctx.fillRect(x, y, T, T);
-    ctx.fillStyle = th.stone.dark;
-    ctx.fillRect(x - 2, y, T + 4, 5);
-    ctx.fillStyle = '#2a2030';
-    ctx.fillRect(x + 4, y, T - 8, 3);
-    ctx.strokeStyle = th.stone.line;
-    ctx.lineWidth = 1;
-    for (let r = 1; r < 4; r++) {
-      ctx.beginPath();
-      ctx.moveTo(x, y + 5 + r * 7);
-      ctx.lineTo(x + T, y + 5 + r * 7);
-      ctx.stroke();
-    }
-    return;
-  }
-  if (th.id === 'garden' || th.id === 'woods' || th.id === 'cascade' || th.id === 'falls') {
-    // a mossy rock split down the middle: the updraft (spray off the water) breathes out of the crack
-    ctx.fillStyle = th.stone.dark;
-    ctx.beginPath();
-    ctx.roundRect(x, y + 1, T, T - 1, 6);
-    ctx.fill();
-    ctx.fillStyle = th.stone.face;
-    ctx.beginPath();
-    ctx.roundRect(x + 2, y + 3, T - 4, T - 6, 5);
-    ctx.fill();
-    ctx.fillStyle = '#1e2a22';
-    ctx.beginPath();
-    ctx.moveTo(x + T / 2 - 4, y + 3);
-    ctx.lineTo(x + T / 2 + 4, y + 3);
-    ctx.lineTo(x + T / 2 + 1, y + T - 7);
-    ctx.lineTo(x + T / 2 - 2, y + T - 7);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = th.ground.top;
-    ctx.beginPath();
-    ctx.ellipse(x + 7, y + 4, 6, 3, -0.2, 0, TAU);
-    ctx.ellipse(x + T - 7, y + 4, 6, 3, 0.2, 0, TAU);
-    ctx.fill();
-    return;
-  }
-  ctx.fillStyle = th.stone.dark;
-  ctx.fillRect(x, y, T, T);
-  ctx.fillStyle = th.stone.face;
-  ctx.fillRect(x + 2, y + 2, T - 4, T - 4);
-  ctx.fillStyle = '#2a2234';
-  for (let k = 0; k < 4; k++) ctx.fillRect(x + 5 + k * 6, y + 3, 3, 9);
-  ctx.fillStyle = th.stone.light;
-  ctx.fillRect(x + 2, y + 2, T - 4, 1.5);
+/** Tufts, flowers and the theme's own things (mushrooms, ferns, toadstools, pebbles) on a top. */
+function decorate(ctx: CanvasRenderingContext2D, kit: Kit, th: Theme, tx: number, ty: number, x: number, y: number) {
+  const s = kit.s;
+  if (hash2(tx, ty, 85) < 0.55) stamp(ctx, kit, pick(s.tuft, tx, ty, 86), x + 4 + hash2(tx, ty, 87) * 24, y + 1);
+  const at = x + 6 + hash2(tx, ty, 98) * 20;
+  if (s.bloom && hash2(tx, ty, 99) < 0.24) stamp(ctx, kit, pick(s.bloom, tx, ty, 97), at, y + 1);
+  else if (s.glow && hash2(tx, ty, 95) < 0.08) stamp(ctx, kit, s.glow[0], at, y + 1);
+  else if (s.decor && hash2(tx, ty, 94) < (th.id === 'woods' ? 0.14 : th.id === 'mill' ? 0.12 : 0.2)) stamp(ctx, kit, pick(s.decor, tx, ty, 96), at, y + 1);
 }

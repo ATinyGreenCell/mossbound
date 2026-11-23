@@ -351,8 +351,7 @@ const finishLevel = (p) => p.evaluate(() => { const s = window.__fbSession; cons
 }
 
 // ---- a level cleared while an update waits: the players get their clear card (seeds, fireflies, time),
-// for as long as they like. The update goes when they leave it — NEXT LEVEL here, so it lands at the start
-// of the next level. On an Xbox, where the middle of a level is off limits, that is its moment too: a
+// for as long as they like. The update goes when they leave it — NEXT LEVEL here, so it lands on the map. On an Xbox, where the middle of a level is off limits, that is its moment too: a
 // session that only ever goes NEXT LEVEL → NEXT LEVEL still gets the update
 for (const [name, ua] of [['laptop', undefined], ['xbox', XBOX_UA]]) {
   const page = await open(browser, { ua });
@@ -368,9 +367,13 @@ for (const [name, ua] of [['laptop', undefined], ['xbox', XBOX_UA]]) {
   t.check(`${name}: with an update waiting, the clear card still shows — and stays up while it's read`, !!card && still === true, { card, still });
   if (still) {
     await page.click('.ov-card [data-act="next"]').catch(() => undefined);
-    const landed = await reloaded(page).then(() => inLevel(page, 'woods')).then(() => true).catch(() => false);
+    // (NEXT LEVEL goes back to the map, where the path to the next stop grows in: the update lands there)
+    const landed = await reloaded(page)
+      .then(() => waitFor(() => ev(page, () => window.__fb.app.current?.constructor.name === 'LevelSelect' && window.__fb.app.current.map.here === 'garden'), 8000, 'the map'))
+      .then(() => true)
+      .catch(() => false);
     const toast = await ev(page, () => document.querySelector('.update-toast')?.textContent ?? '');
-    t.check(`${name}: …NEXT LEVEL takes the update, and it lands at the start of the next level`, landed && /updated to/.test(toast ?? ''), { landed, toast });
+    t.check(`${name}: …NEXT LEVEL takes the update, and it lands on the map, on the level just cleared`, landed && /updated to/.test(toast ?? ''), { landed, toast });
   }
   errors.push(...page.errors);
   await page.close();

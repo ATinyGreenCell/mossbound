@@ -35,7 +35,7 @@ import { Backdrop } from '../render/backdrop';
 import { Particles, PK } from '../render/particles';
 import { drawSprout, sproutTop } from '../render/sprouts';
 import { THEMES, type Theme } from '../render/theme';
-import { TileCache } from '../render/tiles';
+import { stopTilesSoon, TileCache } from '../render/tiles';
 import { drawCreekBand } from '../render/water';
 import { ButtonList, esc } from '../ui/menu';
 import { Hud } from '../ui/hud';
@@ -1377,9 +1377,10 @@ export class Session implements Screen {
            <div class="ov-stats"><span><i class="seed-ico"></i> ${seeds} / ${this.L.seeds.length}</span><span class="feathers">${stars}</span><span>⏱ ${fmtTime(time)}</span></div>
            <div class="ov-buttons">${buttons}</div>`,
           (a) => {
-            if (a === 'next') this.debug ? this.flow.debug(this.L.index + 1, this.swapped) : this.flow.enterLevel(this.L.index + 1);
+            // (NEXT LEVEL goes back to the map, where the path to the next stop grows in)
+            if (a === 'next') this.debug ? this.flow.debug(this.L.index + 1, this.swapped) : this.flow.levels();
             else if (a === 'again') this.practice ? this.flow.practice(this.swapped) : this.debug ? this.flow.debug(this.L.index, this.swapped) : this.flow.playLevel(this.L.index);
-            else if (a === 'levels') this.practice ? this.flow.title() : this.flow.levels();
+            else if (a === 'levels') this.practice ? this.flow.leavePractice() : this.flow.levels();
             else if (a === 'ending') this.flow.ending();
             else if (a === 'leave') this.flow.leaveOnline();
           },
@@ -1445,7 +1446,7 @@ export class Session implements Screen {
         else if (a === 'controls') this.flow.showControls();
         else if (a === 'quit') {
           if (this.online && this.me === 1) this.flow.leaveOnline();
-          else if (this.practice) this.flow.title();
+          else if (this.practice) this.flow.leavePractice();
           else if (this.debug) this.flow.levels();
           else this.flow.levels();
         }
@@ -1653,9 +1654,8 @@ export class Session implements Screen {
       if (v.x1 < x0 || v.x0 > x0 + cam.viewW) continue;
       if (Math.random() < dt * 14 * this.fx.density) {
         const x = v.x0 + 4 + Math.random() * (v.x1 - v.x0 - 8);
-        if (th.id === 'paris') this.fx.add(PK.Smoke, x, v.bottom - 4, (Math.random() - 0.5) * 10, -120, 1.6, 6, 'rgba(240,230,240,0.9)', 0, 0.2);
         // (by the creek, some of the updraft is spray: a soft puff of mist among the streaks)
-        else if (th.water && Math.random() < 0.4) this.fx.add(PK.Smoke, x, v.bottom - 4, (Math.random() - 0.5) * 12, -150, 1.4, 7, 'rgba(235,248,255,0.55)', 0, 0.2);
+        if (th.water && Math.random() < 0.4) this.fx.add(PK.Smoke, x, v.bottom - 4, (Math.random() - 0.5) * 12, -150, 1.4, 7, 'rgba(235,248,255,0.55)', 0, 0.2);
         else this.fx.add(PK.Wind, x, v.bottom, 0, -280 - Math.random() * 100, (v.bottom - v.top) / 330, 10 + Math.random() * 10, '#ffffff', 0, 0);
       }
     }
@@ -1719,6 +1719,13 @@ export class Session implements Screen {
 
   // ------------------------------------------------------------------ drawing
 
+  /** The scenery is painted and the level shown (see render); the curtain was up first; when it lifted. */
+  private revealed = false;
+  private curtainUp = false;
+  /** the curtain is the level's whole backdrop (painted already as the level began), not its sky alone */
+  private curtainScenery = false;
+  private revealAt = -Infinity;
+
   render() {
     const r = this.app.renderer;
     const ctx = r.ctx;
@@ -1729,6 +1736,31 @@ export class Session implements Screen {
     const t = this.app.time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
+    // A level entered with its scenery not painted yet (straight from the title, the debug ground, an
+    // online guest's) gets it ready a step at a time — the backdrop a part of a layer a step, then the
+    // tiles' kit, then the chunks the view starts on — behind a curtain of its sky, rather than in one
+    // long first frame; then the curtain lifts. (From the level select, the backdrop and the kit are
+    // painted already: the curtain is the backdrop itself, the level select's scenery staying put while
+    // the chunks are painted.)
+    if (!this.revealed) {
+      // A step a frame. What a step draws, the GPU paints in that same frame (see settle), and the GPU's
+      // work is what makes these frames long — out of sight of any clock in here, so no clock can say
+      // when there's room for another (a step that took 2 ms here has cost a GPU 30 ms, the first time).
+      let scenery = false;
+      const ready = (scenery = this.backdrop.prepare(ctx, W, H)) && this.tiles.prepare(cam.fullScale, ctx) && this.tiles.prebake(cam.scale, cam.fullScale, cam.ox, cam.oy, W, H);
+      // (and nothing getting the tiles ready on the side meanwhile, as a finished backdrop asks: see
+      // prepareTilesSoon)
+      stopTilesSoon();
+      if (!ready) {
+        // (its first frame settles which curtain it is)
+        if (!this.curtainUp) this.curtainScenery = scenery;
+        this.drawCurtain(ctx, W, H, t);
+        this.curtainUp = true;
+        return;
+      }
+      this.revealed = true;
+      if (this.curtainUp) this.revealAt = t;
+    }
     this.backdrop.draw(ctx, W, H, cam.x, cam.y + cam.viewH / 2, this.L.h * T, cam.scale, t);
     // world space
     const s = cam.scale;
@@ -1845,11 +1877,27 @@ export class Session implements Screen {
       placed.push({ x: sx, y: sy, w: lab.width, h: lab.height });
       ctx.drawImage(lab, sx, sy);
     }
-    if (th.tint) {
-      ctx.fillStyle = th.tint;
-      ctx.fillRect(0, 0, W, H);
-    }
     if (this.debug && dbg.boxes) this.drawBoxes(ctx, s, cam.ox, cam.oy);
+    // the curtain lifting, a quarter of a second
+    const lift = (t - this.revealAt) / 0.25;
+    if (lift < 1) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1 - lift;
+      this.drawCurtain(ctx, W, H, t);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  /** The scenery is still being got ready behind the curtain (see render): the governor leaves these frames alone. */
+  preparing() {
+    return !this.revealed;
+  }
+
+  /** The curtain a level is revealed from (see render): its sky, or its whole backdrop when that was there from the start. */
+  private drawCurtain(ctx: CanvasRenderingContext2D, W: number, H: number, t: number) {
+    const cam = this.cam;
+    if (this.curtainScenery) this.backdrop.draw(ctx, W, H, cam.x, cam.y + cam.viewH / 2, this.L.h * T, cam.scale, t);
+    else this.backdrop.drawSky(ctx, W, H);
   }
 
   /**

@@ -91,7 +91,7 @@ host = await mk('Pip', 0, { lastRoom: code });
 await host.evaluate(() => window.__fb.flow.online());
 await waitFor(() => host.evaluate(() => window.__fb.app.current?.constructor.name === 'OnlineScreen'), 5000, 'online screen again');
 await host.evaluate(() => window.__fb.app.current.act('rehost'));
-const lobby = await step('host back', () => waitFor(() => Promise.all([host, guest].map((p) => p.evaluate(() => window.__fb.flow.link?.status === 'connected' && window.__fb.app.current?.constructor.name === 'LevelSelect' && !!document.querySelector('[data-act="continue"], .card.continue')))).then((v) => v.every(Boolean)), 40000, 'both in the lobby').catch(() => false));
+const lobby = await step('host back', () => waitFor(() => Promise.all([host, guest].map((p) => p.evaluate(() => window.__fb.flow.link?.status === 'connected' && window.__fb.app.current?.constructor.name === 'LevelSelect' && !!document.querySelector('[data-act="continue"], .card.continue, .ow-run')))).then((v) => v.every(Boolean)), 40000, 'both in the lobby').catch(() => false));
 t.check('a host whose page reloaded reopens the room: both back in the lobby, the run there to continue', lobby);
 
 // 6 · the guest's phone dies mid-level, without a goodbye: while the host waits for them, nothing is

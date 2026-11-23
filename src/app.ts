@@ -26,6 +26,12 @@ export interface Screen {
   awake?(): boolean;
   /** Called once per frame before the physics sub-steps (input already polled). */
   frame?(dt: number): void;
+  /**
+   * The screen is getting its scenery ready a step a frame, behind a curtain (a level's first moments):
+   * those frames are long by design and say nothing about what this machine can draw, so the governor
+   * doesn't count them. Asked every frame.
+   */
+  preparing?(): boolean;
 }
 
 /** Implemented by the on-screen touch controls (src/core/touch.ts). */
@@ -347,7 +353,7 @@ export class App {
     this.renderer.flush();
     if (this.renderer.lost || !this.screen) return;
 
-    if (settings.perf === 'auto') {
+    if (settings.perf === 'auto' && !this.screen.preparing?.()) {
       const lvl = this.governor.sample(rawMs, dt);
       if (lvl !== null) this.renderer.setScale(lvl);
     }

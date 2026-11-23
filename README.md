@@ -34,23 +34,32 @@ Neither can really hurt you. Whoever is caught drifts back to their partner as a
 a fall, and the last lantern is where you both carry on from.
 
 Both run at the same speed. Whoever made the room (or holds the first controller) starts as the tall
-one; either of you can **swap** at the level select. *Settings → sprouts → alike* gives both of you
+one; either of you can **swap** on the map (SWAP, or Ⓧ). *Settings → sprouts → alike* gives both of you
 the same body with every move, if you'd rather not have different powers. Online, the host's choice
 holds for both.
 
 ## Playing together
 
-- **The test course** — the first card on the level select, open from the start: every station of the
-  practice ground, for the two of you, on one screen or online. Nothing in it is saved and nothing can
-  be failed, so it's the quick way to try every move together. Its NEXT LEVEL is The Garden.
+- **The map** — the levels are stops on a map, the journey up the creek after the jay who stole your
+  seed. The stick, the d-pad or the arrows walk the two sprouts from stop to stop (hold to keep
+  going), and Ⓐ goes into the level you're standing on. On a phone, tap a stop to walk there and tap
+  it again to go in. The card in the corner names the stop and shows its fireflies, your best time
+  and, if you left the level part-way, which lantern Ⓐ carries on from. Online, whoever made the room
+  leads the way and both of you see the pair walk. Each world opens with a page of its storybook, by
+  itself the first time and on Ⓐ at the book after that. Stops still to come are shown as seeds: the
+  path goes on past them.
+- **The test course** — a side spot of Home, open from the start: every station of the practice
+  ground, for the two of you, on one screen or online. Nothing in it is saved and nothing can be
+  failed, so it's the quick way to try every move together.
 - **On one device** — *Play on one screen*: split one keyboard, use two controllers, or mix them. If a
   controller drops out (or dozes off), reconnect it and press Ⓐ to take your sprout back.
 - **Far apart** — *Play online*: one of you makes a room and reads out the four-letter code; the other
   joins with it (or opens the invite link, `…/mossbound/#join=CODE`). Phones play in landscape.
-- **On your own** — *Practice on your own*: one long practice ground with a signed station for every
-  move, and a partner the game walks for you, so the swings and tugs still work single-handed. Nothing
-  there can be failed and nothing is written to the journal. Its pause menu swaps which sprout you're
-  practising as — half the moves belong to the small one.
+- **On your own** — *Practice on your own* (or the practice ground beside Home on the map): one long
+  practice ground with a signed station for every move, and a partner the game walks for you, so the
+  swings and tugs still work single-handed. Nothing there can be failed and nothing is written to the
+  journal. Its pause menu swaps which sprout you're practising as — half the moves belong to the small
+  one.
 - **Xbox** — open the game in Edge and hold **☰ Menu → Use game controls**. Until then Edge keeps the
   controllers for its cursor. Hold **⧉ View** for full screen. For two of you on one Xbox, pick *Play on
   one screen* and each press Ⓐ on your own controller. ☰ or ⧉ opens the menu, and the level also pauses
@@ -60,11 +69,11 @@ holds for both.
 Progress lives in a shared **garden journal**. Each device keeps a copy (with a spare tucked away, in
 case the browser's storage for the site is ever wiped), and the copies merge whenever you
 play together: cleared levels, fireflies and best times are never lost, whoever played. Every level
-remembers where you got to, so **Continue** (or that level's own card) picks it back up from its last
-lit lantern, and replaying another level for a missing firefly never costs you that. A level can be
+remembers where you got to, so Ⓐ on its stop picks it back up from its last lit lantern, and replaying
+another level for a missing firefly never costs you that. A level can be
 started over on purpose from its menu. Lanterns and fireflies are saved the moment you reach them, and
-everything else the moment the game is hidden or closed. To move progress to another device, copy the
-save code from *Settings* and paste it on the other device.
+everything else the moment the game is hidden or closed. The map opens where you left off. To move
+progress to another device, copy the save code from *Settings* and paste it on the other device.
 
 ## Controls
 
@@ -81,6 +90,11 @@ save code from *Settings* and paste it on the other device.
 | ♥          | Q · H               | Ⓨ                   | ♥            |
 | menu       | Esc                 | ☰ · ⧉               | ❚❚           |
 
+On the map: walk with the arrows, WASD, the stick or the d-pad (a tap on a stop, on a phone); Ⓐ ·
+Enter · Space goes in (or opens the storybook at a world's gate); Ⓧ · X · Shift swaps who's the tall
+sprout (or the SWAP button); ♥ and "hey" work as in a level; Ⓑ · Esc goes back (online, LEAVE ROOM,
+which asks first).
+
 Two on one keyboard: the left player uses WASD, Space, Shift, E, R, Q; the right player uses the
 arrows, `/` jump, `.` hold, `,` tug, `;` dash, `[` vine, `M` ♥. The backquote key toggles a frame-rate
 meter. Climbing walls (small sprout): push into a wall in the air to cling to it, up / down to climb,
@@ -91,11 +105,19 @@ with nothing in between; untied, TUG waves "come here" to your partner.
 
 ## Levels
 
-1. **Mossy Creek** — morning · learn the ropes
-2. **Fern Falls** — golden hour · swings and stumps
-3. **The Old Mill** — afternoon · by the millrace
-4. **The Cascades** — sunset · ledges and spray
-5. **The Great Falls** — night · up, up, together
+The map has three worlds of six stops each, the last of each a boss: the creek in the sunshine
+(Old Snip, a mossy old crayfish), the mill by night (Rummage, a raccoon with a jar), and the Great
+Falls (Jangle, the jay, at the very top). Five levels are built so far; the rest are on the map as
+seeds, and the path runs on past them.
+
+1. **Mossy Creek** — morning · learn the ropes (World 1)
+2. **Fern Falls** — golden hour · swings and stumps (World 1)
+3. **The Old Mill** — afternoon · by the millrace (World 2)
+4. **The Cascades** — sunset · ledges and spray (World 3)
+5. **The Great Falls** — night · up, up, together (World 3)
+
+Adding a level or a whole world is a few lines of data: see
+[docs/MAKING-WORLDS.md](docs/MAKING-WORLDS.md).
 
 All five are creeks and waterfalls: falls in the hills behind, mossy rock and ferns underfoot, and a
 creek along the bottom of every level, so a pit is water (falling in is the same fall it always was,
@@ -180,9 +202,9 @@ fails twice blocks it. The built site serves `version.json`, so what's live can 
 ### Updates
 
 An open game picks up a new version by itself. It checks `version.json` at boot and every 90 seconds,
-and when the site has moved on it waits for a moment that costs nothing — the title, the level select,
-the start of the level you go on to from a clear card (which you get to read first), or (playing on
-one screen) the moment a lantern is lit — stops the game, saves, reloads, and puts you back where you
+and when the site has moved on it waits for a moment that costs nothing — the title, the map (on the
+way back to it from a clear card, which you get to read first), or (playing on one screen) the moment
+a lantern is lit — stops the game, saves, reloads, and puts you back where you
 were: the same screen, or the same level from its journal entry, at that lantern. Never in an online
 room (it waits until the room is left), never in a browser that keeps nothing for the site (a reload
 would lose the session — the badge says so), and on an Xbox never mid-level. The corner of every menu

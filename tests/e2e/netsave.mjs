@@ -135,27 +135,29 @@ const inOnlineLevel = (p) => waitFor(() => ev(p, () => !!window.__fbSession?.onl
   await page.close();
 }
 {
-  // the guest's level select mirrors the host's pick — of a level that exists
+  // the guest's map follows a host from before the map, which says which level it picked ('pick') — a
+  // level that exists, and only a level number
   const page = await device();
   await page.evaluate(() => { const l = (window.__l = window.__fake('guest')); window.__fb.flow.adopt(l); window.__fb.flow.mode = 'online'; window.__fb.flow.levels(); });
   await waitFor(() => ev(page, () => window.__fb.app.current?.constructor.name === 'LevelSelect'), 8000, 'the guest’s level select');
   const r = await page.evaluate(() => {
     const l = window.__l;
     const sc = window.__fb.app.current;
-    const out = {};
+    const out = { before: sc.map.here };
     try {
       l.onCtrl({ t: 'pick', level: 1.5, c: 1 });
       l.onCtrl({ t: 'pick', level: '2', c: 2 });
+      l.onCtrl({ t: 'pick', level: 99, c: 3 });
       out.threw = false;
     } catch (e) {
       out.threw = String(e.message);
     }
-    out.afterJunk = sc.sel;
-    l.onCtrl({ t: 'pick', level: 2, c: 3 });
-    out.afterReal = sc.sel;
+    out.afterJunk = sc.map.here;
+    l.onCtrl({ t: 'pick', level: 2, c: 4 });
+    out.afterReal = sc.map.here;
     return out;
   });
-  t.check(`a ‘pick’ of a level that isn’t one is ignored (sel ${r.afterJunk}), a real one followed (sel ${r.afterReal})`, r.threw === false && Number.isInteger(r.afterJunk) && r.afterReal === 2, r);
+  t.check(`a ‘pick’ of a level that isn’t one is ignored (the pair on ${r.afterJunk}), a real one followed (on ${r.afterReal})`, r.threw === false && r.afterJunk === r.before && r.afterReal === 'mill', r);
   errors.push(...page.errors);
   await page.close();
 }

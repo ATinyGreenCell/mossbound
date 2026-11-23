@@ -10,7 +10,10 @@ import { Session } from './game/session';
 import { isKind, type Kind, kindsFor } from './game/traits';
 import { NetLink, type LinkStatus } from './net/link';
 import { isValidCode, type CtrlMsg, type Profile, type Resume, type Role } from './net/protocol';
-import { CONTROLS_HTML, EndingScreen, LevelSelect, LocalScreen, OnlineScreen, TitleScreen } from './ui/screens';
+import { CONTROLS_HTML, EndingScreen, LocalScreen, OnlineScreen, TitleScreen } from './ui/screens';
+import { LevelSelect } from './ui/levelmap';
+import { mapProgress } from './overworld/progress';
+import type { MapProgress } from './overworld/layout';
 
 /** Screens that want the partner's messages while they're up. */
 export interface NetAware {
@@ -41,7 +44,7 @@ function nameOf(s: unknown, n: number) {
 export const myProfile = (): Profile => ({ name: nameOf(settings.name.trim(), 12), color: settings.color, hat: settings.hat });
 
 /** What only the host says: from the other side, they are ignored (see onCtrl). */
-const HOST_WORDS = new Set<CtrlMsg['t']>(['load', 'lobby', 'pick', 'end', 'kinds', 'clear']);
+const HOST_WORDS = new Set<CtrlMsg['t']>(['load', 'lobby', 'pick', 'end', 'kinds', 'clear', 'walk']);
 
 /** How often the host repeats a level load until the guest confirms it. */
 const LOAD_RETRY_MS = 1000;
@@ -117,6 +120,15 @@ export class Flow {
   private nextTries = 0;
   /** host, back after a reload: the level the room was in, which the pair goes back into once reunited (see levels) */
   private backTo: string | null = null;
+  /** guest: where the host's pair is on the map (see 'walk') */
+  mapAt: { at: string; to: string } | null = null;
+  /** the debug ground's own way round: the map goes into levels on the debug ground (see debug) */
+  ground: 'debug' | null = null;
+  /** where the practice ground goes back to: the map, if it was entered from there, else the title */
+  private practiceFrom: 'map' | 'title' = 'title';
+  /** the stop last gone into, and the map as it was then: the map comes back on that stop, and plays what changed (once) */
+  private lastStop: string | null = null;
+  private mapBefore: MapProgress | null = null;
 
   constructor(readonly app: App) {
     app.onRecover = () => this.title();
@@ -149,6 +161,9 @@ export class Flow {
   }
 
   title() {
+    this.ground = null;
+    // (a game started from the title again opens the map on the level played last, CONTINUE's)
+    this.lastStop = null;
     this.dropLink();
     // Whatever we are leaving writes its progress down first.
     //
@@ -163,6 +178,8 @@ export class Flow {
   }
 
   local() {
+    this.ground = null;
+    this.lastStop = null;
     this.dropLink();
     this.mode = 'local';
     this.app.setScreen(new LocalScreen(this.app, this));
@@ -176,6 +193,8 @@ export class Flow {
   }
 
   online(opts: { joinCode?: string } = {}) {
+    this.ground = null;
+    this.lastStop = null;
     this.mode = 'online';
     this.app.setScreen(new OnlineScreen(this.app, this, opts));
   }
@@ -236,7 +255,7 @@ export class Flow {
     if (HOST_WORDS.has(m.t) && this.role !== 'guest') return;
     if (m.t === 'loaded' && this.role !== 'host') return;
     // host commands that arrive out of order (over two paths): only ever obey the newest
-    if ((m.t === 'load' || m.t === 'lobby' || m.t === 'pick' || m.t === 'end') && this.role === 'guest') {
+    if ((m.t === 'load' || m.t === 'lobby' || m.t === 'pick' || m.t === 'end' || m.t === 'walk') && this.role === 'guest') {
       if (!Number.isSafeInteger(m.c) || m.c <= this.lastCmd) {
         // (a repeat of the load we're in still gets its acknowledgement)
         if (m.t === 'load' && m.n === this.nonce) this.link?.send({ t: 'loaded', n: m.n });
@@ -306,6 +325,10 @@ export class Flow {
           this.ending();
           return;
         }
+        break;
+      case 'walk':
+        // (kept: the map may not be up yet — it opens on the host's word, and then follows from here)
+        if (typeof m.at === 'string' && typeof m.to === 'string') this.mapAt = { at: m.at.slice(0, 40), to: m.to.slice(0, 40) };
         break;
     }
     this.screen?.onCtrl?.(m);
@@ -382,16 +405,28 @@ export class Flow {
       if (this.role === 'host') this.command({ t: 'lobby', c: ++this.cmd });
     }
     window.clearInterval(this.loadRetry);
-    // the cards show what has been played, so it has to be written down first (see title)
+    // the map shows what has been played, so it has to be written down first (see title)
     flushSave();
-    this.app.setScreen(new LevelSelect(this.app, this));
+    // (the stop stays noted until the title — a second LEVELS tapped before the map is up opens it there
+    // too — but what grows in on the map grows in once)
+    const before = this.mapBefore ?? undefined;
+    this.mapBefore = null;
+    this.app.setScreen(new LevelSelect(this.app, this, { from: this.lastStop ?? undefined, before }));
+  }
+
+  /** A level (or the test course, or the practice ground) is starting: the map comes back to it. */
+  private noteStop(id: string) {
+    this.lastStop = id;
+    this.mapBefore = mapProgress();
   }
 
   /**
    * The solo practice ground: one player, the game walking the other sprout. Always local, always
    * from the start, and it records nothing — so it needs none of playLevel's run bookkeeping.
    */
-  practice(swapped = settings.swap) {
+  practice(swapped = settings.swap, from: 'map' | 'title' = this.practiceFrom) {
+    this.practiceFrom = from;
+    if (from === 'map') this.noteStop('practice');
     this.mode = 'local';
     this.app.setScreen(
       new Session(this.app, this, {
@@ -416,7 +451,9 @@ export class Flow {
    * playLevel's run bookkeeping, and (unlike it) it is only reachable from #debug.
    */
   debug(level = 0, swapped = settings.swap) {
+    this.ground = 'debug';
     this.mode = 'local';
+    this.noteStop(LEVELS[clamp(Math.round(level), 0, LEVELS.length - 1)].id);
     this.app.setScreen(
       new Session(this.app, this, {
         level: clamp(Math.round(level), 0, LEVELS.length - 1),
@@ -471,8 +508,15 @@ export class Flow {
     this.startSession(i, resume, gen);
   }
 
+  /** Out of the practice ground: back where it was entered from. */
+  leavePractice() {
+    if (this.practiceFrom === 'map') this.levels();
+    else this.title();
+  }
+
   private startSession(i: number, resume?: Resume, gen?: number) {
     const online = this.mode === 'online';
+    this.noteStop(i === COURSE_INDEX ? COURSE.id : (LEVELS[i]?.id ?? ''));
     this.app.setScreen(
       new Session(this.app, this, {
         level: i,

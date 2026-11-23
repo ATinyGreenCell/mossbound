@@ -644,10 +644,10 @@ await page.evaluate(() => { const l = (window.__g = window.__fake('guest')); win
 await waitFor(async () => (await current()) === 'LevelSelect', 3000, 'guest lobby again');
 await frames(page, 2);
 const lobby = await page.evaluate(() => {
-  const text = () => document.querySelector('.levels-screen .panel')?.textContent ?? '';
+  const text = () => document.querySelector('.map-screen .map-side')?.textContent ?? '';
   const before = text();
   window.__g.set('lost');
-  return { before: /picking/.test(before), after: /left/.test(text()) };
+  return { before: /leads the way/.test(before), after: /left/.test(text()) };
 });
 t.check('the guest’s lobby says when the host has left', lobby.before && lobby.after, lobby);
 // the host reaches THE END: the guest goes to the ending too (instead of waiting on "picking…")

@@ -11,6 +11,8 @@ export interface ControlFrame {
   jumpPressed: boolean;
   /** held: plant your feet and hold the string */
   anchor: boolean;
+  /** one-shot: the anchor button pressed (the map's SWAP: a tap that's already back up still counts) */
+  anchorPressed: boolean;
   /** one-shot: yank the string */
   tugPressed: boolean;
   /** one-shot: a burst through the air (the small sprout) */
@@ -22,12 +24,12 @@ export interface ControlFrame {
 }
 
 export function makeControls(): ControlFrame {
-  return { moveX: 0, moveY: 0, jump: false, jumpPressed: false, anchor: false, tugPressed: false, dashPressed: false, shootPressed: false, heartPressed: false, heyPressed: false };
+  return { moveX: 0, moveY: 0, jump: false, jumpPressed: false, anchor: false, anchorPressed: false, tugPressed: false, dashPressed: false, shootPressed: false, heartPressed: false, heyPressed: false };
 }
 
 export function resetControls(c: ControlFrame) {
   c.moveX = c.moveY = 0;
-  c.jump = c.jumpPressed = c.anchor = c.tugPressed = c.dashPressed = c.shootPressed = c.heartPressed = c.heyPressed = false;
+  c.jump = c.jumpPressed = c.anchor = c.anchorPressed = c.tugPressed = c.dashPressed = c.shootPressed = c.heartPressed = c.heyPressed = false;
 }
 
 /** Which kind of device the player touched last — drives the touch overlay and the button names in hints. */
@@ -126,6 +128,7 @@ interface Intent {
   anchor: boolean;
   /** presses since the last frame (key-downs and touch taps; polled pads get their edges from the levels) */
   jumpTap: boolean;
+  anchorTap: boolean;
   tug: boolean;
   dash: boolean;
   shoot: boolean;
@@ -133,11 +136,11 @@ interface Intent {
   hey: boolean;
 }
 
-const makeIntent = (): Intent => ({ mx: 0, my: 0, jump: false, anchor: false, jumpTap: false, tug: false, dash: false, shoot: false, heart: false, hey: false });
+const makeIntent = (): Intent => ({ mx: 0, my: 0, jump: false, anchor: false, jumpTap: false, anchorTap: false, tug: false, dash: false, shoot: false, heart: false, hey: false });
 
 function clearIntent(i: Intent) {
   i.mx = i.my = 0;
-  i.jump = i.anchor = i.jumpTap = i.tug = i.dash = i.shoot = i.heart = i.hey = false;
+  i.jump = i.anchor = i.jumpTap = i.anchorTap = i.tug = i.dash = i.shoot = i.heart = i.hey = false;
 }
 
 /** The stick value pushed furthest, of two. */
@@ -148,6 +151,7 @@ function addButtons(into: Intent, i: Intent) {
   into.jump ||= i.jump;
   into.anchor ||= i.anchor;
   into.jumpTap ||= i.jumpTap;
+  into.anchorTap ||= i.anchorTap;
   into.tug ||= i.tug;
   into.dash ||= i.dash;
   into.shoot ||= i.shoot;
@@ -159,6 +163,7 @@ function addButtons(into: Intent, i: Intent) {
 class Shaper {
   readonly out = makeControls();
   private prevJump = false;
+  private prevAnchor = false;
 
   shape(i: Intent) {
     const c = this.out;
@@ -170,6 +175,8 @@ class Shaper {
     c.jump = jump;
     this.prevJump = jump;
     c.anchor = i.anchor;
+    c.anchorPressed = i.anchorTap || (i.anchor && !this.prevAnchor);
+    this.prevAnchor = i.anchor;
     c.tugPressed = i.tug;
     c.dashPressed = i.dash;
     c.shootPressed = i.shoot;
@@ -180,7 +187,7 @@ class Shaper {
   /** One-shot presses must only be seen by the first physics sub-step of a frame. */
   clearEdges() {
     const c = this.out;
-    c.jumpPressed = c.tugPressed = c.dashPressed = c.shootPressed = c.heartPressed = c.heyPressed = false;
+    c.jumpPressed = c.anchorPressed = c.tugPressed = c.dashPressed = c.shootPressed = c.heartPressed = c.heyPressed = false;
   }
 
   /** Let go of everything (held levels stay remembered, so a held button doesn't re-press). */
@@ -523,6 +530,7 @@ class Keys implements Device {
     it.jumpTap = any(m.jump, kp);
     it.jump = any(m.jump, k);
     it.anchor = any(m.anchor, k);
+    it.anchorTap = any(m.anchor, kp);
     it.tug = any(m.tug, kp);
     it.dash = any(m.dash, kp);
     it.shoot = any(m.shoot, kp);

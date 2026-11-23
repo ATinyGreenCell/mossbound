@@ -1,7 +1,7 @@
 // The two-player test course: the first card on the level select, open on a journal with nothing in
 // it, played by two real players (nobody walked for anyone), on one screen or online — and, like the
 // practice ground whose stations it borrows, it writes nothing to the save.
-import { launch, open, reporter, sleep, waitFor } from './harness.mjs';
+import { frames, gameTime, launch, mapHere, mapStill, open, reporter, sleep, storyOpen, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -36,13 +36,18 @@ const markOld = (page) => page.evaluate(() => { if (window.__fbSession) window._
   const page = await open(browser);
   await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.levels(); });
   await oneLevelSelect(page);
-  await sleep(450);
-  const cards = await page.evaluate(() => {
-    const all = [...document.querySelectorAll('.levels-screen .card')];
-    return { first: all[0]?.dataset.act ?? null, firstLocked: all[0]?.classList.contains('locked') ?? null, lit: document.querySelector('.levels-screen .card.sel')?.dataset.act ?? null, picked: document.querySelector('.card.picked')?.dataset.act ?? null };
-  });
-  t.check('the test course is the first card on the level select, open from the start', cards.first === 'course' && cards.firstLocked === false, cards);
-  t.check('…and on a journal with nothing in it, it is the one lit (Ⓐ plays it)', cards.lit === 'course' && cards.picked !== 'course', cards);
+  // (a journal with nothing in it opens at Home, its storybook open)
+  await waitFor(() => storyOpen(page), 5000, 'the storybook');
+  await gameTime(page, 0.4);
+  await page.keyboard.press('Enter');
+  await waitFor(async () => !(await storyOpen(page)), 5000, 'the storybook closed');
+  const spot = await page.evaluate(() => { const m = window.__fb.app.current.map; return { here: m.here, open: m.state.node[m.L.byId.get('course')], from: m.L.edges.find((e) => e.b === m.L.byId.get('course')) && m.L.nodes[m.L.edges.find((e) => e.b === m.L.byId.get('course')).a].id }; });
+  t.check('the test course is a side spot of Home, open from the start', spot.open === 1 && spot.from === 'gate:creek' && spot.here === 'gate:creek', spot);
+  await page.evaluate(() => window.__fb.app.current.map.walkTo('course'));
+  await frames(page, 2);
+  await mapStill(page);
+  t.check('…a walk from Home (Ⓐ plays it)', (await mapHere(page)) === 'course', await mapHere(page));
+  await gameTime(page, 0.3);
 
   const before = await page.evaluate(() => JSON.stringify(window.__fb.save.save));
   await page.keyboard.press('Enter');
@@ -91,9 +96,9 @@ const markOld = (page) => page.evaluate(() => { if (window.__fbSession) window._
   await sleep(450);
   const next = await waitFor(async () => {
     await page.evaluate(() => document.querySelector('.btn[data-act=next]')?.click());
-    return page.evaluate(() => { const s = window.__fbSession; return !!s && !s.__old && window.__fb.app.current === s && s.L.def.id; });
-  }, 8000, 'the garden').catch(() => false);
-  t.check(`NEXT LEVEL from the course is The Garden (${next})`, next === 'garden', next);
+    return page.evaluate(() => window.__fb.app.current?.constructor.name === 'LevelSelect' && window.__fb.app.current.map.here);
+  }, 8000, 'the map').catch(() => false);
+  t.check(`NEXT LEVEL from the course goes back to the map, beside Home (${next})`, next === 'course', next);
   errors.push(...page.errors);
   await page.close();
 }
@@ -112,7 +117,7 @@ const fake = () => {
   await page.evaluate(() => { const l = (window.__h = window.__fake('host')); window.__fb.flow.adopt(l); window.__fb.flow.levels(); });
   await oneLevelSelect(page);
   await sleep(450);
-  await page.click('.card[data-act=course]');
+  await page.evaluate(() => window.__fb.app.current.act('course'));
   await newSession(page, 's.course && s.online', 'the host in the course');
   const host = await page.evaluate(() => ({ me: window.__fbSession.me, loads: window.__h.sent.filter((m) => m.t === 'load') }));
   t.check('the host\'s course card sends the guest a load of the course', host.me === 0 && host.loads.length >= 1 && host.loads.every((m) => m.level === -1 && !m.resume), host);
@@ -124,8 +129,10 @@ const fake = () => {
   await page.evaluate(fake);
   await page.evaluate(() => { const l = (window.__g = window.__fake('guest')); window.__fb.flow.adopt(l); l.onCtrl({ t: 'lobby', c: 1 }); });
   await oneLevelSelect(page);
-  const guestCard = await page.evaluate(() => { const c = document.querySelector('.levels-screen .card.course'); return { there: !!c, act: c?.dataset.act ?? null }; });
-  t.check('the guest sees the course card too, but it is the host\'s to press', guestCard.there && guestCard.act === null, guestCard);
+  await page.evaluate(() => window.__fb.app.current.act('course'));
+  await sleep(300);
+  const guestSpot = await page.evaluate(() => { const m = window.__fb.app.current.map; return { open: m.state.node[m.L.byId.get('course')], screen: window.__fb.app.current.constructor.name, sent: window.__g.sent.filter((x) => x.t === 'load').length }; });
+  t.check('the guest sees the course on the map too, but going in is the host\'s', guestSpot.open === 1 && guestSpot.screen === 'LevelSelect' && !guestSpot.sent, guestSpot);
   // a level number that is neither a level nor the course is ignored, as before
   await page.evaluate(() => { window.__g.onCtrl({ t: 'load', level: -2, n: 5, c: 2, gen: 1 }); window.__g.onCtrl({ t: 'load', level: 99, n: 6, c: 3, gen: 1 }); });
   await sleep(500);

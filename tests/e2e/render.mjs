@@ -10,6 +10,9 @@ const t = reporter();
 const page = await open(browser, { storage: { 'mossbound.settings.v1': { perf: 'high' } } });
 await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keysL', 'keysR']; f.playLevel(0); });
 await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'), 5000, 'session');
+// (and shown: a level entered straight gets its scenery ready a step a frame behind a curtain first —
+// seconds of frames on a software renderer — and the canvases that paints aren't the zoom's below)
+await waitFor(() => page.evaluate(() => window.__fbSession?.revealed !== false), 30000, 'the level shown');
 await sleep(600);
 /** Put both birds on the ground at tile column `tx` (the string off, so it can't drag them about). */
 const standAt = (tx, gap = 2) => page.evaluate((tx, gap) => {

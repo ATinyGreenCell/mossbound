@@ -603,13 +603,30 @@ await part("what gets painted again, and what's kept", async () => {
     const { THEMES } = await import('/src/render/theme.ts');
     const { CreekScene } = await import('/src/render/creek.ts');
     window.__paints = {};
+    // (and by whom: the screen showing when it was painted)
+    window.__paintsBy = {};
+    // (a layer is painted whole, or a step a frame through its steps when the painting is stepped: both
+    // are counted, or a stepped repaint would go unseen)
+    const count = (id) => {
+      window.__paints[id] = (window.__paints[id] ?? 0) + 1;
+      const by = `${id}@${window.__fb?.app?.current?.constructor?.name ?? '?'}`;
+      window.__paintsBy[by] = (window.__paintsBy[by] ?? 0) + 1;
+    };
     for (const [id, th] of Object.entries(THEMES)) {
       const L = th.layers[0];
+      if (!L) continue;
       const p = L.paint;
       L.paint = function (...a) {
-        window.__paints[id] = (window.__paints[id] ?? 0) + 1;
+        count(id);
         return p.apply(this, a);
       };
+      if (L.steps) {
+        const st = L.steps;
+        L.steps = function (...a) {
+          count(id);
+          return st.apply(this, a);
+        };
+      }
     }
     window.__stills = 0;
     const sp = CreekScene.prototype.paint;
@@ -635,12 +652,17 @@ await part("what gets painted again, and what's kept", async () => {
   });
   await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'LevelSelect'), 10000, 'the level select');
   await settle();
+  // Ⓐ on Mossy Creek: the zoom in gets its scenery ready (under the map, a step a frame as the iris
+  // closes, the rest once it has), and the level takes that painting up rather than painting it again
+  const by0 = await page.evaluate(() => ({ ...window.__paintsBy }));
   let p0 = await paints();
-  await page.evaluate(() => window.__fb.flow.playLevel(0));
+  await page.evaluate(() => { const ls = window.__fb.app.current; ls.map.standOn('garden'); ls.act('go'); });
   await waitFor(() => page.evaluate(() => window.__fb.app.current?.constructor.name === 'Session' && window.__fbSession?.L?.index === 0), 10000, 'the level');
+  // (in play: its first view's chunks are painted a step a frame behind a curtain before it's shown)
+  await waitFor(() => page.evaluate(() => window.__fbSession?.revealed !== false), 30000, 'the level shown');
   await settle();
-  const entering = await since(p0);
-  t.check(`entering a level paints no backdrop: the level select already painted it (${JSON.stringify(entering)})`, !entering.garden, entering);
+  const by = await page.evaluate((by0) => Object.fromEntries(Object.entries(window.__paintsBy).map(([k, n]) => [k, n - (by0[k] ?? 0)]).filter(([, n]) => n)), by0);
+  t.check(`entering a level from the map: the zoom paints its scenery once, the level none (${JSON.stringify(by)})`, (by['garden@LevelSelect'] ?? 0) <= 1 && !by['garden@Session'], by);
   // what the renderer keeps, mid-level (after a collection, so only what's really held is counted)
   await cdp.send('HeapProfiler.collectGarbage');
   await sleep(200);

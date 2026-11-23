@@ -109,6 +109,14 @@ export const clip = (s: unknown, n: number) => {
   return parts.slice(0, n).join('');
 };
 
+/**
+ * The levels from before the map, in the order those builds play them. `unlocked` counts how many of
+ * them are open — these only, as those builds read it. A level made since is opened by the map (see
+ * overworld/progress.ts), and clearing one leaves the count alone: counted along LEVELS, a sixth level
+ * cleared would have opened the five before it.
+ */
+export const LEGACY_LEVELS: readonly string[] = ['garden', 'woods', 'mill', 'paris', 'tower'];
+
 /** A short fingerprint of a level's map: an update that edits the map changes it. */
 export function levelSig(index: number): string {
   const s = LEVELS[index]?.map.join('\n') ?? '';
@@ -162,14 +170,15 @@ export function cleanSave(raw: unknown): Save | null {
   const runs = record(v.runs);
   // it has to look like a save, not just any object
   if (!levels && !runs && !own(v, 'unlocked')) return null;
-  const s: Save = { v: 3, unlocked: int(v.unlocked, 0, LEVELS.length), levels: {}, finished: v.finished === true, runs: {}, clock: int(v.clock, 0, MAX_CLOCK) };
-  LEVELS.forEach((L, i) => {
+  const s: Save = { v: 3, unlocked: int(v.unlocked, 0, LEGACY_LEVELS.length), levels: {}, finished: v.finished === true, runs: {}, clock: int(v.clock, 0, MAX_CLOCK) };
+  LEVELS.forEach((L) => {
     const rec = levels && own(levels, L.id) ? record(levels[L.id]) : null;
     if (rec) {
       const r = { seeds: int(rec.seeds, 0, MAX_SEEDS), feathers: int(rec.feathers, 0, 7) & 7, time: num(rec.time, 0, 360000), clears: int(rec.clears, 0, 1e6) };
       s.levels[L.id] = r;
-      // a finished level opens the next one, whatever the count says
-      if (r.clears > 0) s.unlocked = Math.max(s.unlocked, Math.min(LEVELS.length, i + 1));
+      // a finished level opens the next one, whatever the count says (the count is of the five: see LEGACY_LEVELS)
+      const k = LEGACY_LEVELS.indexOf(L.id);
+      if (r.clears > 0 && k >= 0) s.unlocked = Math.max(s.unlocked, k + 1);
     }
     const slot = runs && own(runs, L.id) ? cleanSlot(runs[L.id]) : null;
     if (slot) s.runs[L.id] = slot;
@@ -638,7 +647,7 @@ export function bankFeathers(id: string, mask: number) {
 }
 
 /** A level was finished: keep the best of everything, unlock the next one, and close its run. */
-export function recordClear(id: string, index: number, seeds: number, feathers: number, time: number, gen = 0) {
+export function recordClear(id: string, _index: number, seeds: number, feathers: number, time: number, gen = 0) {
   const r = levelRecord(id);
   r.seeds = Math.max(r.seeds, int(seeds, 0, MAX_SEEDS));
   r.feathers |= feathers & 7;
@@ -646,7 +655,9 @@ export function recordClear(id: string, index: number, seeds: number, feathers: 
   if (typeof time === 'number' && Number.isFinite(time) && time > 0) r.time = Math.min(r.time || Infinity, time, 360000);
   r.clears++;
   save.levels[id] = r;
-  save.unlocked = Math.max(save.unlocked, Math.min(LEVELS.length, index + 1));
+  // (the count older builds read: of the five from before the map only — see LEGACY_LEVELS)
+  const k = LEGACY_LEVELS.indexOf(id);
+  if (k >= 0) save.unlocked = Math.max(save.unlocked, k + 1);
   const slot = save.runs[id];
   // the run is over: a marker stays, so an older copy of it can't come back in a merge
   save.runs[id] = { gen: Math.max(gen, slot?.gen ?? 0), at: tick(), run: null };

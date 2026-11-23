@@ -174,10 +174,17 @@ for (const viewport of [{ width: 844, height: 390 }, { width: 667, height: 375 }
   await p.touchscreen.tap(beside.x, beside.y);
   await sleep(300);
   const m1 = await music();
-  // the level select's SWAP, and the buttons of the pause card
+  // the map's SWAP, and the buttons of the pause card
   await p.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.seats = ['keys', 'keysR']; f.levels(); });
   await waitFor(() => p.evaluate(() => document.querySelectorAll('.levels-screen').length === 1 && window.__fb.app.current?.constructor.name === 'LevelSelect'), 5000, 'levels');
   await sleep(300);
+  // (a new journal opens the map at Home with its storybook up, over everything: a tap puts it away)
+  if (await p.evaluate(() => !!document.querySelector('.story-wrap'))) {
+    await sleep(300);
+    await p.touchscreen.tap(viewport.width / 2, viewport.height / 2);
+    await waitFor(() => p.evaluate(() => !document.querySelector('.story-wrap')), 3000, 'the storybook put away');
+    await sleep(300);
+  }
   const swap = await reach('.levels-screen [data-act="swap"]', UPDOWN);
   await p.evaluate(() => window.__fb.flow.enterLevel(0));
   await waitFor(() => p.evaluate(() => window.__fb.app.current?.constructor.name === 'Session'), 8000, 'level');

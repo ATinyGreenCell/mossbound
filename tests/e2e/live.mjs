@@ -37,7 +37,8 @@ async function device(browser, url, name) {
 const text = (page, sel) => page.evaluate((s) => document.querySelector(s)?.textContent?.trim() ?? null, sel);
 // menus ignore clicks for their first moments, so wait before each one
 const click = async (page, sel) => { await sleep(500); await page.click(sel); await sleep(300); };
-const picking = (s) => /pick a level|is picking/.test(s ?? '');
+/** on the map (the level select): the host's corner says nothing of who leads, the guest's says the host does */
+const onMap = (page) => page.evaluate(() => !!document.querySelector('.map-screen .map-side'));
 
 const b1 = await launch();
 const b2 = await launch();
@@ -63,16 +64,23 @@ const gotCode = await waitFor(async () => (await text(host, '.code'))?.length ==
 const code = gotCode ? await text(host, '.code') : null;
 t.check('a room opens with a code', !!code, code);
 const guest = code ? await device(b2, `${BASE}#join=${code}`, 'Bo') : null;
-const paired = guest ? await waitFor(async () => picking(await text(host, '.panel-title')) && picking(await text(guest, '.panel-title')), 60000, 'both at the level select') : false;
-t.check('the two devices pair and reach the level select', paired);
+const paired = guest ? await waitFor(async () => (await onMap(host)) && (await onMap(guest)) && /Pip leads the way/.test((await text(guest, '.map-side')) ?? ''), 60000, 'both on the map') : false;
+t.check('the two devices pair and reach the map (the guest’s says the host leads)', paired);
 
 if (paired) {
   const lines = [await text(host, '.sprouts'), await text(guest, '.sprouts')];
   t.check('both screens agree who is which sprout', lines.every((l) => /Pip is the tall sprout/.test(l ?? '') && /Bo the small one/.test(l ?? '')), lines);
 
-  await click(host, '[data-act="lvl:0"]');
+  // a new journal: the map opens at Home with its storybook, which a click closes; then → walks to Mossy
+  // Creek, and Ⓐ (Enter) goes in — on both devices
+  if (await host.evaluate(() => !!document.querySelector('.story-wrap'))) await click(host, '.story-wrap');
+  await sleep(600);
+  await host.keyboard.press('ArrowRight');
+  await sleep(1500);
+  t.check('→ walks the host’s pair to Mossy Creek', /Mossy Creek/.test((await text(host, '.ow-card')) ?? ''), await text(host, '.ow-card'));
+  await host.keyboard.press('Enter');
   const inLevel = await waitFor(async () => (await host.evaluate(() => !!document.querySelector('.hud'))) && (await guest.evaluate(() => !!document.querySelector('.hud'))), 30000, 'the level on both');
-  t.check('the host’s pick starts the level on both devices', inLevel);
+  t.check('the host’s Ⓐ starts the level on both devices', inLevel);
 
   if (inLevel) {
     await sleep(2500);

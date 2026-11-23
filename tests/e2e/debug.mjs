@@ -236,6 +236,20 @@ t.check('…its NEXT LEVEL goes on to the next level on the debug ground', next.
 t.check('…and the last level’s card offers no THE END (which writes the journal)', !last.buttons.includes('ending') && last.buttons.includes('again'), last);
 t.check('…and none of it touched the journal', j0 === j1);
 
+// ---- …and its own way round: the card's LEVELS is the map, every level open and the pair on the level
+// just played, and a stop there goes into that level on the debug ground — still off the record
+await markOld();
+await waitFor(async () => {
+  await page.evaluate(() => document.querySelector('.ov-buttons .btn[data-act=levels]')?.click());
+  return page.evaluate(() => window.__fb.app.current?.constructor.name === 'LevelSelect');
+}, 8000, 'the map');
+const onMap = await page.evaluate(() => { const m = window.__fb.app.current.map; return { here: m.here, open: ['garden', 'woods', 'mill', 'paris', 'tower'].map((id) => m.state.node[m.L.byId.get(id)]) }; });
+await page.evaluate(() => { const ls = window.__fb.app.current; ls.map.standOn('mill'); ls.act('go'); });
+await fresh('the debug ground, from the map');
+const fromMap = await where();
+const j2 = await journal();
+t.check(`its LEVELS is the map, every level open, on the level just played (${onMap.here}); a stop there goes into that level on the debug ground`, onMap.open.every((s) => s > 0) && onMap.here === 'tower' && fromMap.debug && fromMap.offRecord && fromMap.level === 2 && j2 === j0, { onMap, fromMap, journal: j2 === j0 });
+
 errors.push(...page.errors);
 await sleep(100);
 await browser.close();

@@ -68,6 +68,13 @@ const TESTS = [
   // no browser: pure logic, bundled through Vite. It runs anywhere node does, including a sandbox
   // with no Chrome, which is where creature changes get written.
   { name: 'creatures', file: 'creatures.mjs', est: 10, pass: passed('creatures') },
+  // no browser either: the overworld map's layout (append only, nothing overlapping, every stop
+  // reachable) and its painted chunks staying bounded on a 50-world map
+  { name: 'overworld', file: 'overworld.mjs', est: 5, pass: passed('overworld') },
+  // the map as the level select: walking, going in, coming back after a clear, CONTINUE, SWAP, Home's
+  // side spots, the storybook, a phone and an Xbox pad; and online, the host leading the guest's pair
+  { name: 'map', file: 'map.mjs', est: 60, pass: passed('map') },
+  { name: 'map-online', file: 'map.mjs', args: ['online'], est: 60, pass: passed('map') },
   { name: 'render', file: 'render.mjs', est: 25, pass: passed('render') },
   // draws, pixels and repaints counted rather than timed, so it holds on a runner with no GPU
   { name: 'paint', file: 'paint.mjs', est: 60, pass: passed('paint') },

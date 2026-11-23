@@ -24,6 +24,8 @@ export interface Settings {
   even: boolean;
   /** player 1 is the small sprout and player 2 the tall one */
   swap: boolean;
+  /** the worlds whose storybook card this device has shown (it opens by itself only the first time) */
+  stories: string[];
   /** optional TURN relay for networks that block direct connections */
   turn: TurnServer;
 }
@@ -42,13 +44,14 @@ const defaults: Settings = {
   lastRole: 'host',
   even: false,
   swap: false,
+  stories: [],
   turn: { urls: '', username: '', credential: '' },
 };
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : null);
 
 function load(): Settings {
-  const s: Settings = { ...defaults, turn: { ...defaults.turn } };
+  const s: Settings = { ...defaults, stories: [], turn: { ...defaults.turn } };
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return s;
@@ -64,6 +67,7 @@ function load(): Settings {
     if (v.lastRole === 'host' || v.lastRole === 'guest') s.lastRole = v.lastRole;
     if (typeof v.even === 'boolean') s.even = v.even;
     if (typeof v.swap === 'boolean') s.swap = v.swap;
+    if (Array.isArray(v.stories)) s.stories = v.stories.filter((w): w is string => typeof w === 'string').map((w) => w.slice(0, 32)).slice(0, 256);
     if (v.turn && typeof v.turn === 'object') {
       s.turn.urls = str(v.turn.urls, 300) ?? '';
       s.turn.username = str(v.turn.username, 200) ?? '';

@@ -381,7 +381,7 @@ export function drawPeg(ctx: CanvasRenderingContext2D, x: number, y: number, th:
     ctx.fill();
     return;
   }
-  const metal = th.id === 'paris' || th.id === 'tower' ? '#c9a46a' : '#e8b44a';
+  const metal = '#e8b44a';
   ctx.strokeStyle = th.ink;
   ctx.lineWidth = 3.6;
   ctx.beginPath();
@@ -453,21 +453,6 @@ export function drawSpring(ctx: CanvasRenderingContext2D, x: number, y: number, 
   const h = 14 * (1 - k * 0.45);
   ctx.strokeStyle = th.ink;
   ctx.lineWidth = 1.6;
-  if (th.id === 'paris') {
-    // a striped café awning, bouncy
-    ctx.save();
-    ctx.translate(x, base - h);
-    ctx.fillStyle = '#7a3a3a';
-    ctx.fillRect(-12, 0, 2, h);
-    ctx.fillRect(10, 0, 2, h);
-    for (let s = 0; s < 6; s++) {
-      ctx.fillStyle = s % 2 ? '#ffffff' : '#e0414f';
-      ctx.fillRect(-15 + s * 5, -4, 5, 7);
-    }
-    ctx.strokeRect(-15, -4, 30, 7);
-    ctx.restore();
-    return;
-  }
   if (th.id === 'garden' || th.id === 'woods' || th.id === 'cascade' || th.id === 'falls') {
     // a bouncy blossom
     ctx.fillStyle = '#5aa84a';
@@ -565,9 +550,9 @@ export function drawDoor(ctx: CanvasRenderingContext2D, tx: number, ty: number, 
   ctx.rect(x, y, T, T);
   ctx.clip();
   const dy = -open * T;
-  ctx.fillStyle = th.id === 'tower' || th.id === 'paris' ? '#4a4660' : '#8a5a34';
+  ctx.fillStyle = '#8a5a34';
   ctx.fillRect(x + 3, y + dy, T - 6, T);
-  ctx.fillStyle = th.id === 'tower' || th.id === 'paris' ? '#6a6688' : '#a8703f';
+  ctx.fillStyle = '#a8703f';
   for (let k = 0; k < 3; k++) ctx.fillRect(x + 6 + k * 8, y + dy, 4, T);
   ctx.fillStyle = c;
   ctx.fillRect(x + 3, y + dy + 12, T - 6, 4);
@@ -833,9 +818,8 @@ export function drawMover(ctx: CanvasRenderingContext2D, x: number, y: number, w
       ctx.stroke();
       break;
     }
-    case 'paris':
     case 'mill': {
-      // a hanging gondola / lift on ropes
+      // a lift hanging on ropes
       ctx.strokeStyle = 'rgba(60,50,70,0.6)';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -844,14 +828,14 @@ export function drawMover(ctx: CanvasRenderingContext2D, x: number, y: number, w
       ctx.moveTo(x + w - 4, y);
       ctx.lineTo(x + w - 4, y - 400);
       ctx.stroke();
-      ctx.fillStyle = th.id === 'paris' ? '#5b6b8a' : th.plank.side;
+      ctx.fillStyle = th.plank.side;
       ctx.strokeStyle = th.ink;
       ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.roundRect(x, y, w, 11, 3);
       ctx.fill();
       ctx.stroke();
-      ctx.fillStyle = th.id === 'paris' ? '#8fa1c0' : th.plank.top;
+      ctx.fillStyle = th.plank.top;
       ctx.fillRect(x + 2, y + 1.5, w - 4, 2.5);
       break;
     }
@@ -914,7 +898,7 @@ export function drawBeetle(ctx: CanvasRenderingContext2D, x: number, y: number, 
   ctx.ellipse(0, 0, hw, hh, 0, 0, TAU);
   ctx.fill();
   ctx.stroke();
-  // a lit band along the top of the shell, so it reads against a dark tower as well as a bright lawn
+  // a lit band along the top of the shell, so it reads against a night cliff as well as a bright lawn
   ctx.fillStyle = SHELL_LIT;
   ctx.beginPath();
   ctx.ellipse(-1, -hh * 0.3, hw * 0.72, hh * 0.38, 0, 0, TAU);

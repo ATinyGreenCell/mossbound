@@ -43,7 +43,8 @@ import { cleanResume, type Flow } from './flow';
 import { COURSE_INDEX, LEVELS } from './game/levels';
 import { Session } from './game/session';
 import type { Resume } from './net/protocol';
-import { EndingScreen, LevelSelect, TitleScreen } from './ui/screens';
+import { EndingScreen, TitleScreen } from './ui/screens';
+import { LevelSelect } from './ui/levelmap';
 
 declare const __APP_VERSION__: string;
 /** This build's version (package.json, stamped in by vite.config.ts). */

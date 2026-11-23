@@ -21,7 +21,9 @@ const protocolOf = async (page) => page.evaluate(async () => (await import('/src
 async function round(hostBase, guestBase, label) {
   const b1 = await launch();
   const b2 = await launch();
-  const host = await open(b1, { query: { base: hostBase, extra: 'norender' }, storage: { 'mossbound.settings.v1': { name: 'Pip', color: 0 } } });
+  // (a map host has cleared Mossy Creek, so it can walk on to Fern Falls and back: see below)
+  const cleared = { 'mossbound.save.v3': { v: 3, unlocked: 1, levels: { garden: { seeds: 20, feathers: 1, time: 300, clears: 1 } }, finished: false, runs: {}, clock: 0 } };
+  const host = await open(b1, { query: { base: hostBase, extra: 'norender' }, storage: { 'mossbound.settings.v1': { name: 'Pip', color: 0 }, ...(hostBase === THIS ? cleared : {}) } });
   const guest = await open(b2, { query: { base: guestBase, extra: 'norender' }, storage: { 'mossbound.settings.v1': { name: 'Bo', color: 1 } } });
   const done = async (ok) => {
     t.check(`${label}: no errors on either device`, !host.errors.length && !guest.errors.length, [...host.errors, ...guest.errors].slice(0, 3));
@@ -56,9 +58,43 @@ async function round(hostBase, guestBase, label) {
   const named = await waitFor(async () => (await host.evaluate(() => window.__fb.flow.partner?.name)) === 'Bo' && (await guest.evaluate(() => window.__fb.flow.partner?.name)) === 'Pip', 15000, 'names').catch(() => false);
   t.check(`${label}: each sees the other's name`, !!named);
   await waitFor(async () => (await screenName(host)) === 'LevelSelect' && (await screenName(guest)) === 'LevelSelect', 20000, 'level select');
-  await host.evaluate(() => window.__fb.app.current.act('lvl:0'));
+  // The level select is a map from 1.12 on (src/ui/levelmap.ts), and a list of cards before it. A map
+  // host walks its pair ('walk', which an older guest ignores) and says which level it stands on ('pick',
+  // which the older guest's cards follow); a card host's 'pick' puts a map guest's pair on that stop.
+  // Going in is the same 'load' either way.
+  const isMap = (page) => page.evaluate(() => !!window.__fb.app.current?.map);
+  const [hostMap, guestMap] = [await isMap(host), await isMap(guest)];
+  if (hostMap) {
+    // a new journal opens the map at Home with its storybook up: a tap closes it, → walks to Mossy Creek
+    await sleep(400);
+    if (await host.evaluate(() => !!document.querySelector('.story-wrap'))) await host.click('.story-wrap');
+    await waitFor(async () => !(await host.evaluate(() => !!document.querySelector('.story-wrap'))), 5000, 'the storybook closed');
+    await sleep(700);
+    // → Mossy Creek, → Fern Falls, ← Mossy Creek: the guest follows each stop (a card guest, the level)
+    const LEVEL = { garden: 0, woods: 1 };
+    const seen = [];
+    for (const [k, id] of [['ArrowRight', 'garden'], ['ArrowRight', 'woods'], ['ArrowLeft', 'garden']]) {
+      await host.keyboard.press(k);
+      const there = await waitFor(() => host.evaluate((id) => { const m = window.__fb.app.current.map; return m.here === id && !m.walking; }, id), 8000, `the host on ${id}`).catch(() => false);
+      const follows = guestMap
+        ? await waitFor(() => guest.evaluate((id) => window.__fb.app.current.map?.here === id, id), 8000, 'the guest’s pair').catch(() => false)
+        : await waitFor(() => guest.evaluate((i) => window.__fb.app.current.sel === i, LEVEL[id]), 8000, 'the guest’s card').catch(() => false);
+      seen.push(`${id}${there ? '' : ' (host not there)'}${follows ? '' : ' (guest not following)'}`);
+    }
+    t.check(`${label}: the host’s pair walks Mossy Creek → Fern Falls → Mossy Creek, and the guest's ${guestMap ? 'pair follows' : 'level select picks each'}`, seen.every((x) => !x.includes('(')), seen);
+    await host.keyboard.press('Enter');
+  } else {
+    // the card host's highlight goes from the test course to Mossy Creek: its 'pick' says so
+    await sleep(700);
+    await host.keyboard.press('ArrowRight');
+    if (guestMap) {
+      const follows = await waitFor(() => guest.evaluate(() => window.__fb.app.current.map?.here === 'garden'), 8000, 'the guest’s pair').catch(() => false);
+      t.check(`${label}: the host’s pick puts the guest’s pair on Mossy Creek`, !!follows, await guest.evaluate(() => window.__fb.app.current.map?.here));
+    }
+    await host.evaluate(() => window.__fb.app.current.act('lvl:0'));
+  }
   const inLevel = await waitFor(async () => (await screenName(host)) === 'Session' && (await screenName(guest)) === 'Session', 25000, 'both in the level').catch(() => false);
-  t.check(`${label}: the host's pick starts the level on both`, !!inLevel);
+  t.check(`${label}: the host's ${hostMap ? 'Ⓐ' : 'pick'} starts the level on both`, !!inLevel);
   if (!inLevel) return done(false);
   await sleep(1200);
   // there is no vine until a sprout asks for one; this check is about what the vine does, so tie it

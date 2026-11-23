@@ -48,6 +48,9 @@ const r = await page.evaluate(async () => {
   S.setRun('paris', 1, run(2, 100, { with: 'Bo' }), true);
   S.recordClear('paris', 3, 40, 3, 300, 1);
   out.clearClosesRun = S.save.runs.paris.run === null && S.save.unlocked >= 4 && S.save.levels.paris.clears === 1 && S.save.levels.paris.feathers === 3 && S.save.runs.woods?.run?.cp === 1;
+  // the count builds before the map read (`unlocked`) counts the five levels they have, and only those:
+  // more than five is five (a level made since is opened by the map, by id, and leaves the count alone)
+  out.legacyCount = S.cleanSave({ unlocked: 9 })?.unlocked === 5 && S.cleanSave({ unlocked: 0, levels: { tower: { seeds: 1, feathers: 0, time: 9, clears: 1 } } })?.unlocked === 5 && S.LEGACY_LEVELS.join() === 'garden,woods,mill,paris,tower';
   // a run is never written over by an older start of the same level
   out.olderStartRefused = S.setRun('mill', 1, run(5, 1)) === false && S.save.runs.mill.gen === 2;
   // grown plants ride along in a run (1.3.0), and a garbled list of them is cleaned, not believed

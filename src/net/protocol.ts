@@ -58,6 +58,14 @@ export type CtrlMsg =
   | { t: 'pick'; level: number; c: number }
   /** host: the last level is done — everyone to the ending */
   | { t: 'end'; c: number }
+  /**
+   * host, on the map: its pair stands on stop `at`, or has set off from it for the next stop `to`
+   * (stop ids, see game/worlds.ts). The guest's pair walks the same. (Builds before the map ignore it:
+   * they show their own level select, which follows 'pick'.)
+   */
+  | { t: 'walk'; at: string; to: string; c: number }
+  /** either player, on the map: their sprout says something (builds before the map ignore it) */
+  | { t: 'emote'; e: 'heart' | 'hey' }
   /** gameplay events for level session `n` */
   | { t: 'ev'; n: number; e: GameEvent }
   /**

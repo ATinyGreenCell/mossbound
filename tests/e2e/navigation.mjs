@@ -1,5 +1,5 @@
 // Moving around the menus, quickly and safely: the highlight moves in the frame that moved it; a held
-// direction repeats (in menus, never on a menu that opened under it); the level select's cards are a grid;
+// direction repeats (in menus, never on a menu that opened under it); on the map the arrows walk the pair;
 // the waits after a clear, in the lobby and on "together!" are short; LEAVE ROOM asks before it ends the
 // game for both; the Ⓐ that hands an Xbox's controllers over presses nothing; and a controller reaches
 // every part of settings (your name, the save code, connection help).
@@ -7,7 +7,7 @@
 // Timings are read off the frames the game draws, never off sleeps: a frame's own clock when it ran. Every
 // hold and every wait lasts a stretch of time AND a number of frames, so a machine drawing three frames a
 // second (the CI gate: software rendering) is asked the same questions as one drawing sixty.
-import { BASE, XBOX_UA, frames, launch, open, padPress, reporter, screenName, waitFor } from './harness.mjs';
+import { BASE, XBOX_UA, frames, gameTime, launch, mapHere, mapStill, open, padPress, reporter, screenName, storyOpen, waitFor } from './harness.mjs';
 
 const browser = await launch();
 const t = reporter();
@@ -180,8 +180,20 @@ const SAVE = { unlocked: 6, levels: {}, finished: false, run: { level: 1, cp: 0,
   await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.levels(); });
   await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
   await settle(page, 400);
-  const card = await look('.levels-screen', 'ArrowRight');
-  t.check('so does a level card', !!card.sel && !card.moving.length && card.transform !== 'none', card);
+  // the level select is the map: the arrows walk the pair (no highlight to move), and the card follows
+  // them the frame they stop, with no fade (map.mjs covers the map itself)
+  if (await storyOpen(page)) {
+    await gameTime(page, 0.4);
+    await key(page, 'Enter');
+    await gameTime(page, 0.5);
+  }
+  // (the run under way is in Fern Falls, so that's where the map opens: ← is Mossy Creek)
+  const from = await mapHere(page);
+  await key(page, 'ArrowLeft');
+  await mapStill(page);
+  const walked = await page.evaluate(() => ({ here: window.__fb.app.current.map.here, sel: document.querySelector('.map-screen .sel')?.dataset.act ?? null, card: document.querySelector('.map-screen .ow-card')?.textContent ?? '', fading: document.getAnimations().filter((a) => a instanceof CSSTransition && a.effect?.target?.closest?.('.map-screen')).map((a) => a.transitionProperty) }));
+  t.check('on the map the arrows walk the pair, not a highlight', walked.here !== from && walked.sel === null, { from, ...walked });
+  t.check('…and its card says where they stopped, at once (no fade)', /Mossy Creek/.test(walked.card) && !walked.fading.length, walked);
   // a press still answers: the button under a held mouse sinks a little, smoothly
   await page.evaluate(() => window.__fb.flow.title());
   await waitFor(async () => (await screenName(page)) === 'TitleScreen', 4000, 'title again');
@@ -258,50 +270,8 @@ const SAVE = { unlocked: 6, levels: {}, finished: false, run: { level: 1, cp: 0,
   await done(page);
 }
 
-// ---- 11. the level select is a grid: ↑/↓ go to the card above or below, ←/→ along the row
-{
-  const page = await open(browser, { storage: { 'mossbound.save.v2': SAVE } });
-  await waitFor(async () => (await screenName(page)) === 'TitleScreen', 8000, 'title');
-  await page.evaluate(() => { const f = window.__fb.flow; f.mode = 'local'; f.levels(); });
-  await waitFor(async () => (await screenName(page)) === 'LevelSelect', 4000, 'levels');
-  await settle(page, 400);
-  // the layout, read off the page: rows of stops, top to bottom, each left to right
-  const grid = () => page.evaluate(() => {
-    const items = window.__fb.app.current.list.items();
-    const rows = [];
-    for (const el of items) {
-      const r = el.getBoundingClientRect();
-      let row = rows.find((x) => Math.abs(x.y - (r.top + r.height / 2)) < r.height / 2);
-      if (!row) rows.push((row = { y: r.top + r.height / 2, items: [] }));
-      row.items.push({ act: el.dataset.act, x: r.left + r.width / 2 });
-    }
-    rows.sort((a, b) => a.y - b.y);
-    for (const row of rows) row.items.sort((a, b) => a.x - b.x);
-    return rows.map((row) => row.items);
-  });
-  const rows = await grid();
-  const put = (act) => page.evaluate((act) => { const L = window.__fb.app.current.list; L.sel = L.items().findIndex((el) => el.dataset.act === act); L.highlight(); }, act);
-  const nearest = (row, x) => row.reduce((best, it) => (Math.abs(it.x - x) < Math.abs(best.x - x) ? it : best));
-  const [r0, r1] = rows;
-  const start = r0[0];
-  await put(start.act);
-  await key(page, 'ArrowDown');
-  const below = await selAct(page, '.levels-screen');
-  await key(page, 'ArrowUp');
-  const back = await selAct(page, '.levels-screen');
-  t.check('↓ goes to the card below, ↑ back up to where it was (not the next card in reading order)', rows.length >= 3 && r0.length >= 3 && below === nearest(r1, start.x).act && below !== r0[1].act && back === start.act, { below, back, rows: rows.map((r) => r.map((i) => i.act)) });
-  await put(r0[r0.length - 1].act);
-  await key(page, 'ArrowRight');
-  const wrapped = await selAct(page, '.levels-screen');
-  await key(page, 'ArrowLeft');
-  const unwrapped = await selAct(page, '.levels-screen');
-  t.check('←/→ stay in the row (the end of a row comes round to its start)', wrapped === r0[0].act && unwrapped === r0[r0.length - 1].act, { wrapped, unwrapped });
-  await put(start.act);
-  await key(page, 'ArrowUp');
-  const top = await selAct(page, '.levels-screen');
-  t.check('↑ from the top row comes round to the bottom one (BACK)', top === 'back', { top });
-  await done(page);
-}
+// ---- 11. (the level select's grid of cards went with the map: the arrows walk the pair from stop to
+// stop, and test 9 above checks the card follows them — map.mjs covers the walking)
 
 // ---- 12. the waits: the clear card is up a second after the clear and takes Ⓐ half a second later;
 // Ⓑ / ESC in the one-screen lobby still gets a player up during the countdown; "together!" holds 0.8 s

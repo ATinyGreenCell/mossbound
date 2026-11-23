@@ -2,16 +2,15 @@ import { audio } from '../audio/audio';
 import type { App, Screen } from '../app';
 import { deviceLabel, isTyping, type Device, type DeviceId } from '../core/input';
 import { debugOn } from '../core/debug';
-import { canSave, exportCode, importCode, latestRun, levelRecord, runSlot, save } from '../core/save';
+import { canSave, exportCode, importCode, levelRecord } from '../core/save';
 import { saveSettings, settings, type PerfMode } from '../core/settings';
 import { ceremony } from '../core/testmode';
 import { canInstall, install, onInstallable } from '../core/install';
 import { IS_IOS, IS_STANDALONE, IS_XBOX, XBOX_HINT } from '../core/platform';
 import type { Flow } from '../flow';
 import { Bird, BIRD_COLORS } from '../game/bird';
-import { COURSE, COURSE_INDEX, LEVELS } from '../game/levels';
+import { LEVELS } from '../game/levels';
 import { CREEK_BANK, creekScene } from '../render/creek';
-import { fmtTime } from '../game/session';
 import { NetLink, preloadNet, type LinkStatus } from '../net/link';
 import { isValidCode, makeRoomCode, normalizeCode, type CtrlMsg } from '../net/protocol';
 import { drawRope } from '../render/art';
@@ -139,13 +138,13 @@ function enterBox(row: HTMLElement) {
  * phone, tens of MB): the last few themes stay ready, older ones give their memory back.
  */
 /** Shown wherever progress is, when this browser won't keep it (blocked or full storage). */
-const SAVE_BLOCKED = 'This browser isn’t keeping your progress on this device. Playing together keeps it on your partner’s device too, and Settings has a save code to copy.';
+export const SAVE_BLOCKED = 'This browser isn’t keeping your progress on this device. Playing together keeps it on your partner’s device too, and Settings has a save code to copy.';
 
 /**
  * A room is open (making it, waiting in it, the partner picking, the partner gone but free to come
  * back): the phone's screen stays on (see Screen.awake). Only a dead link, or none, lets it sleep.
  */
-const linkLive = (flow: Flow) => flow.mode === 'online' && !!flow.link && flow.link.status !== 'error';
+export const linkLive = (flow: Flow) => flow.mode === 'online' && !!flow.link && flow.link.status !== 'error';
 
 const menuBackdrops: Backdrop[] = [];
 const MENU_BACKDROPS = 2;
@@ -176,11 +175,13 @@ class MenuScene {
     this.birds[1].facing = -1;
   }
 
+  /** scenery being got ready a step a frame, to change to once it's whole (see draw) */
+  private next: { theme: Theme; backdrop: Backdrop } | null = null;
+
   /** Change the scenery (the birds carry on where they are). */
   setTheme(theme: Theme) {
-    if (theme === this.theme) return;
-    this.theme = theme;
-    this.backdrop = menuBackdrop(theme);
+    if (theme === (this.next?.theme ?? this.theme)) return;
+    this.next = theme === this.theme ? null : { theme, backdrop: menuBackdrop(theme) };
   }
 
   /** Is this theme's scenery painted already (switching to it costs nothing)? */
@@ -194,6 +195,12 @@ class MenuScene {
     const W = r.width;
     const H = r.height;
     const t = app.time;
+    // new scenery is painted a layer a frame, the old shown until the new is whole: no long frame for it
+    if (this.next && (this.next.theme.id === 'creek' || this.next.backdrop.prepare(ctx, W, H))) {
+      this.theme = this.next.theme;
+      this.backdrop = this.next.backdrop;
+      this.next = null;
+    }
     // (the creek holds still — only its water moves; the other scenery drifts slowly by)
     const creek = this.theme.id === 'creek';
     if (!creek) this.camX += dt * 14;
@@ -333,7 +340,7 @@ export class TitleScreen implements Screen {
         this.flow.local();
         break;
       case 'practice':
-        this.flow.practice();
+        this.flow.practice(settings.swap, 'title');
         break;
       case 'debug':
         this.flow.debug();
@@ -1069,204 +1076,6 @@ export class OnlineScreen implements Screen {
 }
 
 // ------------------------------------------------------------------ level select
-
-export class LevelSelect implements Screen {
-  private readonly el: HTMLDivElement;
-  private readonly scene: MenuScene;
-  private list: ButtonList;
-  private dt = 0;
-  private sel = 0;
-  /** which list item the picked level follows (the pointer can move the highlight between frames) */
-  private shown = -1;
-  /** the scenery follows the picked level once the highlight settles (painting a theme takes a moment) */
-  private settle = 0;
-  private built = false;
-  private readonly online: boolean;
-  private readonly lead: boolean;
-
-  constructor(
-    private readonly app: App,
-    private readonly flow: Flow,
-  ) {
-    this.online = flow.mode === 'online';
-    this.lead = !this.online || flow.role === 'host';
-    this.sel = Math.min(latestRun()?.index ?? save.unlocked, LEVELS.length - 1);
-    this.scene = new MenuScene(THEMES[LEVELS[this.sel].theme]);
-    this.el = document.createElement('div');
-    this.el.className = 'screen levels-screen';
-    app.ui.appendChild(this.el);
-    // (rows of cards: ↑/↓ go to the card above or below, ←/→ along the row. Online, Ⓑ / ESC is LEAVE
-    // ROOM pressed — which asks first, as it does however it's pressed)
-    this.list = new ButtonList(this.el, (a) => this.act(a), () => (this.online ? this.list.pressAct('back') : this.act('back')), 'grid');
-    this.build();
-    audio.music('title');
-  }
-
-  private build() {
-    const partner = this.flow.partner.name || 'your partner';
-    // a rebuild (every save or profile from the partner) keeps the highlight where it was
-    const was = this.built ? this.list.items()[this.list.sel]?.dataset.act : undefined;
-    const latest = latestRun();
-    const run = latest?.slot.run ?? null;
-    let cont = '';
-    if (latest && run) {
-      const L = LEVELS[latest.index];
-      const where = run.cp >= 0 ? `lantern ${run.cp + 1}` : 'the start';
-      cont = `<div class="card continue t-${L.theme}" ${this.lead ? 'data-act="continue"' : ''}>
-        <span class="num">▶</span><b>continue</b><em>${esc(L.name)} · from ${where}</em>
-        <span class="best"><i class="seed-ico"></i> ${run.seeds.length}${run.with ? ` · ${esc(run.with)}` : ''}</span></div>`;
-    }
-    const cards = LEVELS.map((L, i) => {
-      const rec = save.levels[L.id];
-      const locked = i > save.unlocked;
-      const f = rec?.feathers ?? 0;
-      const feathers = [0, 1, 2].map((k) => `<i class="feather-ico${f & (1 << k) ? ' on' : ''}"></i>`).join('');
-      // a level part-way through carries on from there (START THE LEVEL OVER is in its menu)
-      const going = locked ? null : runSlot(L.id)?.run;
-      const at = going ? `<span class="going">▶ ${going.cp >= 0 ? `lantern ${going.cp + 1}` : 'under way'}</span>` : '';
-      return `<div class="card t-${L.theme}${locked ? ' locked off' : ''}${i === this.sel ? ' picked' : ''}" ${this.lead && !locked ? `data-act="lvl:${i}"` : ''}>
-        <span class="num">${i + 1}</span><b>${esc(L.name)}</b><em>${esc(L.subtitle)}</em>
-        <span class="feathers">${feathers}</span>${at}${rec?.time ? `<span class="best">⏱ ${fmtTime(rec.time)}</span>` : ''}${locked ? '<span class="lock">🔒</span>' : ''}</div>`;
-    }).join('');
-    // the two-player test course comes first, open from the start (it keeps nothing, so it never locks)
-    const course = `<div class="card course t-${COURSE.theme}" ${this.lead ? 'data-act="course"' : ''}>
-        <span class="num">✦</span><b>${esc(COURSE.name)}</b><em>${esc(COURSE.subtitle)}</em></div>`;
-    const link = this.flow.link;
-    const gone = this.online && link?.status === 'lost';
-    let status = '';
-    if (gone) status = `<div class="status small">${esc(partner)} left the room · they can come back with the code <b>${esc(link?.code ?? '')}</b></div>`;
-    else if (this.online && link?.status === 'reconnecting') status = `<div class="status small"><span class="spinner"></span><span>waiting for ${esc(partner)}…</span></div>`;
-    else if (this.online) status = `<div class="status ok small">${link?.via === 'relay' ? 'relay' : 'direct'} · ${Math.round(link?.rtt ?? 0)} ms · with ${esc(partner)}</div>`;
-    if (!canSave()) status += `<div class="status small warn">${SAVE_BLOCKED}</div>`;
-    // who's which sprout (whoever leads can trade)
-    const [k0] = this.flow.kinds();
-    const [p0, p1] = this.flow.profiles();
-    const [tall, small] = k0 === 'small' ? [p1, p0] : [p0, p1];
-    const who =
-      k0 === 'even'
-        ? '<div class="sprouts">two sprouts alike · Settings can make one tall and one small</div>'
-        : `<div class="sprouts"><span><b>${esc(tall.name || 'player 1')}</b> is the tall sprout · <b>${esc(small.name || 'player 2')}</b> the small one</span>${this.lead ? '<span class="btn small inline" data-act="swap">SWAP</span>' : ''}</div>`;
-    this.el.innerHTML = `
-      <div class="panel wide">
-        <div class="panel-title">${this.online && !this.lead ? (gone ? `${esc(partner)} left` : `${esc(partner)} is picking…`) : 'pick a level'}</div>
-        <div class="cards">${course}${cont}${cards}</div>
-        ${who}
-        ${status}
-        <div class="btn small" data-act="back"${this.online ? ' data-confirm>LEAVE ROOM' : '>BACK'}</div>
-      </div>`;
-    this.list.refresh();
-    if (!this.lead) {
-      // the guest's only button is LEAVE ROOM: nothing highlighted until they reach for it — and for a
-      // moment nothing at all, since the partner put this screen here, under a Ⓑ mid-tug (or an ESC)
-      if (!this.built) {
-        this.list.disarm();
-        this.list.arm();
-      }
-    } else {
-      // the first time CONTINUE, if there's a run to continue (Ⓐ mustn't start that level over); on a
-      // journal with nothing in it yet, the test course
-      const items = this.list.items();
-      const fresh = !run && save.unlocked === 0 && !runSlot(LEVELS[0].id);
-      for (const a of [was, run ? 'continue' : '', fresh ? 'course' : '', `lvl:${this.sel}`]) {
-        const i = a ? items.findIndex((el) => el.dataset.act === a) : -1;
-        if (i >= 0) {
-          this.list.sel = i;
-          break;
-        }
-      }
-      this.list.highlight();
-    }
-    this.shown = this.list.sel;
-    this.built = true;
-  }
-
-  /** Show level `i` as picked; its scenery follows once the highlight settles. */
-  private pick(i: number) {
-    this.sel = i;
-    const theme = THEMES[LEVELS[i].theme];
-    this.settle = MenuScene.ready(theme) ? 0 : 0.15;
-    if (!this.settle) this.scene.setTheme(theme);
-  }
-
-  private act(a: string) {
-    if (a === 'back') {
-      if (this.online) this.flow.leaveOnline();
-      else this.flow.title();
-      return;
-    }
-    if (a === 'course') {
-      this.flow.enterLevel(COURSE_INDEX);
-      return;
-    }
-    if (a === 'continue') {
-      const r = latestRun();
-      if (r) this.flow.enterLevel(r.index);
-      return;
-    }
-    if (a === 'swap') {
-      this.flow.swapSprouts();
-      audio.play('uiMove');
-      this.build();
-      return;
-    }
-    if (a.startsWith('lvl:')) this.flow.enterLevel(Number(a.slice(4)));
-  }
-
-  /** The partner's half of the save arrived: show what they've unlocked too. */
-  onSave() {
-    this.build();
-  }
-
-  onCtrl(m: CtrlMsg) {
-    if (m.t === 'pick' && !this.lead && Number.isInteger(m.level) && m.level >= 0 && m.level < LEVELS.length) {
-      this.pick(m.level);
-      this.build();
-    } else if (m.t === 'profile' || m.t === 'kinds') this.build();
-  }
-
-  /** The partner left, dropped out or came back: say so (the guest would otherwise wait on "picking…"). */
-  onLinkStatus() {
-    if (this.online) this.build();
-  }
-
-  frame(dt: number) {
-    this.dt = dt;
-    if (this.settle > 0) {
-      this.settle -= dt;
-      if (this.settle <= 0) this.scene.setTheme(THEMES[LEVELS[this.sel].theme]);
-    }
-    const m = this.app.input.menu;
-    if (this.flow.pollControls(m)) return;
-    this.list.update(m);
-    // (what's picked follows the highlight however it moved — arrows, d-pad or the pointer, which
-    // moves it between frames)
-    if (this.list.sel !== this.shown && this.lead) {
-      this.shown = this.list.sel;
-      const a = this.list.items()[this.list.sel]?.dataset.act ?? '';
-      const level = a.startsWith('lvl:') ? Number(a.slice(4)) : a === 'continue' ? (latestRun()?.index ?? -1) : -1;
-      if (level >= 0 && level < LEVELS.length) {
-        this.pick(level);
-        if (this.online) this.flow.link?.send({ t: 'pick', level: this.sel, c: this.flow.nextCmd() });
-        this.el.querySelectorAll<HTMLElement>('.card[data-act^="lvl:"], .card.locked').forEach((c, i) => c.classList.toggle('picked', i === this.sel));
-      }
-    }
-  }
-
-  awake() {
-    return linkLive(this.flow);
-  }
-
-  update() {}
-
-  render() {
-    this.scene.draw(this.app, this.dt, [settings.color, this.flow.partner.color]);
-  }
-
-  dispose() {
-    this.list.dispose();
-    this.el.remove();
-  }
-}
 
 // ------------------------------------------------------------------ the end
 

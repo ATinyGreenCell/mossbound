@@ -132,3 +132,26 @@ export class Renderer {
     for (const fn of this.listeners) fn();
   }
 }
+
+/** what settle draws on: hidden, and big enough to be a GPU canvas (a small one isn't) */
+let sink: CanvasRenderingContext2D | null = null;
+
+/**
+ * Have the GPU paint what's been drawn on `c` so far now, in this frame. Drawing on a canvas only
+ * records what to paint: the GPU paints it when the canvas is first drawn somewhere else, so a canvas
+ * got ready a step a frame would otherwise be painted all at once, in the frame that first shows it —
+ * and no clock in here would see that coming. A pixel of it drawn on a hidden canvas is enough; that
+ * is then wiped whole, which drops the drawing (or it would hold on to the picture of `c`, and the next
+ * stroke on `c` would have to copy it).
+ */
+export function settle(c: HTMLCanvasElement) {
+  if (!c.width || !c.height) return;
+  if (!sink) {
+    const s = document.createElement('canvas');
+    s.width = s.height = 256;
+    sink = s.getContext('2d');
+    if (!sink) return;
+  }
+  sink.drawImage(c, 0, 0, 1, 1, 0, 0, 1, 1);
+  sink.clearRect(0, 0, 256, 256);
+}

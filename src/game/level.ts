@@ -2,8 +2,8 @@ import { BEETLE_H, BEETLE_REACH, BEETLE_SPEED, BEETLE_TURN, BEETLE_W, T, TRAP_H,
 
 /** (`creek` is the title's: a mossy creek with a waterfall, see render/creek.ts — no level uses it) */
 // (`cascade` and `falls` are the creek-and-waterfall looks the fourth and fifth levels took on in
-// 1.9.0; `paris` and `tower` are what they looked like before, kept for now but used by nothing)
-export type ThemeId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'creek' | 'cascade' | 'falls';
+// 1.9.0. Those levels' ids and songs are still `paris` and `tower`: saves and the network know them so)
+export type ThemeId = 'garden' | 'woods' | 'mill' | 'creek' | 'cascade' | 'falls';
 export type SongId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'title';
 
 export interface MoverDef {

@@ -214,6 +214,16 @@ export const padAxis = (page, pad, x, y = 0) => page.evaluate((p, x, y) => { win
 
 export const screenName = (page) => page.evaluate(() => window.__fb?.app?.current?.constructor?.name ?? null);
 
+// ---- the map (the level select, see src/ui/levelmap.ts)
+/** The stop the pair stands on (or last left), or null off the map. */
+export const mapHere = (page) => page.evaluate(() => window.__fb?.app?.current?.map?.here ?? null);
+/** Is a storybook card open on the map? */
+export const storyOpen = (page) => page.evaluate(() => !!document.querySelector('.story-wrap'));
+/** Wait for the pair to stand still: not walking, not zooming into a level. (Call a frame or two after a press: it's read on the next frame.) */
+export const mapStill = (page) => waitFor(() => page.evaluate(() => { const m = window.__fb?.app?.current?.map; return !!m && !m.walking && !m.entering; }), 10000, 'the pair standing still');
+/** Settings that have shown every world's storybook already (it opens by itself only the first time). */
+export const STORIES_SEEN = { stories: ['creek', 'mill', 'falls'] };
+
 /** Results reporter: `check(name, ok, detail)` prints a line; `finish(label)` prints the verdict and errors. */
 export function reporter() {
   const checks = [];

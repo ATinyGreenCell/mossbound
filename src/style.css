@@ -707,15 +707,6 @@ body {
   color: var(--cream);
 }
 
-.card.t-paris {
-  background: linear-gradient(#ff9fb4, #9b85d0);
-}
-
-.card.t-tower {
-  background: linear-gradient(#3b4a9a, #1a1f4f);
-  color: var(--cream);
-}
-
 .card.sel {
   transform: translateY(-0.25em) scale(1.04);
 }
@@ -1408,5 +1399,140 @@ body:not(.touch) .ctl-col:last-child {
   /* the title's column is taller now: on the smallest phones it scrolls rather than run off the bottom */
   .title-screen {
     overflow-y: auto;
+  }
+}
+
+/* ------------------------------------------------------------------ the map (the level select: ui/levelmap.ts) */
+
+/* the map is drawn on the canvas below; over it only the card, the corner and the storybook take a press */
+.map-screen {
+  justify-content: flex-start;
+  align-items: stretch;
+}
+
+.map-screen .ow-card {
+  position: absolute;
+  left: calc(12px + var(--sal));
+  top: calc(10px + var(--sat));
+  bottom: auto;
+  /* from the game's unit, so a TV's card is as big as its menus (its small print, no smaller than 11 px) */
+  font-size: calc(var(--u) * 1.15);
+  /* (the corner beside it keeps the other half of the top) */
+  max-width: min(30em, 52vw);
+}
+
+.map-screen .ow-card[data-act] {
+  cursor: pointer;
+}
+
+/* (it changes the frame the pair stops, like a highlight: no fade) */
+.map-screen .ow-card,
+.map-screen .ow-card.hide {
+  transition: none;
+  transform: none;
+}
+
+.map-screen .ow-act[data-act] {
+  cursor: pointer;
+}
+
+.map-side {
+  position: absolute;
+  right: calc(12px + var(--sar));
+  top: calc(10px + var(--sat));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35em;
+  max-width: min(44vw, 24em);
+  pointer-events: none;
+}
+
+.map-side > * {
+  pointer-events: auto;
+}
+
+.map-side .btn.small {
+  margin: 0;
+}
+
+.map-side .sprouts,
+.map-side .status {
+  justify-content: flex-end;
+  text-align: right;
+  margin: 0;
+  padding: 0.3em 0.7em;
+  border-radius: 0.8em;
+  background: rgba(29, 27, 56, 0.72);
+}
+
+.map-side .btn i {
+  font-style: normal;
+  opacity: 0.7;
+}
+
+/* the storybook: a page of a picture book over the map */
+.story-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 24, 40, 0.42);
+  pointer-events: auto;
+  animation: story-in 0.25s ease-out;
+}
+
+.story-card {
+  width: min(470px, 86vw);
+  max-height: 92vh;
+  overflow: hidden;
+  padding: 14px 18px 12px;
+  border-radius: 20px;
+  border: 3px solid #2b3a1d;
+  background: #fff6e2;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35), inset 0 0 0 5px #fffbef;
+  color: #2b2140;
+  text-align: center;
+  font-size: calc(var(--u) * 1.25);
+  line-height: 1.38;
+}
+
+.story-card canvas {
+  display: block;
+  margin: 0 auto 8px;
+  max-width: 100%;
+  height: auto;
+}
+
+.story-card p {
+  margin: 0.35em 0.2em;
+}
+
+.story-world {
+  color: #8a5a34;
+  font-weight: 600;
+  font-size: max(11px, 0.72em);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.story-hint {
+  margin-top: 0.5em;
+  color: #8a5a34;
+  font-weight: 600;
+  font-size: max(11px, 0.75em);
+}
+
+@keyframes story-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (max-height: 460px) {
+  .story-card canvas {
+    max-height: 30vh;
+    width: auto;
   }
 }

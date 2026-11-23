@@ -50,9 +50,15 @@ async function levels(page) {
   await sleep(450);
 }
 const text = (page, sel) => page.evaluate((sel) => document.querySelector(sel)?.textContent.replace(/\s+/g, ' ').trim() ?? '', sel);
-/** Click a card on the level select and wait to be in that level. */
+/**
+ * What the map's card says about a stop (the pair put on it): its text, and how many fireflies it shows
+ * found. (The map is the level select: a level's card is the one for the stop the pair stands on.)
+ */
+const stopCard = (page, id) => page.evaluate((id) => { const ls = window.__fb.app.current; ls.map.standOn(id); const c = document.querySelector('.map-screen .ow-card'); return { text: c?.textContent.replace(/\s+/g, ' ').trim() ?? '', lit: c?.querySelectorAll('.ow-ff i.on').length ?? 0 }; }, id);
+/** Go in from the map — CONTINUE (Ⓐ on the card of the run's stop), or straight into level N ('lvl:N') — and wait to be in that level. */
 async function pick(page, act, level) {
-  await page.click(`[data-act="${act}"]`);
+  if (act === 'continue') await page.click(`[data-act="${act}"]`);
+  else await page.evaluate((a) => window.__fb.app.current.act(a), act);
   await waitFor(() => page.evaluate((i) => window.__fbSession?.L.index === i && window.__fb.app.current?.constructor.name === 'Session', level), 5000, `into level ${level}`);
 }
 const where = (page) => page.evaluate(() => { const s = window.__fbSession; return { cp: s.checkpoint, feathers: s.feathers, seeds: [...s.seedTaken].filter(Boolean).length, time: +s.time.toFixed(2) }; });
@@ -93,7 +99,7 @@ await scenario('replay', async () => {
   await sleep(1500);
   await reload(page);
   await levels(page);
-  const lit = await page.evaluate(() => document.querySelectorAll('[data-act="lvl:2"] .feather-ico.on').length);
+  const lit = (await stopCard(page, 'mill')).lit;
   await pick(page, 'lvl:2', 2);
   const mill = await where(page);
   t.check(`after replaying the Garden, the Old Mill carries on from its lantern (${mill.cp + 1})`, mill.cp === 1 && mill.feathers === 7 && mill.seeds === 1, mill);
@@ -170,7 +176,7 @@ await scenario('two tabs', async () => {
   await b.bringToFront();
   await reload(b);
   await levels(b);
-  const best = await text(b, '[data-act="lvl:0"] .best');
+  const best = (await stopCard(b, 'garden')).text.match(/best ([\d:]+)/)?.[1] ?? '';
   t.check(`a second tab doesn't erase the first one's progress (the Garden's best: “${best}”)`, /\d/.test(best), best);
   errors.push(...a.errors, ...b.errors);
 });
@@ -229,7 +235,7 @@ await scenario('clocks', async () => {
 await scenario('damaged save', async () => {
   const page = await device({ unlocked: '3', levels: { garden: { seeds: 20, feathers: 7, time: 100, clears: 1 }, woods: { seeds: 9, feathers: 3, time: 200, clears: 1 } }, finished: false, run: null, runAt: 0 });
   await levels(page);
-  const lit = () => page.evaluate(() => document.querySelectorAll('[data-act="lvl:0"] .feather-ico.on').length);
+  const lit = async () => (await stopCard(page, 'garden')).lit;
   const first = await lit();
   await play(page, 1);
   await page.evaluate(() => window.__fbSession.takeSeed(0, true));
@@ -265,7 +271,7 @@ await scenario('names and times', async () => {
   await sleep(300);
   await reload(page);
   await levels(page);
-  const best = await text(page, '[data-act="lvl:0"] .best');
+  const best = (await stopCard(page, 'garden')).text.match(/best ([\d:]+)/)?.[1] ?? '';
   t.check(`a garbled finishing time doesn't wipe the best one (“${best}”)`, /1:40/.test(best), best);
   errors.push(...page.errors);
 });
