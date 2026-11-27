@@ -17,7 +17,17 @@ const t = reporter();
 const errors = [];
 const browsers = [];
 const save = (o) => ({ v: 3, unlocked: 0, levels: {}, finished: false, runs: {}, clock: 0, ...o });
-const CLEARED2 = save({ unlocked: 2, levels: { garden: { seeds: 20, feathers: 1, time: 300, clears: 1 }, woods: { seeds: 30, feathers: 0, time: 400, clears: 1 } } });
+/** World 1's built levels finished, so the trail is open as far as the mill (its planned boss is walked past) */
+const CLEARED2 = save({
+  unlocked: 2,
+  levels: {
+    garden: { seeds: 20, feathers: 1, time: 300, clears: 1 },
+    woods: { seeds: 30, feathers: 0, time: 400, clears: 1 },
+    shallows: { seeds: 10, feathers: 0, time: 320, clears: 1 },
+    lilypond: { seeds: 10, feathers: 0, time: 330, clears: 1 },
+    reedrun: { seeds: 10, feathers: 0, time: 340, clears: 1 },
+  },
+});
 const SEEN = ['creek', 'mill', 'falls'];
 
 async function page(opts = {}) {

@@ -107,24 +107,28 @@ with nothing in between; untied, TUG waves "come here" to your partner.
 
 The map has three worlds of six stops each, the last of each a boss: the creek in the sunshine
 (Old Snip, a mossy old crayfish), the mill by night (Rummage, a raccoon with a jar), and the Great
-Falls (Jangle, the jay, at the very top). Five levels are built so far; the rest are on the map as
-seeds, and the path runs on past them.
+Falls (Jangle, the jay, at the very top). Eight levels are built so far; the rest are on the map as
+seeds, and the path runs on past them. In the order you meet them:
 
 1. **Mossy Creek** — morning · learn the ropes (World 1)
 2. **Fern Falls** — golden hour · swings and stumps (World 1)
-3. **The Old Mill** — afternoon · by the millrace (World 2)
-4. **The Cascades** — sunset · ledges and spray (World 3)
-5. **The Great Falls** — night · up, up, together (World 3)
+3. **The Shallows** — midday · in the creek for once (World 1)
+4. **Lily Pond** — green noon · pads adrift (World 1)
+5. **Reed Run** — afternoon · up through the reeds (World 1)
+6. **The Old Mill** — afternoon · by the millrace (World 2)
+7. **The Cascades** — sunset · ledges and spray (World 3)
+8. **The Great Falls** — night · up, up, together (World 3)
 
 Adding a level or a whole world is a few lines of data: see
 [docs/MAKING-WORLDS.md](docs/MAKING-WORLDS.md).
 
-All five are creeks and waterfalls: falls in the hills behind, mossy rock and ferns underfoot, and a
+All eight are creeks and waterfalls: falls in the hills behind, mossy rock and ferns underfoot, and a
 creek along the bottom of every level, so a pit is water (falling in is the same fall it always was,
-with a splash).
+with a splash). Where a level holds its floor close to the water, a channel is shin-deep instead: you
+splash in, wade through and hop out the far side, and only the deep ones are a fall.
 
 Each level hides three fireflies. Finding all three earns a hat (flower crown, acorn cap,
-straw hat, beret, star).
+straw hat, beret, star, snail shell, lily pad, rush hat).
 
 ## How online play stays smooth
 

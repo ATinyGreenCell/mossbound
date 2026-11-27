@@ -131,8 +131,8 @@ checkLayout(L3, 'worlds');
 ok(L3.regions.length === 3, 'three worlds');
 ok(L3.nodes.filter((n) => n.kind === 'boss').length === 3, 'three bosses');
 ok(L3.nodes.filter((n) => n.kind === 'gate').length === 3, 'three gates');
-ok(['garden', 'woods', 'mill', 'paris', 'tower', 'practice', 'course'].every((id) => L3.byId.has(id) && L3.nodes[L3.byId.get(id)].playable), 'the levels that exist are on the map, playable');
-ok(L3.nodes.filter((n) => n.planned).length === 13, `thirteen planned levels (${L3.nodes.filter((n) => n.planned).length})`);
+ok(['garden', 'woods', 'shallows', 'lilypond', 'reedrun', 'mill', 'paris', 'tower', 'practice', 'course'].every((id) => L3.byId.has(id) && L3.nodes[L3.byId.get(id)].playable), 'the levels that exist are on the map, playable');
+ok(L3.nodes.filter((n) => n.planned).length === 10, `ten planned levels (${L3.nodes.filter((n) => n.planned).length})`);
 
 // ---- unlocking
 {
@@ -143,12 +143,22 @@ ok(L3.nodes.filter((n) => n.planned).length === 13, `thirteen planned levels (${
   ok(S0.node[id('woods')] === LOCKED, 'a new game: Fern Falls is locked');
   const S2 = mapState(L3, { cleared: new Set(['garden', 'woods']) });
   ok(S2.node[id('garden')] === CLEARED && S2.node[id('woods')] === CLEARED, 'cleared levels show cleared');
-  ok(S2.node[id('shallows')] === OPEN && S2.node[id('rapids')] === OPEN, 'planned levels past a cleared one are reached (walked past)');
-  ok(S2.node[id('mill')] === OPEN, 'the planned levels in between do not lock The Old Mill');
-  ok(S2.node[id('millpond')] === LOCKED, 'past The Old Mill stays locked until it is cleared');
-  const way = route(L3, S2, id('gate:creek'), id('mill'));
+  ok(S2.node[id('shallows')] === OPEN, 'the stop after a cleared one is open');
+  ok(S2.node[id('lilypond')] === LOCKED && S2.node[id('mill')] === LOCKED, '…and the levels past that one are not');
+  // world 1's built levels all cleared: its planned boss is walked past, so world 2 opens
+  const S5 = mapState(L3, { cleared: new Set(['garden', 'woods', 'shallows', 'lilypond', 'reedrun']) });
+  ok(S5.node[id('rapids')] === OPEN, 'a planned level past a cleared one is reached (walked past)');
+  ok(S5.node[id('mill')] === OPEN, 'the planned boss does not lock The Old Mill');
+  ok(S5.node[id('millpond')] === LOCKED, 'past The Old Mill stays locked until it is cleared');
+  const way = route(L3, S5, id('gate:creek'), id('mill'));
   ok(way && way.length === 8, `a walk from home to the mill, stop by stop (${way?.length})`);
-  ok(route(L3, S2, id('gate:creek'), id('paris')) === null, 'no walk to a locked level');
+  ok(route(L3, S5, id('gate:creek'), id('paris')) === null, 'no walk to a locked level');
+  // ---- a journal from before a world grew: levels added in front of a cleared stop must not take
+  // it away again. (World 1 went from two stops to five in 1.13; the mill was already finished.)
+  const Sold = mapState(L3, { cleared: new Set(['garden', 'woods', 'mill']) });
+  ok(Sold.node[id('shallows')] === OPEN && Sold.node[id('lilypond')] === OPEN && Sold.node[id('reedrun')] === OPEN, 'levels added in front of a cleared one are open');
+  ok(Sold.node[id('mill')] === CLEARED && Sold.node[id('millpond')] === OPEN, '…and what was cleared before them is still reached');
+  ok(route(L3, Sold, id('gate:creek'), id('mill')) !== null, '…and can still be walked to');
 }
 
 // ---- append only: a fourth world moves nothing in the first three
@@ -172,7 +182,8 @@ ok(L3.nodes.filter((n) => n.planned).length === 13, `thirteen planned levels (${
   const L4 = layoutWorlds([...WORLDS, extra]);
   checkLayout(L4, 'four worlds');
   ok(L4.nodes[L4.byId.get('queen')].kind === 'boss' && !L4.nodes[L4.byId.get('honey')].main, "the guide's world: the last stop is the boss's, a `from` stop is off the trail");
-  ok(mapState(L4, { cleared: new Set(['garden', 'woods', 'mill', 'paris', 'tower']) }).node[L4.byId.get('queen')] === OPEN, "the guide's world opens once the levels before it are cleared (planned ones walked past)");
+  const allBuilt = new Set(L3.nodes.filter((n) => n.playable).map((n) => n.id));
+  ok(mapState(L4, { cleared: allBuilt }).node[L4.byId.get('queen')] === OPEN, "the guide's world opens once the levels before it are cleared (planned ones walked past)");
   ok(snapshot(L3, 3) === snapshot(L4, 3), 'adding a fourth world moves nothing in worlds 1-3');
   const d3 = scatter(L3, 2, mapTheme('falls'));
   const d4 = scatter(L4, 2, mapTheme('falls'));

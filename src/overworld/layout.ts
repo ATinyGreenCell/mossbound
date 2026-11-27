@@ -682,13 +682,22 @@ export function mapState(L: MapLayout, P: MapProgress): MapState {
   const node = new Uint8Array(L.nodes.length);
   const edge = new Uint8Array(L.edges.length);
   if (!L.nodes.length) return { node, edge };
+  /**
+   * The furthest stop along the trail the pair has got to. Everything on the trail behind it they
+   * have already walked, whether or not each one is cleared — so a level added to the MIDDLE of a
+   * world opens in front of them without shutting away the rest of the map behind it. Without this,
+   * World 1 growing from two stops to five would have taken the mill, the cascades and the falls
+   * back off anyone who had already finished them. (Node order is trail order: see MapLayout.)
+   */
+  let behind = -1;
+  for (const nd of L.nodes) if (nd.main && (P.cleared.has(nd.id) || P.passed?.has(nd.id))) behind = nd.i;
   const reached = new Uint8Array(L.nodes.length);
   reached[0] = 1;
   for (const nd of L.nodes) {
     if (!reached[nd.i]) continue;
     const done = P.cleared.has(nd.id);
     node[nd.i] = done && nd.playable ? CLEARED : OPEN;
-    const passed = done || nd.planned || nd.kind === 'gate' || !!P.passed?.has(nd.id);
+    const passed = done || nd.planned || nd.kind === 'gate' || !!P.passed?.has(nd.id) || (nd.main && nd.i < behind);
     if (!passed) continue;
     for (const ei of nd.edges) {
       const e = L.edges[ei];

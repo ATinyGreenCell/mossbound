@@ -235,7 +235,9 @@ function* build(th: Theme, k: number): Generator<void, Kit> {
 const seedOf = (th: Theme) => [...th.id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) | 0, 7);
 
 /** What a stone tile is in this theme. */
-export const stoneKind = (th: Theme): 'blocks' | 'rock' | 'bark' | 'crate' => (th.id === 'woods' ? 'bark' : th.id === 'mill' ? 'crate' : th.id === 'cascade' || th.id === 'falls' ? 'rock' : 'blocks');
+export const stoneKind = (th: Theme): 'blocks' | 'rock' | 'bark' | 'crate' =>
+  // (a pond's stumps and a reed bed's stalks are bark; the shallows' stones are rock)
+  th.id === 'woods' || th.id === 'pond' || th.id === 'reeds' ? 'bark' : th.id === 'mill' ? 'crate' : th.id === 'cascade' || th.id === 'falls' || th.id === 'shallows' ? 'rock' : 'blocks';
 
 /** Does a stone tile grow the moss cushion on its top? (Not a crate, and a log shows its rings.) */
 export const stoneMossy = (th: Theme) => stoneKind(th) === 'blocks' || stoneKind(th) === 'rock';
@@ -912,7 +914,7 @@ function spritesFor(th: Theme): Spec[] {
         }
       });
     }
-  } else if (th.id === 'mill') {
+  } else if (th.id === 'mill' || th.id === 'shallows') {
     for (let v = 0; v < 2; v++) {
       add('decor', -7, -6, 7, 2, (g) => {
         const list: Peb[] = [[0, -1.6 + v * 0.3, 4.4 - v, 2.8 - v * 0.4, 0, th.ground.pebble[v]]];
@@ -920,7 +922,7 @@ function spritesFor(th: Theme): Spec[] {
         pebbles(g, list, deep);
       });
     }
-  } else if (th.id === 'cascade' || th.id === 'falls') {
+  } else if (th.id === 'cascade' || th.id === 'falls' || th.id === 'pond' || th.id === 'reeds') {
     for (let v = 0; v < 2; v++) {
       add('decor', -11, -15, 11, 2, (g) => {
         // (the outer two fronds a shade darker than the middle one)

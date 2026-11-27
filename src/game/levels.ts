@@ -483,7 +483,535 @@ function tower(): LevelDef {
   };
 }
 
-export const LEVELS: LevelDef[] = [garden(), woods(), mill(), paris(), tower()];
+// ------------------------------------------------------------------ World 1's middle stops
+//
+// The Shallows, Lily Pond and Reed Run are stops 3, 4 and 5 of the first world (see game/worlds.ts),
+// between Fern Falls and Old Snip's rapids — but they are appended to LEVELS here, after the tower,
+// because the order of LEVELS is what two devices NAME a level by when one of them starts it for
+// both, and an older build on the other side goes by the same list. Where a level sits on the map is
+// worlds.ts's business, and nothing in the save or on the wire depends on it.
+//
+// They are also the first levels built around the creek rather than beside it. The creek's surface
+// sits a tile and a quarter up from a map's bottom edge (Session.waterTop), so how deep the water
+// comes depends on how many rows a map keeps under its floor: keep two, and a sprout standing down
+// there is in it to the ankles, with a splash as it drops in (the same check that splashes into a
+// pit). The Shallows wades those; Lily Pond holds its floor well clear of the water, so its pond is
+// deep and the way over is the pads drifting across it.
+
+// ------------------------------------------------------------------ stations
+//
+// The pieces the creek levels are made of. Each is a shape whose distances are already right (see the
+// note at the top of this file), so a long level is composed of them rather than placed tile by tile —
+// and the same thing means the same thing wherever it turns up. Where they go, in what order, and
+// what is put between them is each level's own business, which is the part worth making by hand.
+
+/** Shin-deep water: two rows down, so the creek comes over the gravel. Walk in, through, and out. */
+const wade = (m: Map, x0: number, x1: number, F: number) => m.fill(x0, F, x1, F + 1, ' ');
+/** A stone standing out of a wade, its top level with the bank either side. */
+const stone = (m: Map, x: number, F: number) => m.fill(x, F, x, F + 1, '#');
+/** A mat of old reeds over the water: it goes as you cross it. */
+const mat = (m: Map, x0: number, x1: number, row: number) => m.pit(x0, x1, row).row(x0, x1, row, '%');
+/** A plank shelf out over nothing: five rows over the ground is nobody's jump, so it takes two of you. */
+const shelf = (m: Map, x0: number, x1: number, row: number) => m.row(x0, x1, row, '=');
+
+// ------------------------------------------------------------------ 6 · the shallows (World 1 · 3)
+
+/**
+ * A broad, braided reach of the creek at midday: gravel bars, channels shin-deep enough to walk
+ * through, and the deep ones that are not. Wading is the whole idea — the first three levels treat
+ * water as the thing at the bottom of a pit, and here you stand in it on the second screen.
+ *
+ * Eighteen rows with the floor at 15 puts the creek three quarters of a tile over a wade's gravel and
+ * a tile and three quarters under the bank: a wade is a two-row dip you hop out of, like the practice
+ * ground's dips, and nothing about it is new code.
+ *
+ * It runs four acts and a shade over four hundred tiles, with seven lanterns: down the braided
+ * shallows, over the first deep channel, up out of the water and back down into it twice more. The
+ * first hundred and fifty of them are the level as 1.13 first built it, which is why the stations
+ * there sit where they do.
+ */
+function shallows(): LevelDef {
+  const m = new Map(440, 18);
+  const F = 15;
+  m.ground(0, 439, F);
+  // ===== act one: the braided shallows
+  m.set(3, F - 1, '1').set(5, F - 1, '2');
+  m.set(9, F - 1, 'i');
+  m.seeds(11, 15, F - 2);
+  // --- the first wade: two rows down, which the creek comes most of the way up. In, through, out.
+  m.set(16, F - 1, 'i');
+  wade(m, 18, 24, F);
+  m.seeds(19, 23, F - 1);
+  // --- a gravel bar with a beetle pacing it. Its walk (BEETLE_REACH is 4 tiles each way) stays well
+  // inside the bar, so it can reach neither wade's edge — which is where a crossing is launched from.
+  m.set(27, F - 1, 'i');
+  m.set(32, F - 1, 'b');
+  m.seeds(28, 39, F - 2, 2);
+  // --- a wider wade, with a stone standing in it: through the water, or stone to stone and dry
+  wade(m, 41, 48, F);
+  stone(m, 44, F);
+  m.seeds(42, 47, F - 2, 2);
+  // --- up onto the long bar, and the brambles along the top of it
+  m.ground(53, 72, F - 1);
+  m.set(55, F - 2, 'C');
+  m.set(58, F - 2, 'i');
+  m.row(62, 63, F - 2, '^');
+  m.seeds(61, 65, F - 4);
+  m.seeds(67, 70, F - 2);
+  // --- the deep channel: six tiles of it, with a ring over the middle, and the firefly hanging three
+  // rows under the ring — which is exactly where a shot from the lip leaves you when you step off it.
+  //
+  // WHERE A FIREFLY CAN GO. A sprout collects whatever its pickup box (20 x 22 px) passes, not just
+  // what it can stand on, and the small one's jump is 4.1 tiles. So nothing within about four and a
+  // half rows of ground that a sprout can stand on is gated by anything: to need a plant, a stump, a
+  // spring or a vine, a firefly has to be five rows up or out over the water.
+  m.set(71, F - 2, 'i');
+  m.pit(73, 78, F - 1);
+  m.set(75, F - 3, 'o');
+  m.set(75, F, 'F');
+  m.seeds(74, 77, F - 5);
+  // the far side is two rows below the lip you left, so the swing arrives falling
+  m.fill(79, F, 96, F, ' ');
+  m.set(82, F, 'i');
+  m.set(85, F, 'C');
+  m.seeds(84, 88, F - 1, 2);
+  m.set(90, F, 't');
+  // --- out of the water again, and the willow leaning over the creek. Its branch is four rows up:
+  // over a jump, inside every sprout's shot, and the seeds it serves are picked up at the top of the
+  // climb. The shelf past it is five rows up, which is nobody's jump at all.
+  m.ground(97, 150, F - 1);
+  m.set(103, F - 2, 'i');
+  m.set(107, F - 5, 'o');
+  m.seeds(106, 108, F - 6);
+  m.set(110, F - 2, 'i');
+  shelf(m, 112, 118, F - 6);
+  m.seeds(113, 117, F - 8, 2);
+  // (a trap rather than a beetle: a beetle's four-tile walk either side would reach the shelf the
+  // bounce is played from on one side or the lantern on the other, and a rooted thing reaches neither)
+  m.set(120, F - 2, 't');
+  m.seeds(123, 127, F - 3, 2);
+  m.set(126, F - 2, 'C');
+  // --- the kingcups: a flower bounces you to the top of the bank
+  m.set(128, F - 2, 'i');
+  m.set(131, F - 2, 'S');
+  shelf(m, 128, 134, F - 7);
+  m.seeds(129, 133, F - 10, 2);
+  // --- a nipper beside the patch of soil, and the bar runs out
+  m.set(133, F - 2, 'i');
+  m.set(136, F - 2, 'n');
+  m.set(138, F - 1, ',');
+  m.seeds(137, 139, F - 6);
+  // ===== act two: back down into the braided middle
+  m.set(152, F - 1, 'i');
+  wade(m, 156, 170, F);
+  stone(m, 158, F);
+  stone(m, 168, F);
+  // fifteen tiles of wade and a five-tile loop: there is a safe end of it either side of the
+  // dragonfly, which is what a thing on a beat needs if its beat is to be any use to you
+  m.set(163, F, 'd');
+  m.seeds(157, 169, F - 1, 3);
+  m.set(174, F - 1, 'C');
+  m.set(182, F - 1, 'b');
+  m.seeds(172, 186, F - 2, 3);
+  // --- a gap of four tiles, which is a jump, with a chub breaking the surface in it
+  m.set(187, F - 1, 'i');
+  m.pit(189, 192, F);
+  m.set(190, F + 2, 'f');
+  m.set(199, F - 1, 't');
+  m.set(207, F - 1, 'n');
+  m.seeds(195, 212, F - 2, 3);
+  // --- up two rows, past the brambles, to the kingcups and the second firefly
+  m.ground(215, 250, F - 2);
+  m.row(220, 221, F - 3, '^');
+  m.seeds(219, 222, F - 5);
+  m.set(238, F - 3, 'S');
+  shelf(m, 235, 242, F - 8);
+  m.set(238, F - 9, 'F');
+  m.seeds(236, 241, F - 11, 2);
+  m.set(246, F - 3, 'C');
+  // ===== act three: the mat, the second channel, and the clearing above it
+  m.ground(251, 350, F - 1);
+  m.set(254, F - 2, 'i');
+  mat(m, 258, 265, F - 1);
+  m.seeds(259, 264, F - 3, 2);
+  m.set(266, F - 2, 'n');
+  m.seeds(268, 274, F - 3, 2);
+  m.pit(278, 283, F - 1);
+  m.set(280, F - 3, 'o');
+  m.seeds(279, 282, F - 5);
+  m.fill(284, F - 1, 300, F, ' ');
+  m.set(292, F, 't');
+  m.seeds(286, 298, F - 1, 3);
+  m.set(305, F - 2, 'C');
+  m.set(310, F - 1, ',');
+  m.seeds(309, 311, F - 6);
+  m.set(320, F - 4, 'd');
+  m.set(325, F - 2, 'b');
+  m.seeds(315, 332, F - 3, 3);
+  shelf(m, 340, 346, F - 6);
+  m.set(343, F - 7, 'F');
+  m.seeds(341, 345, F - 8, 2);
+  // ===== act four: the long run home
+  m.ground(351, 439, F);
+  wade(m, 358, 372, F);
+  stone(m, 360, F);
+  stone(m, 370, F);
+  m.set(365, F, 'd');
+  m.seeds(359, 371, F - 1, 3);
+  m.set(378, F - 1, 'C');
+  m.set(382, F - 1, 'n');
+  m.row(390, 391, F - 1, '^');
+  m.seeds(388, 393, F - 3);
+  m.set(398, F - 1, 'b');
+  m.seeds(396, 410, F - 2, 3);
+  m.set(415, F - 1, 'i');
+  m.set(428, F - 1, 'N');
+  return {
+    id: 'shallows',
+    name: 'The Shallows',
+    subtitle: 'midday · in the creek for once',
+    theme: 'shallows',
+    song: 'shallows',
+    map: m.build(),
+    signs: [
+      'The creek goes wide and shallow here. Keep on upstream — the jay went this way.',
+      'Shin-deep, this one. Walk straight through it, and {jump} to hop out the far side.',
+      'A beetle on the gravel. It only ever paces its own patch — go round it, or hop over.',
+      'Brambles. They can’t really hurt you: whoever gets caught drifts back to your partner as a seed.',
+      'This channel is deep. Tie up and leap over the ring to swing across — or {shoot} your vine over the ring and let yourself down to the firefly under it.',
+      'Careful: a snaptrap. One of you keep its attention while the other walks past.',
+      'A willow branch, well over a jump. Point at it and {shoot} to throw your vine over it, then {climb} up.',
+      'That shelf is too high for either of you alone. Stand still and let your partner hop off your head — then hold on while they climb up.',
+      'Kingcups! They bounce.',
+      'A nipper — one of Old Snip’s young. It rears up before it darts, every time: wait for it to crawl back and walk past behind it.',
+      'A dragonfly goes round and round over this one. Watch it once from the end of the wade and you will know when to walk.',
+      'Something leaps out of the gap. Wait at the edge until it goes back under, then jump.',
+      'Another mat of old reeds. Over it quickly: whoever drops, the other catches.',
+      'The rapids are somewhere up ahead. Not far now ♥',
+    ],
+  };
+}
+
+// ------------------------------------------------------------------ 7 · lily pond (World 1 · 4)
+
+/**
+ * Where the creek slows and spreads into a still green pond. Nothing here is wadeable: the pond is
+ * deep, and the way over it is the pads drifting across — which are the mill's ferry under another
+ * coat of paint (drawMover paints a mover as a floating leaf in any garden-coloured theme, which is
+ * why the cascades' sign already calls theirs a lily pad).
+ *
+ * The pads are what makes this a pair's level rather than a platformer's: a pad is three tiles wide
+ * and the vine is eight, so one of you can step off onto the stone while the other rides on — but
+ * the second crossing's two pads pass each other, so whoever goes first waits.
+ */
+function lilypond(): LevelDef {
+  const m = new Map(448, 20);
+  const F = 16;
+  m.ground(0, 447, F);
+  // the near shore
+  m.set(3, F - 1, '1').set(5, F - 1, '2');
+  m.set(9, F - 1, 'i');
+  m.seeds(11, 17, F - 2, 2);
+  // --- the first pad: sixteen tiles of open water, and one leaf going over it
+  m.set(18, F - 1, 'i');
+  m.pit(20, 35, F);
+  m.seeds(22, 33, F - 3, 3);
+  // a chub under the water halfway over. It breaks the surface right at the deck a sprout stands on,
+  // so a tap of a hop clears it — which is all you can do on a pad that moves on while you are off
+  // it — and the rest of its round it is nothing at all. The ride is a beat to read, not a walk.
+  m.set(26, F + 3, 'f');
+  // --- the island, with a patch of soil on it: the grown leaf is the step up to the firefly
+  m.set(39, F - 1, 'C');
+  m.set(42, F - 1, 'i');
+  m.set(45, F, ',');
+  m.seeds(44, 46, F - 6);
+  // --- two pads this time, passing each other, with a stone in the middle to wait on
+  m.set(48, F - 1, 'i');
+  m.pit(51, 76, F);
+  m.ground(62, 65, F - 1);
+  m.seeds(53, 59, F - 3, 3);
+  m.seeds(67, 74, F - 3, 3);
+  // --- the far shore, a snaptrap on it, and a bay with a firefly out over the water
+  m.set(80, F - 1, 'C');
+  m.set(84, F - 1, 't');
+  m.seeds(87, 94, F - 2, 2);
+  m.set(90, F - 1, 'i');
+  m.pit(97, 104, F);
+  m.set(99, F - 2, 'o');
+  m.set(99, F + 1, 'F');
+  m.seeds(98, 103, F - 5, 2);
+  // --- out of the pond: a stump four rows high. The small sprout clings to its face and climbs it
+  // like ivy; the tall one hops off their head, or holds on while they climb. The shelf off its top
+  // carries on over the reeds.
+  m.set(106, F - 4, 'd');
+  m.set(107, F - 1, 'i');
+  m.ground(110, 147, F - 2);
+  m.seeds(111, 115, F - 4);
+  m.fill(116, F - 7, 117, F - 3, 'X');
+  m.row(118, 126, F - 7, '=');
+  m.seeds(119, 125, F - 9, 2);
+  // ===== act two: the long reach, and three pads over it in turn
+  m.set(130, F - 3, 'C');
+  m.set(134, F - 3, 'n');
+  m.seeds(132, 140, F - 4, 3);
+  m.set(144, F - 3, 'i');
+  // down two rows to the water's own level, and out over it
+  m.fill(148, F - 3, 170, F - 1, ' ');
+  m.pit(150, 168, F);
+  m.set(159, F + 3, 'f');
+  m.seeds(152, 166, F - 3, 3);
+  // the island in the middle of the reach, with a stump on it for the one that climbs
+  m.fill(171, F - 3, 200, F - 1, ' ');
+  m.set(174, F - 1, 'C');
+  m.set(178, F - 1, 'i');
+  m.fill(183, F - 5, 184, F - 1, 'X');
+  shelf(m, 185, 193, F - 5);
+  m.set(189, F - 6, 'F');
+  m.seeds(186, 192, F - 7, 2);
+  m.set(197, F - 1, 'b');
+  // --- a bay of still water, with a branch over it
+  m.pit(202, 218, F);
+  // (a branch over the middle of it: seventeen tiles is a long way to trust two pads for, and a ring
+  // is the other way across. No firefly under this one — three to a level, one to an act)
+  m.set(210, F - 2, 'o');
+  m.seeds(204, 216, F - 4, 3);
+  // ===== act three: the reed beds along the far shore
+  m.fill(219, F - 3, 300, F - 1, ' ');
+  m.set(222, F - 1, 'i');
+  m.set(226, F - 1, 't');
+  m.set(234, F - 2, 'd');
+  m.seeds(228, 246, F - 2, 3);
+  m.set(240, F - 1, 'C');
+  m.pit(250, 253, F);
+  m.set(251, F + 2, 'f');
+  m.set(258, F - 1, 'n');
+  m.seeds(256, 268, F - 2, 3);
+  mat(m, 272, 279, F);
+  m.seeds(273, 278, F - 2, 2);
+  m.set(270, F - 1, 'i');
+  m.set(286, F - 1, 'b');
+  m.set(294, F - 1, 'C');
+  m.seeds(284, 298, F - 2, 3);
+  // ===== act four: up out of the pond for the last time, and home
+  m.ground(301, 447, F - 2);
+  m.set(306, F - 3, ',');
+  m.seeds(305, 307, F - 8);
+  m.set(314, F - 3, 'n');
+  m.seeds(310, 326, F - 4, 3);
+  m.set(322, F - 4, 'd');
+  m.set(330, F - 3, 'C');
+  m.fill(336, F - 7, 337, F - 3, 'X');
+  shelf(m, 338, 346, F - 7);
+  m.set(342, F - 8, 'F');
+  m.seeds(339, 345, F - 9, 2);
+  m.set(352, F - 3, 't');
+  m.pit(360, 365, F - 2);
+  m.set(362, F - 4, 'o');
+  m.seeds(361, 364, F - 6);
+  m.fill(366, F - 2, 386, F - 1, ' ');
+  m.set(370, F - 1, 'i');
+  m.set(376, F - 1, 'b');
+  m.seeds(368, 384, F - 2, 3);
+  m.set(390, F - 3, 'C');
+  m.set(398, F - 3, 'n');
+  m.seeds(394, 412, F - 4, 3);
+  m.set(416, F - 3, 'i');
+  m.set(430, F - 3, 'N');
+  return {
+    id: 'lilypond',
+    name: 'Lily Pond',
+    subtitle: 'green noon · pads adrift',
+    theme: 'pond',
+    song: 'pond',
+    map: m.build(),
+    movers: [
+      { x: 20, y: F, w: 3, path: [[13, 0]], period: 9, dwell: 1.1 },
+      { x: 51, y: F, w: 3, path: [[8, 0]], period: 7, dwell: 1 },
+      { x: 66, y: F, w: 3, path: [[8, 0]], period: 7, phase: 0.5, dwell: 1 },
+      { x: 97, y: F, w: 3, path: [[5, 0]], period: 6, dwell: 0.9 },
+      { x: 150, y: F, w: 3, path: [[16, 0]], period: 10, dwell: 1.1 },
+      { x: 202, y: F, w: 3, path: [[7, 0]], period: 7, dwell: 1 },
+      { x: 211, y: F, w: 3, path: [[5, 0]], period: 6, phase: 0.5, dwell: 1 },
+      { x: 360, y: F - 2, w: 3, path: [[3, 0]], period: 6, dwell: 1 },
+    ],
+    signs: [
+      'The creek goes quiet and green along here. Look — lily pads.',
+      'Hop on a pad together and it drifts across with the both of you. Something down there leaps — {jump} over it, or wait for it to go back under.',
+      'Soil, on the island. Small sprout — stand on it and {shoot} your vine into the ground.',
+      'Two pads, passing each other, and a stone to wait on. One of you over, then the other.',
+      'One more pad over the bay — and a dead branch over the water. {shoot} your vine over the branch, then step off the edge: the firefly is right where you hang.',
+      'A dragonfly on its round, and a stump the small sprout climbs like ivy. Too heavy for that? Hop off their head, or hold on while they climb.',
+      'The reach opens out. One long pad over this one — and something under the water that leaps.',
+      'Another stump, and a shelf off the top of it. The firefly up there is for whoever gets up first.',
+      'Reed beds all along this shore. Mind the snaptrap, and the dragonfly on its round.',
+      'One more mat of reeds. Quickly, now.',
+      'Down at the water’s edge again. Beetles along here, and the last of the pond ahead.',
+      'Up out of the pond for the last time. The rapids are round the next bend ♥',
+    ],
+  };
+}
+
+// ------------------------------------------------------------------ 8 · reed run (World 1 · 5)
+
+/**
+ * The last stop before the rapids: the creek narrows into a reed bed and the way on is upward, in
+ * three steps — a mat of old reeds that goes as you cross it, a shaft between two stalks, and the
+ * spray off a chute.
+ *
+ * The shaft is the first place in the game where the wall kick is the way through rather than a
+ * station on the practice ground: seven rows of two stalks three tiles apart, capped by a plank you
+ * pass up through. There is a lantern on the ground right in front of it, so trying it costs
+ * nothing, and it has two other answers — the small sprout can cling and climb a stalk, and whoever
+ * gets up first can drop the vine for the other.
+ */
+function reedrun(): LevelDef {
+  const m = new Map(456, 22);
+  const F = 18;
+  m.ground(0, 455, F);
+  // the near bank
+  m.set(3, F - 1, '1').set(5, F - 1, '2');
+  m.set(9, F - 1, 'i');
+  m.seeds(11, 15, F - 2);
+  // --- the old reed mat over the water: eight tiles of it, and it goes as you cross
+  m.set(16, F - 1, 'i');
+  m.pit(18, 25, F);
+  m.row(18, 25, F, '%');
+  m.seeds(19, 24, F - 2, 2);
+  // and a chub under the mat, breaking the surface through the hole it leaves behind you
+  m.set(22, F + 3, 'f');
+  // --- the bank between, with a beetle on it and the lantern right at the foot of the shaft
+  m.set(34, F - 1, 'b');
+  m.seeds(28, 32, F - 2, 2);
+  m.set(42, F - 1, 'C');
+  m.set(44, F - 1, 'i');
+  // --- the shaft: two stalks, three tiles apart, seven rows of them, with a plank over the top
+  // (the left stalk stops three rows up so the pair can walk in under it — a shaft closed at the
+  // bottom is a shaft nobody can get into, which is how the practice ground's is built too. And the
+  // climb is seven rows, not eight: the vine is eight, so a pair who climb it one at a time would
+  // have had the first one stopped by the rope exactly at the plank.)
+  m.fill(45, F - 6, 45, F - 3, 'X');
+  m.fill(49, F - 6, 49, F - 1, 'X');
+  m.seeds(46, 48, F - 3, 2);
+  m.row(46, 58, F - 7, '=');
+  m.set(53, F - 8, 'F');
+  m.seeds(55, 58, F - 9, 2);
+  // --- the middle terrace. It runs on past the chute, so a miss up there drops you back onto it
+  // rather than into the creek, and the way up is the one thing it is.
+  m.ground(59, 99, F - 4);
+  m.set(62, F - 5, 'C');
+  m.set(65, F - 5, 'i');
+  m.set(70, F - 5, 't');
+  m.set(77, F - 4, ',');
+  m.seeds(73, 82, F - 9, 3);
+  m.set(79, F - 5, 'i');
+  m.set(82, F - 5, 'n');
+  // --- the chute: the spray off it carries you both to the top of the reeds
+  m.set(85, F - 5, 'i');
+  m.set(88, F - 4, 'U');
+  m.row(89, 98, F - 13, '=');
+  m.seeds(93, 98, F - 15, 2);
+  // --- the top of the reeds, and the long run along it
+  m.ground(100, 175, F - 12);
+  m.set(103, F - 13, 'C');
+  m.set(107, F - 13, 'i');
+  mat(m, 110, 117, F - 12);
+  m.seeds(111, 116, F - 14, 2);
+  m.set(122, F - 13, 'b');
+  m.set(130, F - 13, 't');
+  m.seeds(118, 128, F - 14, 3);
+  // ===== act two: along the top, down the shoulder, and a shaft back up
+  m.set(136, F - 13, 'i');
+  m.set(140, F - 13, 'n');
+  m.seeds(142, 152, F - 13, 3);
+  mat(m, 156, 163, F - 12);
+  m.seeds(157, 162, F - 14, 2);
+  // (no lantern between the mat and the shoulder: a dragonfly's loop is five tiles across and would
+  // have reached one anywhere there was room for it. The next one is just down the shoulder.)
+  m.set(168, F - 14, 'd');
+  // the shoulder: six rows down to the pool under it
+  m.ground(176, 229, F - 6);
+  m.set(180, F - 7, 'C');
+  m.set(184, F - 7, 'i');
+  m.set(188, F - 7, 't');
+  m.set(196, F - 8, 'd');
+  m.seeds(182, 200, F - 7, 3);
+  m.set(204, F - 7, 'n');
+  mat(m, 208, 215, F - 6);
+  m.seeds(209, 214, F - 8, 2);
+  m.set(219, F - 7, 'b');
+  // --- a second shaft, seven rows of it, with the plank over the top and the firefly above that
+  m.set(224, F - 7, 'i');
+  m.fill(226, F - 12, 226, F - 9, 'X');
+  m.fill(230, F - 12, 230, F - 7, 'X');
+  m.seeds(227, 229, F - 9, 2);
+  m.row(227, 240, F - 13, '=');
+  m.set(234, F - 14, 'F');
+  m.seeds(236, 240, F - 15, 2);
+  // ===== act three: the reed tops again, and a swing down off them
+  m.ground(241, 350, F - 12);
+  m.set(246, F - 13, 'C');
+  m.set(252, F - 13, 'n');
+  m.seeds(248, 264, F - 13, 3);
+  m.set(266, F - 13, 'i');
+  mat(m, 270, 277, F - 12);
+  m.seeds(271, 276, F - 14, 2);
+  m.set(284, F - 14, 'd');
+  m.set(292, F - 13, 't');
+  m.seeds(280, 300, F - 14, 3);
+  m.pit(304, 309, F - 12);
+  m.set(306, F - 14, 'o');
+  m.seeds(305, 308, F - 16);
+  m.fill(310, F - 12, 330, F - 11, ' ');
+  m.set(314, F - 11, 'C');
+  m.set(322, F - 11, 'b');
+  m.seeds(312, 328, F - 12, 3);
+  m.set(336, F - 13, 'n');
+  m.seeds(332, 348, F - 13, 3);
+  // ===== act four: down to the last pool, and the pot in sight of the rapids
+  m.ground(351, 455, F - 6);
+  m.set(356, F - 7, 'i');
+  m.set(360, F - 7, 't');
+  m.set(368, F - 8, 'd');
+  m.seeds(362, 380, F - 7, 3);
+  m.set(386, F - 7, 'C');
+  mat(m, 392, 399, F - 6);
+  m.seeds(393, 398, F - 8, 2);
+  m.set(406, F - 7, 'n');
+  m.set(412, F - 7, 'b');
+  m.seeds(404, 414, F - 8, 3);
+  m.set(416, F - 7, 'i');
+  shelf(m, 418, 424, F - 11);
+  m.set(421, F - 12, 'F');
+  m.seeds(419, 423, F - 13, 2);
+  m.set(428, F - 7, 'i');
+  m.set(438, F - 7, 'N');
+  return {
+    id: 'reedrun',
+    name: 'Reed Run',
+    subtitle: 'afternoon · up through the reeds',
+    theme: 'reeds',
+    song: 'reeds',
+    map: m.build(),
+    signs: [
+      'Hear that? The rapids, up ahead somewhere. The reeds are thick along here.',
+      'This old mat of reeds won’t hold you. Over it quickly — and something in the water under it leaps.',
+      'Two stalks, close together. Brush one in mid-air and {jump} straight away to kick off it, then kick off the other: take them in turns and you climb. The same stalk twice running won’t have you.',
+      'A snaptrap in the reeds. It rears up before it bites, and that is your moment.',
+      'A nipper. It rears, darts, waits, then crawls back — the same every time. Go past behind it.',
+      'The spray off the chute lifts you both. Tie up and ride it together.',
+      'Another mat. Keep moving!',
+      'The reeds go on and on up here. A nipper on the path, and a dragonfly over it.',
+      'Down the shoulder to the pool under it. Reeds, a trap, and another mat.',
+      'Two more stalks. Same as before: brush one, {jump} at once, then take the other — and the firefly is over the top.',
+      'Back up on the reed tops. One more mat, and then a ring to swing down off the end of them.',
+      'The last pool. Mind the trap.',
+      'That shelf has the last firefly on it. Off your partner’s head, then hold on while they climb.',
+      'The rapids are just round the bend. Ready? ♥',
+    ],
+  };
+}
+
+export const LEVELS: LevelDef[] = [garden(), woods(), mill(), paris(), tower(), shallows(), lilypond(), reedrun()];
 
 // ------------------------------------------------------------------ the practice ground (solo)
 

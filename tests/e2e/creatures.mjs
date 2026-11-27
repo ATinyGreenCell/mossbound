@@ -24,7 +24,7 @@ const OUT = path.join(DIR, '.out/bundle');
 fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(
   path.join(OUT, 'entry.ts'),
-  `export { beetlePos, parseLevel, Creature } from '${ROOT}/src/game/level';
+  `export { beetlePos, creaturePos, parseLevel, standsOnGround, Creature } from '${ROOT}/src/game/level';
    export { World, Trap } from '${ROOT}/src/game/world';
    export * from '${ROOT}/src/game/tuning';
    export { LEVELS, PRACTICE } from '${ROOT}/src/game/levels';\n`,
@@ -42,7 +42,7 @@ await build({
     target: 'es2022',
   },
 });
-const { LEVELS, PRACTICE, beetlePos, parseLevel, Creature, World, Trap, BEETLE_REACH, BEETLE_SPEED, BEETLE_W, TRAP_BITE, TRAP_TELL, TRAP_RANGE, T } = await import(path.join(OUT, 'game.mjs'));
+const { LEVELS, PRACTICE, beetlePos, creaturePos, parseLevel, standsOnGround, Creature, World, Trap, BEETLE_REACH, BEETLE_SPEED, BEETLE_W, TRAP_BITE, TRAP_TELL, TRAP_RANGE, T } = await import(path.join(OUT, 'game.mjs'));
 
 let checks = 0;
 const errors = [];
@@ -273,6 +273,68 @@ const FAR = [{ x: 10000, y: 0, w: 16, h: 16, grounded: true, ghost: false }];
   ok(Math.abs(w.creatureX[bi] - beetlePos(beetle, 123.456).x) < 0.001, 'a clock jump lands the beetle on the clock');
 }
 
+// ---------------------------------------------------------------- the three on a beat
+//
+// A nipper, a dragonfly and a chub are rhythms: each is a pure function of the shared clock, exactly
+// as a beetle is. So the same thing has to hold for all three — the answer for time t must not depend
+// on how the clock got there — and none of them may ever leave the run it was measured onto.
+{
+  const specs = [];
+  for (const def of [...LEVELS, PRACTICE]) for (const c of parseLevel(def, 0).creatures) if (c.kind !== Creature.Beetle && c.kind !== Creature.Snaptrap) specs.push({ def, c });
+  ok(specs.length > 0, `the new kinds are placed somewhere (${specs.length})`);
+  const kinds = new Set(specs.map(({ c }) => c.kind));
+  ok(kinds.size === 3, `all three of them are placed somewhere (${[...kinds].sort().join(',')})`);
+  for (const { def, c } of specs) {
+    const name = ['beetle', 'trap', 'nipper', 'dragonfly', 'chub'][c.kind];
+    const where = `${def.id} ${name} @${Math.floor(c.x / T)},${Math.floor(c.y / T)}`;
+    // 1. the same answer for the same time, whatever route the clock took to it
+    let same = true;
+    for (const t of [0, 0.4, 1.3, 2.5, 7.25, 31.9, 404.125]) {
+      const direct = creaturePos(c, t);
+      const walked = (() => {
+        let p = null;
+        for (let k = 0; k <= 40; k++) p = creaturePos(c, (t * k) / 40);
+        return p;
+      })();
+      if (Math.abs(direct.x - walked.x) > 1e-9 || Math.abs(direct.y - walked.y) > 1e-9) same = false;
+    }
+    ok(same, `${where}: the clock alone says where it is`);
+    // 2. it stays inside the run the map measured for it, at every time at all
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (let k = 0; k < 400; k++) {
+      const p = creaturePos(c, (k / 400) * c.period * 3);
+      x0 = Math.min(x0, p.x);
+      x1 = Math.max(x1, p.x);
+      y0 = Math.min(y0, p.y);
+      y1 = Math.max(y1, p.y);
+    }
+    const slack = 0.5;
+    const room = c.kind === Creature.Dragonfly ? c.ax : c.kind === Creature.Chub ? c.ax : c.span;
+    ok(x1 - x0 <= 2 * room + slack, `${where}: it keeps to its measured run across (${(x1 - x0).toFixed(1)} of ${(2 * room).toFixed(1)})`);
+    const up = c.kind === Creature.Dragonfly ? c.ay : c.kind === Creature.Chub ? c.ay : 0;
+    ok(y1 - y0 <= 2 * up + slack, `${where}: …and up and down (${(y1 - y0).toFixed(1)} of ${(2 * up).toFixed(1)})`);
+    // 3. and it has somewhere to go: a nipper with no room to dart, a dragonfly with no loop and a
+    // chub that cannot clear the water are all placement mistakes rather than creatures
+    if (c.kind === Creature.Nipper) ok(c.span > T, `${where}: has room to dart (${(c.span / T).toFixed(1)} tiles)`);
+    else ok(c.ay > T, `${where}: has room to move (${(c.ay / T).toFixed(1)} tiles up)`);
+    // 4. nothing it passes through is inside the scenery
+    const solidAt = (px, py) => {
+      const tx = Math.floor(px / T);
+      const ty = Math.floor(py / T);
+      return '#XU,'.includes(def.map[ty]?.[tx] ?? ' ');
+    };
+    let clear = true;
+    for (let k = 0; k < 200; k++) {
+      const p = creaturePos(c, (k / 200) * c.period);
+      for (const dx of [-c.w / 2 + 2, c.w / 2 - 2]) for (const dy of [-c.h / 2 + 2, c.h / 2 - 2]) if (solidAt(p.x + dx, p.y + dy)) clear = false;
+    }
+    ok(clear, `${where}: its whole run is clear of the scenery`);
+  }
+}
+
 // ---------------------------------------------------------------- the levels as shipped
 //
 // Placing a creature is the part that goes wrong quietly: a beetle on nothing, a trap sitting where
@@ -290,24 +352,31 @@ for (const def of [...LEVELS, PRACTICE]) {
   const id = def.id;
   for (let i = 0; i < L.creatures.length; i++) {
     const c = L.creatures[i];
-    const kind = c.kind === Creature.Beetle ? 'beetle' : 'trap';
+    const kind = ['beetle', 'trap', 'nipper', 'dragonfly', 'chub'][c.kind];
     const tx = Math.floor(c.x / T_);
     const ty = Math.floor(c.y / T_);
     const where = `${id} ${kind} @${tx},${ty}`;
 
     // it must not be standing inside the scenery
     ok(!'#X'.includes(tileAt(def, tx, ty)), `${where}: not inside a wall`);
-    // it must have something under it, or it is hanging in the air
-    ok('#X=,'.includes(tileAt(def, tx, ty + 1)), `${where}: has footing (below is "${tileAt(def, tx, ty + 1)}")`);
+    // one that walks must have something under it, or it is hanging in the air — and one that flies
+    // or swims must NOT, or it is standing on a rock pretending to be in the air
+    const below = tileAt(def, tx, ty + 1);
+    if (standsOnGround(c.kind)) ok('#X=,'.includes(below), `${where}: has footing (below is "${below}")`);
+    else ok(!'#XU,'.includes(below), `${where}: is in open air or water (below is "${below}")`);
 
     // a beetle needs somewhere to walk, or it is just a stationary spike with legs
     if (c.kind === Creature.Beetle) ok(c.span > 0.5 * T_, `${where}: has a ledge to walk (${(c.span / T_).toFixed(1)} tiles)`);
 
     // nothing may sit where a sprout arrives: not a spawn, and not a lantern it respawns at.
     // A beetle's WHOLE walk counts, not just where the map drew it.
-    const l = c.kind === Creature.Beetle ? c.x0 : c.x;
-    const r = c.kind === Creature.Beetle ? c.x0 + c.span : c.x;
-    const clears = (p) => p.x < l - SAFE || p.x > r + SAFE || Math.abs(p.y - c.y) > SAFE;
+    const rooted = c.kind === Creature.Snaptrap;
+    const l = rooted ? c.x : c.x0;
+    const r = rooted ? c.x : c.x0 + c.span;
+    // how far up and down its run takes it: a dragonfly loops both ways, a chub only leaps up
+    const yTop = c.y - (c.kind === Creature.Dragonfly || c.kind === Creature.Chub ? c.ay : 0);
+    const yBot = c.y + (c.kind === Creature.Dragonfly ? c.ay : 0);
+    const clears = (p) => p.x < l - SAFE || p.x > r + SAFE || p.y < yTop - SAFE || p.y > yBot + SAFE;
     for (const sp of L.spawns) ok(clears(sp), `${where}: clear of the spawn at ${Math.round(sp.x / T_)},${Math.round(sp.y / T_)}`);
     for (const cp of L.checkpoints) ok(clears(cp), `${where}: clear of the lantern at ${Math.round(cp.x / T_)},${Math.round(cp.y / T_)}`);
     ok(clears(L.nest), `${where}: clear of the nest`);
@@ -351,26 +420,35 @@ for (const def of [...LEVELS, PRACTICE]) {
   for (const [lv, pts] of Object.entries(spots)) {
     const L = parseLevel(LEVELS[lv], +lv);
     for (const c of L.creatures) {
-      const isBeetle = c.kind === Creature.Beetle;
-      const l = isBeetle ? c.x0 : c.x - TRAP_RANGE;
-      const r = isBeetle ? c.x0 + c.span : c.x + TRAP_RANGE;
-      const top = c.y - (isBeetle ? c.h : TRAP_RANGE);
-      const bot = c.y + (isBeetle ? c.h : TRAP_RANGE);
+      const rooted = c.kind === Creature.Snaptrap;
+      const name = ['beetle', 'trap', 'nipper', 'dragonfly', 'chub'][c.kind];
+      const up = c.kind === Creature.Dragonfly || c.kind === Creature.Chub ? c.ay : c.h;
+      const l = rooted ? c.x - TRAP_RANGE : c.x0;
+      const r = rooted ? c.x + TRAP_RANGE : c.x0 + c.span;
+      const top = c.y - (rooted ? TRAP_RANGE : up);
+      const bot = c.y + (rooted ? TRAP_RANGE : c.kind === Creature.Dragonfly ? up : c.h);
       for (const [tx, ty] of pts) {
         const px = tx * T + T / 2;
         const py = ty * T - T / 2;
         const clash = px > l - CLEAR && px < r + CLEAR && py > top - CLEAR && py < bot + CLEAR;
-        ok(!clash, `${LEVELS[lv].id} ${isBeetle ? 'beetle' : 'trap'} @${Math.floor(c.x / T)},${Math.floor(c.y / T)} is clear of the obstacle played from ${tx},${ty}`);
+        ok(!clash, `${LEVELS[lv].id} ${name} @${Math.floor(c.x / T)},${Math.floor(c.y / T)} is clear of the obstacle played from ${tx},${ty}`);
       }
     }
   }
 }
 
-// the tower was the thinnest level in the game: it should not still be the emptiest
+// the tower was the thinnest level in the game: it should not still be the emptiest. By id, not by
+// index — levels are appended to LEVELS, so its last entry is no longer the one at the top of the map.
 {
   const counts = LEVELS.map((d) => parseLevel(d, 0).creatures.length);
-  ok(Math.min(...counts) > 0, `every level has creatures (${counts.join(',')})`);
-  ok(counts[4] >= Math.max(...counts.slice(0, 4)), `the finale is not the emptiest (${counts.join(',')})`);
+  const where = LEVELS.map((d, i) => `${d.id} ${counts[i]}`).join(', ');
+  ok(Math.min(...counts) > 0, `every level has creatures (${where})`);
+  // (not "the fullest": the creek levels are being taken to four hundred tiles and more, and a level
+  // three times the length carries three times the creatures. What was wrong with the tower was that
+  // it was the EMPTIEST, being a climb, and that is the thing worth holding it to.)
+  const ti = LEVELS.findIndex((d) => d.id === 'tower');
+  const others = counts.filter((_, i) => i !== ti);
+  ok(counts[ti] > Math.min(...others), `the finale is not the emptiest (${where})`);
 }
 
 console.log(`\n--- errors ---\n${errors.length ? errors.map((e) => `  ${e}`).join('\n') : 'none'}`);

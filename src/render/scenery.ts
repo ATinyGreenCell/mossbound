@@ -1065,3 +1065,193 @@ export const fallsNear = stepped(function* (ctx: Ctx, W: number, H: number) {
   ctx.fillStyle = '#0f1828';
   ctx.fillRect(0, H * 0.985, W, H * 0.015);
 });
+
+// ------------------------------------------------------------------ World 1's middle stops
+//
+// Three more reaches of the same creek (see game/levels.ts). Each gets its own front layer, which is
+// the part a player actually reads; behind it, Lily Pond keeps Mossy Creek's hills and Reed Run keeps
+// the Shallows' braided flat, because they are the same valley a little further up it.
+
+/**
+ * Blades standing up out of the line y(x): `n` of them, leaning a little, with an oval seed-head on
+ * top where `head` is given. One stroked path for the blades and one fill for the heads, whatever
+ * the count — a reed bed is the one thing in these backdrops there are hundreds of.
+ */
+function reedBed(ctx: Ctx, W: number, n: number, y: (x: number) => number, hMin: number, hMax: number, blade: string, head: string | null, width: number, r: () => number) {
+  const tips: [number, number, number][] = [];
+  ctx.strokeStyle = blade;
+  ctx.lineWidth = Math.max(1, width);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x = r() * W;
+    const h = hMin + r() * (hMax - hMin);
+    const lean = (r() - 0.5) * h * 0.45;
+    around(W, x, h, (xx) => {
+      ctx.moveTo(xx, y(x));
+      ctx.quadraticCurveTo(xx + lean * 0.35, y(x) - h * 0.62, xx + lean, y(x) - h);
+      tips.push([xx + lean, y(x) - h, h]);
+    });
+  }
+  ctx.stroke();
+  if (!head) return;
+  ctx.fillStyle = head;
+  ctx.beginPath();
+  for (const [x, ty, h] of tips) {
+    ctx.moveTo(x + h * 0.04, ty);
+    ctx.ellipse(x, ty + h * 0.06, h * 0.04, h * 0.1, 0, 0, TAU);
+  }
+  ctx.fill();
+}
+
+const SH_FALL: FallPal = {
+  rock: '#b4c4a3',
+  rockLit: '#d8e4c2',
+  rockDark: '#829a86',
+  moss: ['#e4f2ae', '#c2dc92', '#a0c47c'],
+  water: '#daf2f0',
+  light: '#ffffff',
+  shade: '#9ad0d6',
+  mist: 'rgba(255,255,252,0.6)',
+};
+
+/**
+ * Far off at midday: pale hills, a low shelf the creek comes over in a string of small falls rather
+ * than three big ones, and the flat below it braided with channels — which is the level's own shape,
+ * seen from a mile off.
+ */
+export const shallowsFar = stepped(function* (ctx: Ctx, W: number, H: number) {
+  const r = rng(140);
+  const far = wave(W, 41, [2, 5], [0.03, 0.01]);
+  fillBelow(ctx, W, (x) => H * (0.5 + far(x)), H, '#d9edc8');
+  // the shelf, lower and wider than the garden's ridge
+  const top = wave(W, 42, [3, 7, 13], [0.014, 0.008, 0.004]);
+  const ry = (x: number) => H * (0.6 + top(x));
+  fillBelow(ctx, W, ry, H, '#b5c5a5');
+  band(ctx, W, ry, () => H * 0.011, '#d4e0c4');
+  yield;
+  woods(ctx, W, ry, 10, H * 0.018, H * 0.032, { dark: '#a6c682', mid: '#bad892', lit: '#d4eaaa', trunk: '#9aaa8a' }, 700, r);
+  yield;
+  // five small falls strung along it
+  for (let i = 0; i < 5; i++) {
+    const x = W * (0.09 + i * 0.205);
+    fall(ctx, x, ry(x) + H * 0.004, H * (0.7 + (i % 2) * 0.012), H * (0.022 + (i % 3) * 0.008), SH_FALL, 60 + i);
+  }
+  yield;
+  // the shingle flat, and the channels lying across it
+  const near = wave(W, 43, [3, 8], [0.012, 0.005]);
+  const ny = (x: number) => H * (0.73 + near(x));
+  fillBelow(ctx, W, ny, H, '#d2dfb8');
+  for (let i = 0; i < 4; i++) {
+    const w0 = wave(W, 50 + i, [2, 6], [0.006, 0.003]);
+    const cy = (x: number) => ny(x) + H * (0.03 + i * 0.05) + H * w0(x);
+    band(ctx, W, cy, () => H * (0.013 + (i % 2) * 0.006), i % 2 ? '#bfe2de' : '#d0ebe6');
+  }
+  stipple(ctx, W, 220, ny, H * 0.24, ['#c6d3ab', '#dde7c2', '#aebb96'], H * 0.0016, H * 0.0032, r);
+  yield;
+  haze(ctx, W, H * 0.56, H, '242,248,220', 0, 0.5);
+});
+
+/** Nearer: a shingle bank with willows leaning over it, and rushes along the very front. */
+export const shallowsNear = stepped(function* (ctx: Ctx, W: number, H: number) {
+  const r = rng(141);
+  const back = wave(W, 51, [2, 5], [0.026, 0.01]);
+  const by = (x: number) => H * (0.78 + back(x));
+  fillBelow(ctx, W, by, H, '#a9d076');
+  stipple(ctx, W, 300, by, H * 0.12, ['#c0de88', '#96c160', '#d9eb9f'], H * 0.002, H * 0.0042, r);
+  yield;
+  const willows = new Grove(1);
+  for (let i = 0; i < 12; i++) {
+    const x = r() * W;
+    const s = H * (0.1 + r() * 0.06);
+    around(W, x, s * 0.7, (xx) => willows.tree(xx, by(x) + s * 0.08, s, 740 + i));
+  }
+  willows.paint(ctx, { dark: '#789f46', mid: '#94ba56', lit: '#c2db78', trunk: '#7b6749' });
+  yield;
+  const front = wave(W, 52, [4, 9], [0.014, 0.005]);
+  const fy = (x: number) => H * (0.9 + front(x));
+  fillBelow(ctx, W, fy, H, '#90be57');
+  reedBed(ctx, W, 90, fy, H * 0.03, H * 0.085, '#709d3d', null, H * 0.0035, r);
+  yield;
+  stipple(ctx, W, 180, fy, H * 0.08, ['#a8d066', '#7cae48', '#d6ea92'], H * 0.002, H * 0.004, r);
+  haze(ctx, W, H * 0.6, H * 0.82, '240,247,216', 0.24, 0);
+});
+
+/**
+ * Nearer, at the pond: a wooded rim, then the still water itself with the wood lying on it upside
+ * down, pads over it, and bulrushes along the front. Flat water is the one thing in the backdrops
+ * that is drawn as a straight edge — everything else in this valley is a wave of some sort — and
+ * that is the whole look of the place.
+ */
+export const pondNear = stepped(function* (ctx: Ctx, W: number, H: number) {
+  const r = rng(142);
+  const back = wave(W, 61, [2, 4], [0.02, 0.008]);
+  const by = (x: number) => H * (0.73 + back(x));
+  fillBelow(ctx, W, by, H, '#80ae5e');
+  woods(ctx, W, by, 8, H * 0.06, H * 0.11, { dark: '#4f7d34', mid: '#679b40', lit: '#8db858', trunk: '#5b4b34' }, 760, r);
+  yield;
+  // the water, and what is standing beside it lying flat on it
+  const wy = H * 0.845;
+  ctx.fillStyle = '#4c7d62';
+  ctx.fillRect(0, wy, W, H - wy);
+  ctx.globalAlpha = 0.5;
+  const refl = new Grove(1);
+  for (let i = 0; i < 9; i++) {
+    const x = r() * W;
+    const s = H * (0.05 + r() * 0.05);
+    around(W, x, s * 0.7, (xx) => refl.tree(xx, wy + s, s, 770 + i));
+  }
+  refl.paint(ctx, { dark: '#3d6a4e', mid: '#477a56', lit: '#5d9268', trunk: '#3a5a46' });
+  ctx.globalAlpha = 1;
+  // the glints the sky leaves on it
+  ctx.fillStyle = '#b6ddc0';
+  ctx.globalAlpha = 0.45;
+  for (let i = 0; i < 70; i++) {
+    const w = H * (0.012 + r() * 0.05);
+    const x = r() * W;
+    around(W, x, w, (xx) => ctx.fillRect(xx, wy + r() * (H - wy), w, Math.max(1, H * 0.003)));
+  }
+  ctx.globalAlpha = 1;
+  yield;
+  // pads lying on it, bigger toward the front
+  for (const [n, col, y0, s0] of [
+    [16, '#6aa24e', 0.87, 0.016],
+    [13, '#79b256', 0.93, 0.024],
+    [9, '#8cc062', 0.985, 0.034],
+  ] as [number, string, number, number][]) {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = r() * W;
+      const s = H * s0 * (0.7 + r() * 0.6);
+      around(W, x, s, (xx) => {
+        ctx.moveTo(xx + s, H * y0);
+        ctx.ellipse(xx, H * y0, s, s * 0.34, 0, 0, TAU);
+      });
+    }
+    ctx.fill();
+  }
+  yield;
+  // bulrushes along the front, their heads dark against the water
+  reedBed(ctx, W, 70, () => H * 1.01, H * 0.1, H * 0.22, '#53803a', '#6b4a2c', H * 0.0045, r);
+  haze(ctx, W, H * 0.6, H * 0.8, '226,240,206', 0.22, 0);
+});
+
+/** Nearer, in the reed bed: three depths of reed, the front row with its seed-heads in the sun. */
+export const reedsNear = stepped(function* (ctx: Ctx, W: number, H: number) {
+  const r = rng(143);
+  const back = wave(W, 71, [2, 5], [0.02, 0.008]);
+  const by = (x: number) => H * (0.72 + back(x));
+  fillBelow(ctx, W, by, H, '#a0c25c');
+  stipple(ctx, W, 240, by, H * 0.16, ['#b4d16c', '#8fb24a', '#cbdf86'], H * 0.002, H * 0.004, r);
+  yield;
+  reedBed(ctx, W, 150, (x) => by(x) + H * 0.03, H * 0.1, H * 0.2, '#8aa84a', null, H * 0.0028, r);
+  yield;
+  const mid = wave(W, 72, [3, 7], [0.014, 0.006]);
+  const my = (x: number) => H * (0.86 + mid(x));
+  fillBelow(ctx, W, my, H, '#96b84e');
+  reedBed(ctx, W, 140, my, H * 0.12, H * 0.26, '#a6c158', '#8a6a34', H * 0.0034, r);
+  yield;
+  reedBed(ctx, W, 90, () => H * 1.01, H * 0.16, H * 0.34, '#c2d46e', '#9c7a3c', H * 0.0042, r);
+  haze(ctx, W, H * 0.58, H * 0.78, '246,242,206', 0.26, 0);
+});

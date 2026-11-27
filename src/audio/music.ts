@@ -1,6 +1,6 @@
 import { finish, pause, type Steps } from './steps';
 
-export type SongId = 'title' | 'garden' | 'woods' | 'mill' | 'paris' | 'tower';
+export type SongId = 'title' | 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'shallows' | 'pond' | 'reeds';
 
 /**
  * What the music plays from samples: a felt-hammered piano for the few notes there are, and the
@@ -139,6 +139,51 @@ const SONGS: Record<SongId, Song> = {
       { kind: 'melody', inst: 'felt', vol: 0.17, oct: 0, keep: 0.75, bars: ['3 - - - . . . .', '. . . . 2 - - -', '1 - - - . . . .', '. . 5, - - - . .', '6, - - - . . . .', '. . . . . . . .', '. . . . . . . .'] },
     ],
     air: { wind: 0.5, leaves: 0.2, creek: 1, birds: 0, crickets: 1, owl: 1 },
+  },
+  // 6 · The Shallows: the brightest of them, and the one with the creek loudest under it
+  shallows: {
+    bpm: 68,
+    beats: 4,
+    sub: 2,
+    root: 62,
+    scale: MAJOR,
+    chords: [1, 5, 6, 4, 1, 5, 2, 4],
+    tracks: [
+      { kind: 'pad', vol: 0.045, oct: -1, bright: 1100 },
+      { kind: 'drone', vol: 0.034, oct: -2 },
+      { kind: 'melody', inst: 'felt', vol: 0.2, oct: 0, keep: 0.8, bars: ['3 - - - 5 - . .', '6 - - - . . . .', ". . 5 - 6 - 1' -", '5 - - - . . . .', '. . 2 - 3 - . .', '. . . . . . . .'] },
+    ],
+    air: { wind: 0.3, leaves: 0.3, creek: 1, birds: 0.9, crickets: 0, owl: 0 },
+  },
+  // 7 · Lily Pond: still water, so hardly any creek at all — the quietest song in the game
+  pond: {
+    bpm: 56,
+    beats: 4,
+    sub: 2,
+    root: 60,
+    scale: MAJOR,
+    chords: [6, 4, 1, 5, 6, 2, 4, 5],
+    tracks: [
+      { kind: 'pad', vol: 0.046, oct: -1, bright: 820 },
+      { kind: 'drone', vol: 0.036, oct: -2 },
+      { kind: 'melody', inst: 'felt', vol: 0.18, oct: 0, keep: 0.85, bars: ['6, - - - . . . .', '. . 3 - - - . .', '2 - - - . . 1 -', '. . . . . . . .', '5, - - - 6, - - -', '. . . . . . . .', '. . . . . . . .'] },
+    ],
+    air: { wind: 0.2, leaves: 0.5, creek: 0.25, birds: 0.7, crickets: 0.4, owl: 0 },
+  },
+  // 8 · Reed Run: wind through the reeds over everything else
+  reeds: {
+    bpm: 60,
+    beats: 4,
+    sub: 2,
+    root: 65,
+    scale: MAJOR,
+    chords: [1, 4, 5, 1, 6, 4, 2, 5],
+    tracks: [
+      { kind: 'pad', vol: 0.045, oct: -1, bright: 900 },
+      { kind: 'drone', vol: 0.035, oct: -2 },
+      { kind: 'melody', inst: 'felt', vol: 0.19, oct: 0, keep: 0.8, bars: ['5 - - 3 - - . .', '2 - - - . . . .', '. . 6, - 1 - 2 -', '3 - - - . . . .', '. . 5 - - - . .', '1 - - - . . . .', '. . . . . . . .'] },
+    ],
+    air: { wind: 1, leaves: 0.8, creek: 0.6, birds: 0.6, crickets: 0.15, owl: 0 },
   },
 };
 

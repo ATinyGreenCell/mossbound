@@ -30,7 +30,7 @@ import {
   type Profile,
   type Resume,
 } from '../net/protocol';
-import { drawBeetle, drawBubble, drawCheckpoint, drawCrumble, drawDoor, drawFirefly, drawLeaf, drawLooseEnd, drawMover, drawNest, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSnaptrap, drawSoil, drawSpring, nameLabel } from '../render/art';
+import { drawBeetle, drawBubble, drawCheckpoint, drawChub, drawCrumble, drawDoor, drawDragonfly, drawFirefly, drawLeaf, drawLooseEnd, drawMover, drawNest, drawNipper, drawPeg, drawPlate, drawRope, drawSeed, drawSign, drawSnaptrap, drawSoil, drawSpring, nameLabel } from '../render/art';
 import { Backdrop } from '../render/backdrop';
 import { Particles, PK } from '../render/particles';
 import { drawSprout, sproutTop } from '../render/sprouts';
@@ -649,8 +649,9 @@ export class Session implements Screen {
     let bestD = Infinity;
     for (let i = 0; i < this.L.creatures.length; i++) {
       const c = this.L.creatures[i];
-      const cx = c.kind === Creature.Beetle ? w.creatureX[i] : c.x;
-      const d = Math.hypot(cx - me.x, c.y - me.y);
+      const cx = c.kind === Creature.Snaptrap ? c.x : w.creatureX[i];
+      const cy = c.kind === Creature.Snaptrap ? c.y : w.creatureY[i];
+      const d = Math.hypot(cx - me.x, cy - me.y);
       if (d < bestD) {
         bestD = d;
         best = i;
@@ -658,8 +659,11 @@ export class Session implements Screen {
     }
     if (best >= 0) {
       const c = this.L.creatures[best];
-      if (c.kind === Creature.Beetle) lines.push(`beetle ${r(bestD)} away  x ${r(w.creatureX[best])}`);
-      else lines.push(`trap ${r(bestD)} away  ${['dormant', 'rearing', 'BITING', 'open', 'resting'][w.trapState[best]]} ${r(w.trapT[best])}`);
+      if (c.kind === Creature.Snaptrap) lines.push(`trap ${r(bestD)} away  ${['dormant', 'rearing', 'BITING', 'open', 'resting'][w.trapState[best]]} ${r(w.trapT[best])}`);
+      else {
+        const name = ['beetle', 'trap', 'nipper', 'dragonfly', 'chub'][c.kind];
+        lines.push(`${name} ${r(bestD)} away  x ${r(w.creatureX[best])} y ${r(w.creatureY[best])}  u ${w.creatureU[best].toFixed(2)}${w.creatureLive(best) ? '' : '  (under)'}`);
+      }
     }
     return lines.join('\n');
   }
@@ -1229,9 +1233,35 @@ export class Session implements Screen {
    * this is read straight off the world rather than sent — and a trap too far off screen to matter
    * is left silent rather than filling the level with snapping from somewhere you can't see.
    */
+  /** whether each creature was in its loud part last frame (the claws out, the fish in the air) */
+  private creatureLoud = new Uint8Array(0);
+
   private creatureSounds() {
     const w = this.world;
     const reach = this.cam.viewW * 0.75;
+    // the three on a beat have no events of their own — they are a function of the clock — so the
+    // moment worth hearing is found by watching for the edge, on this screen, for this screen
+    if (this.creatureLoud.length !== this.L.creatures.length) this.creatureLoud = new Uint8Array(this.L.creatures.length);
+    for (let i = 0; i < this.L.creatures.length; i++) {
+      const c = this.L.creatures[i];
+      if (c.kind !== Creature.Nipper && c.kind !== Creature.Chub) continue;
+      const loud = c.kind === Creature.Chub ? w.creatureU[i] > 0 : w.creatureU[i] >= 1;
+      const was = this.creatureLoud[i] === 1;
+      this.creatureLoud[i] = loud ? 1 : 0;
+      if (loud === was) continue;
+      const cx = w.creatureX[i];
+      const cy = w.creatureY[i];
+      if (Math.abs(cx - this.cam.x) > reach || Math.abs(cy - this.cam.y) > reach) continue;
+      const pan = clamp((cx - this.cam.x) / (this.cam.viewW / 2), -1, 1) * 0.6;
+      if (c.kind === Creature.Nipper) {
+        if (loud) audio.play('snap', 0.42, pan, 1.14 + (i % 3) * 0.05);
+      } else {
+        // going in or coming out, the creek says so
+        audio.play('splash', loud ? 0.5 : 0.38, pan, 1.05 + (i % 3) * 0.05);
+        const water = this.theme.water;
+        if (water) this.fx.burst(PK.Dust, cx, c.y, 8, 120, 0.4, 3.5, water.light, 420, 1, 100);
+      }
+    }
     for (let i = 0; i < this.L.creatures.length; i++) {
       const fired = w.trapFired[i];
       const bit = w.trapBit[i];
@@ -1808,12 +1838,19 @@ export class Session implements Screen {
     }
     for (let i = 0; i < this.L.creatures.length; i++) {
       const c = this.L.creatures[i];
-      if (c.kind === Creature.Beetle) {
-        const cx = w.creatureX[i];
-        if (vis(cx, c.y, T)) drawBeetle(ctx, cx, c.y, c.w, c.h, w.creatureFace[i], th);
-      } else if (vis(c.x, c.y, 3 * T)) {
-        drawSnaptrap(ctx, c.x, c.y + c.h / 2, w.trapOpen(i), w.trapState[i] === Trap.Biting, t, th);
+      if (c.kind === Creature.Snaptrap) {
+        if (vis(c.x, c.y, 3 * T)) drawSnaptrap(ctx, c.x, c.y + c.h / 2, w.trapOpen(i), w.trapState[i] === Trap.Biting, t, th);
+        continue;
       }
+      const cx = w.creatureX[i];
+      const cy = w.creatureY[i];
+      const u = w.creatureU[i];
+      if (!vis(cx, cy, 2 * T)) continue;
+      if (c.kind === Creature.Beetle) drawBeetle(ctx, cx, cy, c.w, c.h, w.creatureFace[i], th);
+      else if (c.kind === Creature.Nipper) drawNipper(ctx, cx, cy, c.w, c.h, w.creatureFace[i], u, th);
+      else if (c.kind === Creature.Dragonfly) drawDragonfly(ctx, cx, cy, c.w, w.creatureFace[i], t, th);
+      // a chub under the water is nothing at all: not drawn, and not a hazard either
+      else if (u > 0) drawChub(ctx, cx, cy, c.w, c.h, w.creatureFace[i], u, th);
     }
     for (let i = 0; i < this.L.signs.length; i++) {
       const sg = this.L.signs[i];
@@ -1919,22 +1956,30 @@ export class Session implements Screen {
     }
     for (let i = 0; i < this.L.creatures.length; i++) {
       const c = this.L.creatures[i];
-      if (c.kind === Creature.Beetle) {
-        box(w.creatureX[i], c.y, c.w, c.h, '#ff5c5c');
-        // the ledge it was measured onto, once, at parse time
-        ctx.strokeStyle = 'rgba(255,92,92,0.4)';
-        ctx.beginPath();
-        ctx.moveTo(Math.round(c.x0 * s - ox), Math.round((c.y + c.h / 2) * s - oy) + 0.5);
-        ctx.lineTo(Math.round((c.x0 + c.span) * s - ox), Math.round((c.y + c.h / 2) * s - oy) + 0.5);
-        ctx.stroke();
-      } else {
+      const live = w.creatureLive(i);
+      if (c.kind === Creature.Snaptrap) {
         const t = w.trapBox(i);
-        box(t.x, t.y, t.w, t.h, w.trapState[i] === Trap.Biting ? '#ff5c5c' : '#ffb35c');
+        box(t.x, t.y, t.w, t.h, live ? '#ff5c5c' : '#ffb35c');
         ctx.strokeStyle = 'rgba(255,179,92,0.3)';
         ctx.beginPath();
         ctx.arc(Math.round(c.x * s - ox), Math.round(c.y * s - oy), TRAP_RANGE * s, 0, Math.PI * 2);
         ctx.stroke();
+        continue;
       }
+      const bx = w.creatureBox(i);
+      box(bx.x, bx.y, bx.w, bx.h, live ? '#ff5c5c' : '#ffb35c');
+      // the whole measured run it was given at parse time, and nothing about it since
+      ctx.strokeStyle = 'rgba(255,92,92,0.4)';
+      ctx.beginPath();
+      if (c.kind === Creature.Dragonfly) ctx.ellipse(Math.round(c.x * s - ox), Math.round(c.y * s - oy), c.ax * s, c.ay * s, 0, 0, Math.PI * 2);
+      else if (c.kind === Creature.Chub) {
+        ctx.moveTo(Math.round(c.x * s - ox), Math.round(c.y * s - oy));
+        ctx.lineTo(Math.round(c.x * s - ox), Math.round((c.y - c.ay) * s - oy));
+      } else {
+        ctx.moveTo(Math.round(c.x0 * s - ox), Math.round((c.y + c.h / 2) * s - oy) + 0.5);
+        ctx.lineTo(Math.round((c.x0 + Math.max(c.span, Math.abs(c.dir) * c.span)) * s - ox), Math.round((c.y + c.h / 2) * s - oy) + 0.5);
+      }
+      ctx.stroke();
     }
     // the vine, bend by bend
     const pts = this.tether.pts;

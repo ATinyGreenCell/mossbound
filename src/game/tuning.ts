@@ -182,6 +182,43 @@ export const BEETLE_TURN = 0.55;
 export const BEETLE_W = 26;
 export const BEETLE_H = 18;
 
+/**
+ * Three more creatures, and all three are RHYTHMS: like a beetle, each is a pure function of the
+ * shared clock, so two screens can never disagree about where one is or who it caught. That is also
+ * what makes them fair in a long level — you watch a beat once and then you move with it, the way
+ * Rayman's and Mario's hazards are read. The snaptrap stays the one thing that answers to a sprout
+ * coming near, because its rear-up is the warning that makes a trap you walked into your own fault.
+ *
+ * Each is a behaviour rather than an animal: a world dresses them in its own art (see render/art.ts).
+ */
+/** a nipper (a young crayfish): the rear-up you can see coming, the dart, the pause, the crawl back */
+export const NIP_W = 24;
+export const NIP_H = 16;
+/** how far it darts, in tiles — capped by the ledge it was measured onto */
+export const NIP_DART = 3.5;
+export const NIP_TELL = 0.45;
+export const NIP_OUT = 0.22;
+export const NIP_HOLD = 0.5;
+export const NIP_BACK = 1.1;
+export const NIP_REST = 0.7;
+export const NIP_PERIOD = NIP_TELL + NIP_OUT + NIP_HOLD + NIP_BACK + NIP_REST;
+
+/** a dragonfly: the loop it flies over a gap (tiles), and how long a lap takes */
+export const FLY_W = 22;
+export const FLY_H = 12;
+export const FLY_LOOP = 2.6;
+export const FLY_RISE = 1.1;
+export const FLY_PERIOD = 3.6;
+
+/** a chub: how far out of the water it leaps (tiles), how far it carries, and its beat */
+export const CHUB_W = 26;
+export const CHUB_H = 14;
+export const CHUB_LEAP = 3.6;
+export const CHUB_DRIFT = 0.7;
+export const CHUB_PERIOD = 3.4;
+/** the share of its round it is out of the water for — under it, it is nothing at all */
+export const CHUB_OUT = 0.4;
+
 /** how close a sprout has to come for a snaptrap to wake (px, from the trap's middle) */
 export const TRAP_RANGE = 74;
 /** it rears up for this long before it bites — the warning that makes it fair */

@@ -85,6 +85,9 @@ const HATS: { id: string; name: string; level: number }[] = [
   { id: 'straw', name: 'straw hat', level: 2 },
   { id: 'beret', name: 'beret', level: 3 },
   { id: 'star', name: 'star', level: 4 },
+  { id: 'shell', name: 'snail shell', level: 5 },
+  { id: 'pad', name: 'lily pad', level: 6 },
+  { id: 'rush', name: 'rush hat', level: 7 },
 ];
 
 /** Hats you've earned: all three fireflies of a level. */

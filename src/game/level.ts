@@ -1,10 +1,17 @@
-import { BEETLE_H, BEETLE_REACH, BEETLE_SPEED, BEETLE_TURN, BEETLE_W, T, TRAP_H, TRAP_W, VENT_HEIGHT } from './tuning';
+import { TAU } from '../core/math';
+import {
+  BEETLE_H, BEETLE_REACH, BEETLE_SPEED, BEETLE_TURN, BEETLE_W,
+  CHUB_DRIFT, CHUB_H, CHUB_LEAP, CHUB_OUT, CHUB_PERIOD, CHUB_W,
+  FLY_H, FLY_LOOP, FLY_PERIOD, FLY_RISE, FLY_W,
+  NIP_BACK, NIP_DART, NIP_H, NIP_HOLD, NIP_OUT, NIP_PERIOD, NIP_TELL, NIP_W,
+  T, TRAP_H, TRAP_W, VENT_HEIGHT,
+} from './tuning';
 
 /** (`creek` is the title's: a mossy creek with a waterfall, see render/creek.ts — no level uses it) */
 // (`cascade` and `falls` are the creek-and-waterfall looks the fourth and fifth levels took on in
 // 1.9.0. Those levels' ids and songs are still `paris` and `tower`: saves and the network know them so)
-export type ThemeId = 'garden' | 'woods' | 'mill' | 'creek' | 'cascade' | 'falls';
-export type SongId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'title';
+export type ThemeId = 'garden' | 'woods' | 'mill' | 'creek' | 'cascade' | 'falls' | 'shallows' | 'pond' | 'reeds';
+export type SongId = 'garden' | 'woods' | 'mill' | 'paris' | 'tower' | 'title' | 'shallows' | 'pond' | 'reeds';
 
 export interface MoverDef {
   /** tile column/row of the platform's left end at the path start */
@@ -34,6 +41,9 @@ export interface MoverDef {
  *   ,  a patch of soil — the small sprout grows a leaf platform out of it, two rows above
  *   b  a beetle — trundles along whatever ledge you put it on, turning at each end
  *   t  a snaptrap — rooted; rears up when a sprout comes near, then bites
+ *   n  a nipper — on a ledge: rears up, darts out along it, waits, crawls back. A beat, not a chase
+ *   d  a dragonfly — flies a loop over whatever it is put over (the loop is trimmed clear of walls)
+ *   f  a chub — under the water: leaps out of it on a beat, and is nothing at all while it is under
  *   *  seed            F  firefly (3 per level)          C  checkpoint (lantern)
  *   N  the nest (both birds in it = level clear)       1 2  where the birds start
  *   i  a sign — its text is the next entry of `signs`, signs taken left to right
@@ -110,7 +120,13 @@ export interface SignPost {
 export const enum Creature {
   Beetle = 0,
   Snaptrap = 1,
+  Nipper = 2,
+  Dragonfly = 3,
+  Chub = 4,
 }
+
+/** Whether a kind stands on something (so the map must give it footing) or is in the air or water. */
+export const standsOnGround = (k: Creature) => k === Creature.Beetle || k === Creature.Snaptrap || k === Creature.Nipper;
 
 /**
  * A creature, as the map placed it. A beetle's whole journey is settled here, at parse time: the
@@ -133,6 +149,20 @@ export interface CreatureSpec {
   /** beetle: where in that trip it starts, 0..1 — from its own position, so two on one ledge
    * don't march in step, and both screens work out the same thing */
   phase: number;
+  /** dragonfly: the loop's half-width and half-height · chub: how far it carries and how high it leaps */
+  ax: number;
+  ay: number;
+  /** nipper: which way it darts · chub: which way it arcs (+1 right) */
+  dir: number;
+}
+
+/** Where a creature is, and how far into whatever it is doing (for the art). */
+export interface CreaturePos {
+  x: number;
+  y: number;
+  face: number;
+  /** 0..1 through its move — and for a chub, 0 exactly while it is under the water and harmless */
+  u: number;
 }
 
 export interface MoverPath {
@@ -284,6 +314,15 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
         case 't':
           creatureTiles.push({ tx, ty, kind: Creature.Snaptrap });
           break;
+        case 'n':
+          creatureTiles.push({ tx, ty, kind: Creature.Nipper });
+          break;
+        case 'd':
+          creatureTiles.push({ tx, ty, kind: Creature.Dragonfly });
+          break;
+        case 'f':
+          creatureTiles.push({ tx, ty, kind: Creature.Chub });
+          break;
         default: {
           const d = DOOR_LETTERS.indexOf(c);
           if (d >= 0) {
@@ -367,28 +406,79 @@ export function parseLevel(def: LevelDef, index: number): LevelData {
   // Creatures stand on the tile below the one they are drawn on, like a sprout does. A beetle's
   // ledge is measured here, once: out from its own tile while the footing holds and the way is
   // clear, stopping at a wall or a drop. After this nothing about a beetle depends on the level.
-  const creatures: CreatureSpec[] = creatureTiles.map(({ tx, ty, kind }) => {
+  /** Is a box of this size clear of the scenery here? (parse time, static solids only) */
+  const freeBox = (px: number, py: number, bw: number, bh: number) => {
+    const x0 = Math.floor((px - bw / 2) / T);
+    const x1 = Math.floor((px + bw / 2) / T);
+    const y0 = Math.floor((py - bh / 2) / T);
+    const y1 = Math.floor((py + bh / 2) / T);
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) if (solid(xx, yy)) return false;
+    return true;
+  };
+  /** How far a thing on this tile can travel each way along its ledge, in tiles, up to `reach`. */
+  const ledge = (tx: number, ty: number, reach: number) => {
     const floor = ty + 1;
-    if (kind === Creature.Snaptrap) {
-      return { kind, x: tx * T + T / 2, y: floor * T - TRAP_H / 2, w: TRAP_W, h: TRAP_H, x0: 0, span: 0, period: 1, phase: 0 };
-    }
     let left = tx;
     let right = tx;
-    while (left - 1 >= 0 && tx - left < BEETLE_REACH && footing(left - 1, floor) && !solid(left - 1, ty)) left--;
-    while (right + 1 < w && right - tx < BEETLE_REACH && footing(right + 1, floor) && !solid(right + 1, ty)) right++;
-    const x0 = left * T + BEETLE_W / 2;
-    const span = Math.max(0, (right + 1) * T - BEETLE_W / 2 - x0);
-    return {
-      kind,
-      x: tx * T + T / 2,
-      y: floor * T - BEETLE_H / 2,
-      w: BEETLE_W,
-      h: BEETLE_H,
-      x0,
-      span,
-      period: (2 * span) / BEETLE_SPEED + 2 * BEETLE_TURN,
-      phase: (((tx * 7 + ty * 13) % 10) / 10 + 0.05) % 1,
-    };
+    while (left - 1 >= 0 && tx - left < reach && footing(left - 1, floor) && !solid(left - 1, ty)) left--;
+    while (right + 1 < w && right - tx < reach && footing(right + 1, floor) && !solid(right + 1, ty)) right++;
+    return { left, right };
+  };
+  const creatures: CreatureSpec[] = creatureTiles.map(({ tx, ty, kind }) => {
+    const floor = ty + 1;
+    const cx = tx * T + T / 2;
+    // its own spot's share of the beat, so two of a kind side by side never move in step — and both
+    // screens work the same thing out, because it comes from the map and nothing else
+    const phase = (((tx * 7 + ty * 13) % 10) / 10 + 0.05) % 1;
+    const way = (tx * 5 + ty * 3) % 2 ? -1 : 1;
+    const base = { kind, x: cx, y: floor * T - BEETLE_H / 2, w: BEETLE_W, h: BEETLE_H, x0: 0, span: 0, period: 1, phase, ax: 0, ay: 0, dir: 1 };
+    if (kind === Creature.Snaptrap) {
+      return { ...base, y: floor * T - TRAP_H / 2, w: TRAP_W, h: TRAP_H, phase: 0 };
+    }
+    if (kind === Creature.Beetle) {
+      // out from its own tile while the footing holds and the way is clear, stopping at a wall or a
+      // drop. After this nothing about a beetle depends on the level.
+      const { left, right } = ledge(tx, ty, BEETLE_REACH);
+      const x0 = left * T + BEETLE_W / 2;
+      const span = Math.max(0, (right + 1) * T - BEETLE_W / 2 - x0);
+      return { ...base, x0, span, period: (2 * span) / BEETLE_SPEED + 2 * BEETLE_TURN };
+    }
+    if (kind === Creature.Nipper) {
+      // measured onto its ledge like a beetle, and it darts whichever way it has more room to
+      const { left, right } = ledge(tx, ty, NIP_DART);
+      const roomL = (tx - left) * T;
+      const roomR = (right - tx) * T;
+      const dir = roomR >= roomL ? 1 : -1;
+      const span = Math.max(0, Math.min(NIP_DART * T, dir > 0 ? roomR : roomL));
+      return { ...base, y: floor * T - NIP_H / 2, w: NIP_W, h: NIP_H, dir, span, x0: Math.min(cx, cx + dir * span), period: NIP_PERIOD };
+    }
+    if (kind === Creature.Dragonfly) {
+      // The loop is shrunk until every point of it is clear of the scenery: a dragonfly can then be
+      // dropped anywhere without ever being drawn inside a wall, and one with nowhere to fly hovers.
+      const cy = ty * T + T / 2;
+      const clear = (rx: number, ry: number) => {
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * TAU;
+          if (!freeBox(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry, FLY_W, FLY_H)) return false;
+        }
+        return true;
+      };
+      let ax = FLY_LOOP * T;
+      let ay = FLY_RISE * T;
+      while (ax > 6 && !clear(ax, ay)) {
+        ax *= 0.8;
+        ay *= 0.8;
+      }
+      if (!clear(ax, ay)) ax = ay = 0;
+      return { ...base, y: cy, w: FLY_W, h: FLY_H, ax, ay, period: FLY_PERIOD, x0: cx - ax, span: 2 * ax };
+    }
+    // a chub: it lies under the water where the map put it and leaps out of it, as high as there is
+    // room for. Its home is its own tile's middle, which is where it is while it is nothing at all.
+    const cy = ty * T + T / 2;
+    let ay = CHUB_LEAP * T;
+    while (ay > T && !freeBox(cx, cy - ay, CHUB_W, CHUB_H)) ay -= T / 2;
+    const ax = freeBox(cx + way * CHUB_DRIFT * T, cy - ay / 2, CHUB_W, CHUB_H) ? CHUB_DRIFT * T : 0;
+    return { ...base, y: cy, w: CHUB_W, h: CHUB_H, ax, ay, dir: way, period: CHUB_PERIOD, x0: cx - ax, span: 2 * ax };
   });
 
   const byProgress = (a: Pt, b: Pt) => (def.vertical ? b.y - a.y : a.x - b.x || a.y - b.y);
@@ -463,6 +553,64 @@ export function beetlePos(c: CreatureSpec, t: number, out: { x: number; face: nu
   } else {
     out.x = c.x0;
     out.face = -1;
+  }
+  return out;
+}
+
+/**
+ * Where a creature is at shared time `t`, whatever kind it is — worked out from the clock alone, the
+ * same on both screens however differently their frames fall. A snaptrap never moves, so it answers
+ * with its own spot; everything about it is its round (see World.stepDynamic).
+ */
+export function creaturePos(c: CreatureSpec, t: number, out: CreaturePos = { x: 0, y: 0, face: 1, u: 0 }): CreaturePos {
+  out.x = c.x;
+  out.y = c.y;
+  out.face = c.dir || 1;
+  out.u = 0;
+  const u = ((((t / c.period + c.phase) % 1) + 1) % 1);
+  if (c.kind === Creature.Beetle) {
+    const b = beetlePos(c, t);
+    out.x = b.x;
+    out.face = b.face;
+    out.u = 1;
+    return out;
+  }
+  if (c.kind === Creature.Nipper) {
+    // rear up where you can see it, dart, wait out there, crawl back, rest
+    const s = u * c.period;
+    const t1 = NIP_TELL;
+    const t2 = t1 + NIP_OUT;
+    const t3 = t2 + NIP_HOLD;
+    const t4 = t3 + NIP_BACK;
+    let k = 0;
+    if (s < t1) out.u = s / NIP_TELL;
+    else if (s < t2) {
+      k = (s - t1) / NIP_OUT;
+      out.u = 1;
+    } else if (s < t3) {
+      k = 1;
+      out.u = 1;
+    } else if (s < t4) {
+      k = 1 - (s - t3) / NIP_BACK;
+      out.u = 1;
+    }
+    out.x = c.x + c.dir * c.span * k;
+    return out;
+  }
+  if (c.kind === Creature.Dragonfly) {
+    const a = u * TAU;
+    out.x = c.x + Math.cos(a) * c.ax;
+    out.y = c.y + Math.sin(a) * c.ay;
+    out.face = Math.sin(a) > 0 ? -1 : 1;
+    out.u = u;
+    return out;
+  }
+  // a chub, out of the water for the first share of its round and under it for the rest
+  if (u < CHUB_OUT) {
+    const k = u / CHUB_OUT;
+    out.x = c.x + c.dir * c.ax * (k - 0.5) * 2;
+    out.y = c.y - c.ay * Math.sin(k * Math.PI);
+    out.u = k;
   }
   return out;
 }

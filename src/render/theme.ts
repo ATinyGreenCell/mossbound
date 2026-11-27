@@ -1,6 +1,6 @@
 import { rng, TAU } from '../core/math';
 import type { ThemeId } from '../game/level';
-import { cascadeFar, cascadeNear, fallsFar, fallsNear, gardenFar, gardenNear, millFar, millNear, woodsFar, woodsNear } from './scenery';
+import { cascadeFar, cascadeNear, fallsFar, fallsNear, gardenFar, gardenNear, millFar, millNear, pondNear, reedsNear, shallowsFar, shallowsNear, woodsFar, woodsNear } from './scenery';
 
 export interface GroundPal {
   /** the moss on top, lit and shaded (also the menus' band of ground) */
@@ -289,5 +289,89 @@ export const THEMES: Record<ThemeId, Theme> = {
     glow: 0.85,
     ink: '#14182e',
     water: { top: '#3d6680', bottom: '#162a42', light: '#cfe6f2' },
+  },
+  // 6 · The Shallows: the same creek at midday, gone wide and bright over pale gravel
+  shallows: {
+    id: 'shallows',
+    sky: ['#8ed2dd', '#cfeccb', '#f8f6da'],
+    sun: { x: 0.52, y: 0.1, r: 0.055, core: '#ffffff', glow: 'rgba(255,252,214,0.5)' },
+    moon: false,
+    stars: 0,
+    clouds: { color: '#ffffff', alpha: 0.8, count: 7 },
+    layers: [
+      // far off: the low shelf with its string of small falls, and the braided flat under it
+      { fx: 0.12, fy: 0.05, period: 2.4, ...shallowsFar },
+      // nearer: a shingle bank, willows leaning over it, rushes along the front
+      { fx: 0.3, fy: 0.12, period: 2.0, ...shallowsNear },
+    ],
+    ground: {
+      top: '#b6d653', topDark: '#86b03c', body: '#bfae84', bodyDark: '#9c8c66', speck: '#ded0ab', speck2: '#6e6248',
+      moss: ['#e6f291', '#c2dc62', '#9cc247', '#6c9430'], bloom: ['#fffbe6', '#ffe473', '#ffffff'], strata: ['#cbbb92', '#a3936e'],
+      pebble: ['#c9c3ae', '#a8a292', '#e0d8c1'], root: '#6a5330', deep: '#3a3a20', kind: 'soil',
+    },
+    stone: { face: '#a8b49a', light: '#c9d3b7', dark: '#7e8a74', line: '#5f6a57' },
+    plank: { top: '#dca96f', side: '#b6803f', dark: '#8a5a2a' },
+    spikes: { a: '#3f7d3a', b: '#2b5a28', tip: '#c2543c' },
+    ambient: 'motes',
+    ambientColor: ['#f4ffb0', '#ffffff', '#d6f27a'],
+    glow: 0.3,
+    ink: '#24331c',
+    water: { top: '#86cdc0', bottom: '#46949c', light: '#f2ffff' },
+  },
+  // 7 · Lily Pond: still, green and shaded — Mossy Creek's hills behind a pond of its own
+  pond: {
+    id: 'pond',
+    sky: ['#7fc0bd', '#b8dcaa', '#e4ecb4'],
+    sun: { x: 0.3, y: 0.13, r: 0.05, core: '#fdffe6', glow: 'rgba(236,255,196,0.42)' },
+    moon: false,
+    stars: 0,
+    clouds: { color: '#eef8e2', alpha: 0.45, count: 4 },
+    layers: [
+      // the same valley as the first level, a little further up it
+      { fx: 0.1, fy: 0.05, period: 2.4, ...gardenFar },
+      // nearer: the pond itself, the wood lying upside down on it, pads, bulrushes
+      { fx: 0.28, fy: 0.1, period: 2.0, ...pondNear },
+    ],
+    ground: {
+      top: '#8ec24c', topDark: '#5f8f33', body: '#705a3c', bodyDark: '#54422c', speck: '#8b7550', speck2: '#3e3220',
+      moss: ['#cfe877', '#a6ca52', '#7fa73c', '#547f28'], bloom: ['#ffffff', '#ffe9a8', '#e9c2ff'], strata: ['#7d6544', '#5b482e'],
+      pebble: ['#8f8f7e', '#767668', '#aaa897'], root: '#3b2a18', deep: '#1f2412', kind: 'soil',
+    },
+    stone: { face: '#7d6a4e', light: '#9b8663', dark: '#5d4e38', line: '#443829' },
+    plank: { top: '#c89a62', side: '#9e7340', dark: '#745026' },
+    spikes: { a: '#3a6f36', b: '#28512a', tip: '#b8503c' },
+    ambient: 'motes',
+    ambientColor: ['#d8f5a8', '#ffffff', '#9ee0c0'],
+    glow: 0.4,
+    ink: '#1e2d1c',
+    water: { top: '#5a9a76', bottom: '#2a5f52', light: '#dcf4d6' },
+  },
+  // 8 · Reed Run: afternoon in the reed bed, the Shallows' flat behind it
+  reeds: {
+    id: 'reeds',
+    sky: ['#92cdc2', '#d8eab0', '#f8f0c4'],
+    sun: { x: 0.74, y: 0.3, r: 0.075, core: '#fff8d2', glow: 'rgba(255,230,150,0.5)' },
+    moon: false,
+    stars: 0,
+    clouds: { color: '#fff8e8', alpha: 0.5, count: 5 },
+    layers: [
+      // the braided flat again: the rapids are the next stop up from here
+      { fx: 0.12, fy: 0.05, period: 2.4, ...shallowsFar },
+      // nearer: three depths of reed, the front row's seed-heads in the afternoon sun
+      { fx: 0.3, fy: 0.1, period: 1.9, ...reedsNear },
+    ],
+    ground: {
+      top: '#bcd05a', topDark: '#8aa63c', body: '#9b7f52', bodyDark: '#7a6240', speck: '#c3a879', speck2: '#564428',
+      moss: ['#e8ea86', '#c3d45e', '#9bb344', '#6d8a2e'], bloom: ['#fffbe0', '#ffd96a'], strata: ['#ab8f62', '#826a46'],
+      pebble: ['#b0a493', '#918678', '#ccc0ab'], root: '#4f3a22', deep: '#33301c', kind: 'soil',
+    },
+    stone: { face: '#9a8a52', light: '#bda96a', dark: '#73683c', line: '#554c2a' },
+    plank: { top: '#d2a166', side: '#a87742', dark: '#7c5428' },
+    spikes: { a: '#4a7a34', b: '#315524', tip: '#c2543c' },
+    ambient: 'leaves',
+    ambientColor: ['#e8e07a', '#f2c75a', '#d8e86a'],
+    glow: 0.4,
+    ink: '#2a2c18',
+    water: { top: '#79ac8c', bottom: '#3f7a78', light: '#eefbe8' },
   },
 };

@@ -381,6 +381,303 @@ const r = await page.evaluate(async () => {
       }
       res.tower = t;
     }
+    // ---- the shallows: wading, brambles, the deep channel, the willow, the kingcups
+    //
+    // (the pair is tied through all of this, as it is in play, so every crossing here is scripted for
+    // the two of them: eight tiles is the whole of the vine, and a sprout sent further than that is
+    // pulled back off whatever it was in the middle of — which is how a bramble hop became a death)
+    {
+      const h = {};
+      // the wade: two rows down with the creek over the gravel. Both walk in, through, and out.
+      let s = __rig(5, K); s.place(0, 16, 15); s.place(1, 14, 15); s.reset(); s.secs(0.2);
+      s.c[0].moveX = 1; s.c[1].moveX = 1;
+      h.wadeIn = s.until(() => s.birds[0].grounded && feet(s, 0) === 17, 4) > 0 && !s.birds[0].ghost;
+      const wadeOut = s.until(() => {
+        let out = 0;
+        for (const i of [0, 1]) {
+          const b = s.birds[i];
+          if (b.grounded && feet(s, i) <= 15 && b.x > 25 * T) { s.c[i].jump = false; s.c[i].moveX = 0; out++; continue; }
+          s.c[i].moveX = 1;
+          if (!b.grounded) s.c[i].jump = b.vy < 0;
+          else if (feet(s, i) === 17 && b.x > 23.4 * T) s.jump(i);
+        }
+        return out === 2;
+      }, 9);
+      h.wadeOut = wadeOut > 0 && !s.birds[0].ghost && !s.birds[1].ghost;
+      h.wadeOutDetail = { secs: wadeOut, a: col(s, 0), b: col(s, 1), feetA: feet(s, 0), feetB: feet(s, 1) };
+      // the brambles: three tiles of them along the bar, taken with a running jump — both of them
+      s = __rig(5, K); s.place(0, 57, 14); s.place(1, 55, 14); s.reset(); s.secs(0.2);
+      const bramStart = { a: col(s, 0), b: col(s, 1), feetA: feet(s, 0), feetB: feet(s, 1) };
+      let bramDied = false;
+      const hopped = s.until(() => {
+        if (s.birds[0].ghost || s.birds[1].ghost) bramDied = true;
+        let over = 0;
+        for (const i of [0, 1]) {
+          const b = s.birds[i];
+          if (b.grounded && b.x > 65 * T) { s.c[i].jump = false; s.c[i].moveX = 0; over++; continue; }
+          s.c[i].moveX = 1;
+          if (!b.grounded) s.c[i].jump = b.vy < 0;
+          else if (b.x > 60.9 * T && b.x < 62 * T) s.jump(i);
+        }
+        return over === 2;
+      }, 9);
+      h.brambles = hopped > 0 && feet(s, 0) === 14 && feet(s, 1) === 14 && !s.birds[0].ghost && !s.birds[1].ghost;
+      h.bramblesDetail = { secs: hopped, start: bramStart, died: bramDied, a: col(s, 0), b: col(s, 1), feetA: feet(s, 0), feetB: feet(s, 1) };
+      // the deep channel: one holds on at the lip, the other leaps the ring and swings across
+      {
+        const r2 = swingAcross(() => { const q = __rig(5, K); q.place(0, 72, 14); q.place(1, 68, 14); q.reset(); q.c[0].anchor = true; q.secs(0.2); return q; }, 1, 73, 79, 16);
+        h.channelSwing = r2.ok;
+        h.channelSwingDetail = r2;
+      }
+      // and the firefly in it, which hangs under the near lip: one holds on up there while the other
+      // walks off the edge and the vine lowers it straight past. Measured against the pickup box
+      // itself (20 x 22 px), because "near enough" here means exactly that box.
+      {
+        const s2 = __rig(5, K); s2.place(0, 72, 14); s2.place(1, 69, 14); s2.reset(); s2.secs(0.3);
+        const ff = s2.L.feathers.find((q) => Math.abs(q.x / T - 75.5) < 0.6);
+        const hooked = !!s2.shootAt(0, 0.7, 0.7);
+        let near = Infinity;
+        s2.c[0].moveX = 1;
+        for (let k = 0; k < 120 * 4; k++) {
+          s2.step();
+          const b = s2.birds[0];
+          if (!b.ghost && ff) near = Math.min(near, Math.max(Math.abs(b.x - ff.x) / 20, Math.abs(b.y - ff.y) / 22));
+        }
+        h.channelFirefly = !!ff && hooked && near <= 1 && !s2.birds[0].ghost;
+        h.channelFireflyDetail = { hooked, near: +near.toFixed(2), ghost: s2.birds[0].ghost, at: { x: col(s2, 0), y: +(s2.birds[0].y / T).toFixed(2) } };
+      }
+      // the willow branch, four rows up: a shot hooks it and the climb lifts you to the seeds on it
+      {
+        const s2 = __rig(5, K); s2.place(0, 107, 14); s2.place(1, 104, 14); s2.reset(); s2.secs(0.4);
+        const hooked = !!s2.shootAt(0, 0, 1);
+        s2.c[0].moveY = 1;
+        const up = s2.until(() => !s2.birds[0].grounded && s2.birds[0].y < 12 * T, 6);
+        h.willowShot = hooked && up > 0 && !s2.birds[0].ghost;
+        h.willowShotDetail = { hooked, up, reach: s2.birds[0].traits.shot, y: +(s2.birds[0].y / T).toFixed(2) };
+      }
+      // the shelf past it is five rows up, which is nobody's jump: one hops off the other's head,
+      // and the one left below climbs the vine after them
+      s = __rig(5, K); s.place(1, 114, 14); s.place(0, 112, 14); s.reset(); s.secs(0.2);
+      walkTo(s, 0, 113); s.c[0].moveX = 0; s.secs(0.2);
+      s.jump(0); s.c[0].moveX = 0.35;
+      s.until(() => s.birds[0].vy < -700, 2);
+      s.until(() => s.birds[0].grounded && s.birds[0].vy === 0 && s.birds[0].y < 11 * T, 3);
+      s.c[0].moveX = 0; s.c[0].jump = false; s.secs(0.6);
+      h.shelfBounce = feet(s, 0) === 9 && col(s, 0) > 112 && col(s, 0) < 119;
+      h.shelfBounceDetail = { col: col(s, 0), feet: feet(s, 0), ghost: s.birds[0].ghost };
+      walkTo(s, 1, col(s, 0), 4);
+      s.c[1].moveX = 0;
+      s.c[1].moveY = 1;
+      h.shelfClimbAfter = s.until(() => s.birds[1].grounded && feet(s, 1) === 9, 8) > 0;
+      h.shelfClimbAfterDetail = { col: col(s, 1), feet: feet(s, 1) };
+      // the kingcups: a flower bounces you up to the high shelf and its firefly. The partner waits on
+      // the far side of it, within the vine of a six-row rise.
+      s = __rig(5, K); s.place(0, 129, 14); s.place(1, 133, 14); s.reset(); s.secs(0.2);
+      walkTo(s, 0, 131, 4); s.c[0].moveX = 0;
+      const sprung = s.until(() => s.birds[0].vy < -500, 2);
+      s.c[0].jump = true;
+      h.kingcup = sprung >= 0 && s.until(() => s.birds[0].grounded && feet(s, 0) === 8, 4) > 0;
+      h.kingcupDetail = { sprung, col: col(s, 0), feet: feet(s, 0), ghost: s.birds[0].ghost };
+      // --- act three's channel: the same shape as act one's, six tiles with a ring over the middle
+      {
+        const r3 = swingAcross(() => { const q = __rig(5, K); q.place(0, 277, 14); q.place(1, 273, 14); q.reset(); q.c[0].anchor = true; q.secs(0.2); return q; }, 1, 278, 284, 16);
+        h.secondChannelSwing = r3.ok;
+        h.secondChannelSwingDetail = r3;
+      }
+      res.shallows = h;
+    }
+    // ---- lily pond: the pads, the island's plant, and the stump out of the water
+    {
+      const p = {};
+      // the first pad carries them both over sixteen tiles of open water to the island
+      let s = __rig(6, K); s.place(0, 21, 16); s.place(1, 20, 16); s.reset(); s.secs(0.3);
+      const chub = s.L.creatures.findIndex((c) => c.kind === 4);
+      p.pondHasAChub = chub >= 0;
+      /**
+       * Ride the pad: keep your footing near the middle of it, and tap a hop the moment the fish is
+       * out of the water and close. A tap, not a jump — the pad moves on while you are off it, and a
+       * full jump lands you in the water behind it. (`walk`: hold right instead, to step off at the end.)
+       */
+      const ride = (secs, pred, walk = false) =>
+        s.until(() => {
+          const w2 = s.world;
+          const out = w2.creatureU[chub] > 0;
+          const mid = w2.moverX[0] + 1.5 * T;
+          for (const i of [0, 1]) {
+            const b = s.birds[i];
+            if (walk) s.c[i].moveX = 1;
+            else {
+              const d = mid - b.x + (i ? -11 : 11);
+              s.c[i].moveX = Math.abs(d) > 7 ? Math.sign(d) : 0;
+            }
+            if (!b.grounded) s.c[i].jump = false;
+            else if (out && Math.abs(b.x - w2.creatureX[chub]) < 2.4 * T) s.jump(i);
+          }
+          return pred();
+        }, secs);
+      p.padRides = ride(10, () => s.world.moverX[0] > 32 * T) > 0 && s.birds[0].grounded && s.birds[1].grounded && !s.birds[0].ghost && !s.birds[1].ghost;
+      p.padRidesDetail = { a: col(s, 0), b: col(s, 1), feet: feet(s, 0), ghost: [s.birds[0].ghost, s.birds[1].ghost] };
+      p.padToIsland = ride(6, () => col(s, 0) > 37 && col(s, 1) > 36.5 && s.birds[0].grounded && s.birds[1].grounded && feet(s, 0) === 16, true) > 0 && !s.birds[0].ghost && !s.birds[1].ghost;
+      p.padToIslandDetail = { a: col(s, 0), b: col(s, 1), feet: feet(s, 0) };
+      // the island's patch of soil: the small sprout grows the leaf, and the leaf is the step up
+      {
+        const s2 = __rig(6, K);
+        const grower = s2.birds[0].traits.grow ? 0 : 1;
+        s2.place(grower, 45, 16); s2.place(1 - grower, 42, 16); s2.reset(); s2.secs(0.4);
+        const si = s2.world.soilUnder(s2.birds[grower]);
+        p.islandSoil = si >= 0 && s2.shootAt(grower) === 'grew' && !!s2.world.grown[si];
+        s2.secs(0.8);
+        // a hop from beside the patch puts you on the leaf two rows above it
+        walkTo(s2, grower, 44, 3); s2.c[grower].moveX = 0; s2.secs(0.2);
+        s2.jump(grower); s2.c[grower].moveX = 0.4;
+        p.islandLeaf = s2.until(() => s2.birds[grower].grounded && feet(s2, grower) === 14, 4) > 0;
+        p.islandLeafDetail = { si, feet: feet(s2, grower), col: col(s2, grower) };
+      }
+      // the second crossing: a pad to the stone in the middle (a hop up onto it, one row)
+      s = __rig(6, K); s.place(0, 52, 16); s.place(1, 51, 16); s.reset(); s.secs(0.3);
+      s.until(() => s.world.moverX[1] > 58.5 * T, 9);
+      s.c[0].moveX = 1; s.c[1].moveX = 1;
+      s.until(() => col(s, 0) > 61.4, 3);
+      s.jump(0);
+      p.padToStone = s.until(() => s.birds[0].grounded && feet(s, 0) === 15 && col(s, 0) > 62, 5) > 0 && !s.birds[0].ghost;
+      p.padToStoneDetail = { col: col(s, 0), feet: feet(s, 0) };
+      // the pad on the far half starts at the other end of its run, so whoever waits on the stone
+      // gets it coming back — the clock is wound to where that happens
+      s = __rig(6, K); s.place(0, 64, 15); s.place(1, 63, 15); s.reset(); s.at(3.4); s.secs(0.3);
+      s.c[0].moveX = 1; s.c[1].moveX = 1;
+      s.until(() => col(s, 0) > 67.5 && col(s, 1) > 66.8, 5);
+      s.c[0].moveX = 0; s.c[1].moveX = 0;
+      s.until(() => s.world.moverX[2] > 73.5 * T, 9);
+      s.c[0].moveX = 1; s.c[1].moveX = 1;
+      p.padToFarShore = s.until(() => col(s, 0) > 78 && col(s, 1) > 77.5 && s.birds[0].grounded && s.birds[1].grounded && feet(s, 0) === 16, 6) > 0 && !s.birds[0].ghost && !s.birds[1].ghost;
+      p.padToFarShoreDetail = { a: col(s, 0), b: col(s, 1), feet: feet(s, 0) };
+      // the bay's firefly, under the near lip: one holds on, the other steps off and is lowered past it
+      {
+        const s2 = __rig(6, K); s2.place(0, 96, 16); s2.place(1, 93, 16); s2.reset(); s2.at(3); s2.secs(0.3);
+        const ff = s2.L.feathers.find((q) => Math.abs(q.x / T - 99.5) < 0.6);
+        const hooked = !!s2.shootAt(0, 0.7, 0.7);
+        let near = Infinity;
+        s2.c[0].moveX = 1;
+        for (let k = 0; k < 120 * 4; k++) {
+          s2.step();
+          const b = s2.birds[0];
+          if (!b.ghost && ff) near = Math.min(near, Math.max(Math.abs(b.x - ff.x) / 20, Math.abs(b.y - ff.y) / 22));
+        }
+        p.bayFirefly = !!ff && hooked && near <= 1 && !s2.birds[0].ghost;
+        p.bayFireflyDetail = { hooked, near: +near.toFixed(2), ghost: s2.birds[0].ghost, at: { x: col(s2, 0), y: +(s2.birds[0].y / T).toFixed(2) } };
+      }
+      // the stump: four rows of face. The one that clings climbs it like ivy; the other follows up
+      // the vine. Whichever way round the pair is, both of them get onto the shelf off its top.
+      {
+        const s2 = __rig(6, K);
+        const climber = s2.birds[0].traits.climb ? 0 : 1;
+        const other = 1 - climber;
+        s2.place(climber, 115, 14); s2.place(other, 113, 14); s2.reset(); s2.secs(0.3);
+        s2.c[climber].moveX = 1;
+        s2.jump(climber);
+        const up = s2.until(() => {
+          const b = s2.birds[climber];
+          s2.c[climber].moveX = 1;
+          s2.c[climber].moveY = b.cling ? 1 : 0;
+          return b.grounded && feet(s2, climber) === 9;
+        }, 8);
+        p.stumpClimb = up > 0;
+        p.stumpClimbDetail = { up, climber, feet: feet(s2, climber), col: col(s2, climber) };
+        s2.c[climber].moveX = 0; s2.c[climber].moveY = 0; s2.secs(0.4);
+        walkTo(s2, other, col(s2, climber), 5);
+        s2.c[other].moveX = 0;
+        s2.c[other].moveY = 1;
+        p.stumpFollow = s2.until(() => s2.birds[other].grounded && feet(s2, other) === 9, 9) > 0;
+        p.stumpFollowDetail = { feet: feet(s2, other), col: col(s2, other) };
+      }
+      // --- act two's long reach: nineteen tiles of open water and one pad over all of it
+      {
+        const s2 = __rig(6, K); s2.place(0, 152, 16); s2.place(1, 151, 16); s2.reset(); s2.secs(0.3);
+        const rode = s2.until(() => s2.world.moverX[4] > 165 * T, 11);
+        s2.c[0].moveX = 1; s2.c[1].moveX = 1;
+        p.longPad = rode > 0 && s2.until(() => col(s2, 0) > 170 && col(s2, 1) > 169.5 && s2.birds[0].grounded && s2.birds[1].grounded && feet(s2, 0) === 16, 6) > 0 && !s2.birds[0].ghost && !s2.birds[1].ghost;
+        p.longPadDetail = { rode, a: col(s2, 0), b: col(s2, 1), feet: feet(s2, 0) };
+      }
+      res.lilypond = p;
+    }
+    // ---- reed run: the mats, the shaft between two stalks, the chute
+    {
+      const q = {};
+      // the old reed mat: eight tiles of it, and it goes as you cross
+      let s = __rig(7, K); s.place(0, 16, 18); s.place(1, 14, 18); s.reset(); s.secs(0.2);
+      s.c[0].moveX = 1; s.c[1].moveX = 1;
+      q.firstMat = s.until(() => col(s, 0) > 27 && s.birds[0].grounded && feet(s, 0) === 18, 6) > 0 && !s.birds[0].ghost;
+      q.firstMatDetail = { col: col(s, 0), ghost: s.birds[0].ghost };
+      // the shaft: two stalks three tiles apart. Take them in turns and you climb — every sprout can,
+      // and the partner waits on the floor directly below, so the vine's eight tiles are all upward.
+      s = __rig(7, K); s.place(0, 47, 18); s.place(1, 47, 18); s.reset(); s.secs(0.3);
+      {
+        const b = s.birds[0];
+        s.jump(0);
+        for (let k = 0; k < 1200; k++) {
+          const c = s.c[0];
+          c.moveX = b.cling ? b.cling : b.kickSide !== 0 ? -b.kickSide : 1;
+          c.moveY = b.cling ? 1 : 0;
+          if (!b.cling && b.wallTouchT > 0 && b.wallTouch !== 0 && b.kickSide !== b.wallTouch) s.jump(0);
+          else if (b.grounded && feet(s, 0) === 12) s.jump(0);
+          else c.jump = !b.cling && b.vy < 0;
+          s.step();
+          if (b.grounded && feet(s, 0) === 11) break;
+        }
+        q.shaftClimb = s.birds[0].grounded && feet(s, 0) <= 12;
+        q.shaftClimbDetail = { feet: feet(s, 0), col: col(s, 0), ghost: b.ghost, climbs: !!s.birds[0].traits.climb };
+      }
+      // …and the one left at the bottom comes up the vine after them
+      s.c[0].moveX = 0; s.c[0].jump = false; s.secs(0.5);
+      s.c[1].moveY = 1;
+      q.shaftFollow = s.until(() => s.birds[1].grounded && feet(s, 1) <= 12, 9) > 0;
+      q.shaftFollowDetail = { feet: feet(s, 1), col: col(s, 1) };
+      // the terrace's patch of soil, and the firefly the grown leaf is the step to
+      {
+        const s2 = __rig(7, K);
+        const grower = s2.birds[0].traits.grow ? 0 : 1;
+        s2.place(grower, 77, 14); s2.place(1 - grower, 80, 14); s2.reset(); s2.secs(0.4);
+        const si = s2.world.soilUnder(s2.birds[grower]);
+        q.terraceSoil = si >= 0 && s2.shootAt(grower) === 'grew' && !!s2.world.grown[si];
+      }
+      // the chute: the spray holds them both up to the plank nine rows above the terrace, which is
+      // further than the vine is long — so this one is only ridden together
+      s = __rig(7, K); s.place(0, 88, 14); s.place(1, 88, 14); s.reset(); s.secs(0.2);
+      s.until(() => s.birds[0].y < 6 * T && s.birds[1].y < 6 * T, 7);
+      s.c[0].moveX = 1; s.c[1].moveX = 0.8;
+      s.until(() => { for (const i of [0, 1]) s.c[i].moveY = s.birds[i].cling ? 1 : 0; return false; }, 1.2);
+      s.c[0].moveX = s.c[1].moveX = 0; s.c[0].moveY = s.c[1].moveY = 0; s.secs(0.5);
+      q.chute = feet(s, 0) === 5 && feet(s, 1) === 5 && col(s, 0) > 89;
+      q.chuteDetail = { a: { col: col(s, 0), feet: feet(s, 0) }, b: { col: col(s, 1), feet: feet(s, 1) } };
+      // the mat up at the top of the reeds
+      s = __rig(7, K); s.place(0, 108, 6); s.place(1, 106, 6); s.reset(); s.secs(0.2);
+      s.c[0].moveX = 1; s.c[1].moveX = 1;
+      q.topMat = s.until(() => col(s, 0) > 119 && s.birds[0].grounded && feet(s, 0) === 6, 6) > 0 && !s.birds[0].ghost;
+      q.topMatDetail = { col: col(s, 0), ghost: s.birds[0].ghost };
+      // --- act two's shaft, the second of them: seven rows again, and the only way back up the shoulder
+      {
+        const s2 = __rig(7, K); s2.place(0, 228, 12); s2.place(1, 228, 12); s2.reset(); s2.secs(0.3);
+        const b = s2.birds[0];
+        s2.jump(0);
+        for (let k = 0; k < 1200; k++) {
+          const c = s2.c[0];
+          c.moveX = b.cling ? b.cling : b.kickSide !== 0 ? -b.kickSide : 1;
+          c.moveY = b.cling ? 1 : 0;
+          if (!b.cling && b.wallTouchT > 0 && b.wallTouch !== 0 && b.kickSide !== b.wallTouch) s2.jump(0);
+          else if (b.grounded && feet(s2, 0) === 6) s2.jump(0);
+          else c.jump = !b.cling && b.vy < 0;
+          s2.step();
+          if (b.grounded && feet(s2, 0) === 5) break;
+        }
+        q.secondShaftClimb = b.grounded && feet(s2, 0) <= 6;
+        q.secondShaftClimbDetail = { feet: feet(s2, 0), col: col(s2, 0), ghost: b.ghost };
+        s2.c[0].moveX = 0; s2.c[0].jump = false; s2.secs(0.5);
+        s2.c[1].moveY = 1;
+        q.secondShaftFollow = s2.until(() => s2.birds[1].grounded && feet(s2, 1) <= 6, 9) > 0;
+        q.secondShaftFollowDetail = { feet: feet(s2, 1), col: col(s2, 1) };
+      }
+      res.reedrun = q;
+    }
     return res;
   };
   for (const K of [['tall', 'small'], ['small', 'tall'], ['even', 'even']]) out[K.join('/')] = play(K);
@@ -455,7 +752,7 @@ await browser.close();
 const t = reporter();
 for (const [id, issues] of Object.entries(r.lint)) t.check(`lint ${id}`, issues.length === 0, issues.join('; '));
 t.check('both springboard signs teach holding on while your partner climbs', Object.values(r.fallbackSigns).every((n) => n === 1), r.fallbackSigns);
-for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of ['garden', 'woods', 'mill', 'paris', 'tower']) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v, r[K][lvl][`${k}Detail`] ?? '');
+for (const K of ['tall/small', 'small/tall', 'even/even']) for (const lvl of Object.keys(r[K])) for (const [k, v] of Object.entries(r[K][lvl])) if (typeof v === 'boolean') t.check(`${lvl}: ${k} (${K})`, v, r[K][lvl][`${k}Detail`] ?? '');
 t.check(`every sprout is put down somewhere its body fits: the start and every lantern, every level, every pairing (${homes.checked} placings)`, homes.bad.length === 0, homes.bad);
 t.check(`…and wherever the two are put down beside each other, VINE ties them there (${homes.pairs.beside} placings)`, homes.pairs.beside > 0 && homes.pairs.cantTie.length === 0, homes.pairs.cantTie);
 t.check('a seed that gives up waiting and goes home is put down somewhere it fits there too', Object.values(homes.goneHome).every((v) => v.back && v.fits && v.nearHome < 2), homes.goneHome);

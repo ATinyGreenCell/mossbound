@@ -168,6 +168,73 @@ export function drawHat(ctx: CanvasRenderingContext2D, hat: string, ink: string)
       ctx.fillStyle = '#e0605a';
       ctx.fillRect(-6.4, -13.5, 12.8, 2);
       break;
+    case 'shell': {
+      // a little snail shell, worn like a cap
+      ctx.fillStyle = '#f2ddc2';
+      ctx.beginPath();
+      ctx.arc(0, -13.5, 6.6, 0, TAU);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = '#c08a58';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let k = 0; k <= 30; k++) {
+        const a = (k / 30) * TAU * 1.75 - 0.6;
+        const r = 5.4 * (1 - k / 36);
+        const px = Math.cos(a) * r;
+        const py = -13.5 + Math.sin(a) * r;
+        if (k) ctx.lineTo(px, py);
+        else ctx.moveTo(px, py);
+      }
+      ctx.stroke();
+      break;
+    }
+    case 'pad': {
+      // a lily pad, with one flower open on it
+      ctx.fillStyle = '#6cc35a';
+      ctx.beginPath();
+      ctx.ellipse(0, -11.5, 11, 3.8, 0, 0, TAU);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#4c9a3e';
+      ctx.beginPath();
+      ctx.moveTo(3, -11.5);
+      ctx.lineTo(10.6, -10.3);
+      ctx.lineTo(10.6, -12.7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fff2f6';
+      ctx.beginPath();
+      ctx.arc(-4.5, -14.2, 2.8, 0, TAU);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#ffd45a';
+      ctx.beginPath();
+      ctx.arc(-4.5, -14.2, 1, 0, TAU);
+      ctx.fill();
+      break;
+    }
+    case 'rush': {
+      // a cone of woven rushes, with a wide brim
+      ctx.fillStyle = '#e6cd86';
+      ctx.beginPath();
+      ctx.moveTo(-12, -10.6);
+      ctx.quadraticCurveTo(0, -13, 12, -10.6);
+      ctx.quadraticCurveTo(6.5, -20.5, 0, -21);
+      ctx.quadraticCurveTo(-6.5, -20.5, -12, -10.6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = '#c2a45c';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-7.6, -13.8);
+      ctx.quadraticCurveTo(0, -15.4, 7.6, -13.8);
+      ctx.moveTo(-4.4, -17.2);
+      ctx.quadraticCurveTo(0, -18.6, 4.4, -17.2);
+      ctx.stroke();
+      break;
+    }
     case 'star': {
       ctx.fillStyle = '#ffd84a';
       ctx.beginPath();
@@ -453,14 +520,15 @@ export function drawSpring(ctx: CanvasRenderingContext2D, x: number, y: number, 
   const h = 14 * (1 - k * 0.45);
   ctx.strokeStyle = th.ink;
   ctx.lineWidth = 1.6;
-  if (th.id === 'garden' || th.id === 'woods' || th.id === 'cascade' || th.id === 'falls') {
+  if (th.id !== 'mill' && th.id !== 'creek') {
     // a bouncy blossom
     ctx.fillStyle = '#5aa84a';
     ctx.fillRect(x - 1.5, base - h, 3, h);
     ctx.save();
     ctx.translate(x, base - h);
     ctx.scale(1 + k * 0.3, 1 - k * 0.3);
-    ctx.fillStyle = th.id === 'woods' ? '#ff9a4a' : th.id === 'cascade' ? '#ffb86b' : th.id === 'falls' ? '#c7b8ff' : '#ff7fb0';
+    ctx.fillStyle =
+      th.id === 'woods' ? '#ff9a4a' : th.id === 'cascade' ? '#ffb86b' : th.id === 'falls' ? '#c7b8ff' : th.id === 'shallows' ? '#ffd24a' : th.id === 'pond' ? '#fff4d8' : th.id === 'reeds' ? '#f0c24a' : '#ff7fb0';
     ctx.beginPath();
     ctx.moveTo(-13, -1);
     ctx.quadraticCurveTo(-11, -9, -5, -7);
@@ -802,7 +870,8 @@ export function drawMover(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.lineWidth = 1.6;
   switch (th.id) {
     case 'garden':
-    case 'cascade': {
+    case 'cascade':
+    case 'pond': {
       // a floating leaf (a lily pad, on the cascades)
       ctx.fillStyle = '#6cc35a';
       ctx.beginPath();
@@ -851,6 +920,222 @@ export function drawMover(ctx: CanvasRenderingContext2D, x: number, y: number, w
   }
 }
 
+/**
+ * A nipper: a young crayfish on a ledge. `u` is how far through its move it is — 0 resting with its
+ * claws tucked, rising through the rear-up, 1 once they are out and it is darting or crawling back.
+ * The rear-up is the whole of the warning, as a snaptrap's is, so the claws come up big.
+ */
+export function drawNipper(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, face: number, u: number, th: Theme) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(face, 1);
+  const hw = w / 2;
+  const hh = h / 2;
+  const up = u;
+  ctx.strokeStyle = th.ink;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // legs, stepping on the ground it covers
+  const gait = x * 0.3;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const lx = -hw + 6 + i * 5;
+    ctx.moveTo(lx, hh - 3);
+    ctx.lineTo(lx + Math.sin(gait + i * 2.1) * 3, hh + 3);
+  }
+  ctx.stroke();
+  // tail fan at the back
+  ctx.fillStyle = SHELL_LIT;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-hw + 3, -2);
+  ctx.lineTo(-hw - 6, -5);
+  ctx.lineTo(-hw - 7, 0);
+  ctx.lineTo(-hw - 6, 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // body
+  ctx.fillStyle = SHELL;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, hw, hh * 0.86, 0, 0, TAU);
+  ctx.fill();
+  ctx.stroke();
+  // plates along its back, lit
+  ctx.strokeStyle = SHELL_LIT;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const bx = -hw * 0.4 + i * hw * 0.42;
+    ctx.moveTo(bx, -hh * 0.6);
+    ctx.lineTo(bx + 2, hh * 0.3);
+  }
+  ctx.stroke();
+  // the claws: tucked at rest, raised and open through the rear-up and while it is out
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.7;
+  for (const sy of [-1, 1]) {
+    const ay = sy * hh * 0.45 - up * 3;
+    const ex = hw + 3 + up * 5;
+    const ey = ay - up * 5;
+    ctx.fillStyle = SHELL_LIT;
+    ctx.beginPath();
+    ctx.moveTo(hw - 3, ay);
+    ctx.quadraticCurveTo(hw + 2, ay - sy, ex, ey);
+    ctx.stroke();
+    // the pincer, gaping wider the further up it is
+    const gap = 1.4 + up * 2.6;
+    ctx.beginPath();
+    ctx.moveTo(ex - 1, ey + gap);
+    ctx.quadraticCurveTo(ex + 6, ey + gap * 0.4, ex + 7, ey);
+    ctx.quadraticCurveTo(ex + 6, ey - gap * 0.4, ex - 1, ey - gap);
+    ctx.quadraticCurveTo(ex + 1, ey, ex - 1, ey + gap);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+  // eyes on stalks, pointing the way it goes
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  for (const sy of [-1, 1]) {
+    ctx.moveTo(hw - 4, sy * 2);
+    ctx.lineTo(hw + 1, sy * 3.6 - 3);
+  }
+  ctx.stroke();
+  ctx.fillStyle = BRISTLE;
+  ctx.beginPath();
+  for (const sy of [-1, 1]) {
+    ctx.moveTo(hw + 2.6, sy * 3.6 - 3);
+    ctx.arc(hw + 1, sy * 3.6 - 3, 1.6, 0, TAU);
+  }
+  ctx.fill();
+  ctx.restore();
+}
+
+/** A dragonfly on its loop: a long body, four wings beating far too fast to see, two big eyes. */
+export function drawDragonfly(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, face: number, t: number, th: Theme) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(face, 1);
+  const hw = w / 2;
+  // the wings: a blur, so two ellipses a side at a low alpha rather than anything beating
+  const beat = 0.55 + 0.45 * Math.abs(Math.sin(t * 26 + x * 0.1));
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = '#dff6ff';
+  ctx.strokeStyle = 'rgba(120,170,200,0.7)';
+  ctx.lineWidth = 1;
+  for (const sy of [-1, 1]) {
+    for (const [dx, len] of [
+      [1, 1],
+      [-3.5, 0.82],
+    ] as [number, number][]) {
+      ctx.beginPath();
+      ctx.ellipse(dx, sy * 2, hw * 0.62 * len, 3.4 * beat * len, sy * 0.22, 0, TAU);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+  // the abdomen, banded
+  ctx.fillStyle = SHELL;
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(hw * 0.5, -2);
+  ctx.quadraticCurveTo(-hw * 0.4, -2.6, -hw - 2, -0.4);
+  ctx.quadraticCurveTo(-hw * 0.4, 2.2, hw * 0.5, 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = BRISTLE;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const bx = -hw * 0.1 - i * hw * 0.3;
+    ctx.moveTo(bx, -2.1);
+    ctx.lineTo(bx - 0.6, 1.8);
+  }
+  ctx.stroke();
+  // the head, two eyes of it
+  ctx.fillStyle = SHELL_LIT;
+  ctx.strokeStyle = th.ink;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(hw * 0.7, 0, 4, 0, TAU);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = BRISTLE;
+  ctx.beginPath();
+  ctx.arc(hw * 0.7 + 1.4, -1.6, 1.7, 0, TAU);
+  ctx.arc(hw * 0.7 + 1.4, 1.6, 1.7, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * A chub leaping out of the creek. `u` runs 0 to 1 through the leap; it is drawn along the arc's own
+ * slope, so it goes up nose-first and comes down nose-first, and it is never drawn at all while it
+ * is under the water (the session skips it — see creatureLive).
+ */
+export function drawChub(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, face: number, u: number, th: Theme) {
+  ctx.save();
+  ctx.translate(x, y);
+  // the slope of sin(πu): up at the start, level at the top, down at the end
+  ctx.rotate(Math.atan2(-Math.cos(u * Math.PI), 1.6) * face);
+  ctx.scale(face, 1);
+  const hw = w / 2;
+  const hh = h / 2;
+  ctx.strokeStyle = th.ink;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 1.7;
+  // the tail
+  ctx.fillStyle = SHELL_LIT;
+  ctx.beginPath();
+  ctx.moveTo(-hw + 4, 0);
+  ctx.lineTo(-hw - 5, -hh);
+  ctx.quadraticCurveTo(-hw - 2, 0, -hw - 5, hh);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // the body
+  ctx.fillStyle = SHELL;
+  ctx.beginPath();
+  ctx.moveTo(hw, 0);
+  ctx.quadraticCurveTo(hw * 0.3, -hh, -hw + 3, -hh * 0.45);
+  ctx.quadraticCurveTo(-hw + 2, hh * 0.45, hw * 0.3, hh);
+  ctx.quadraticCurveTo(hw * 0.8, hh * 0.6, hw, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // a lit flank, and the fin on its back
+  ctx.fillStyle = SHELL_LIT;
+  ctx.beginPath();
+  ctx.ellipse(-1, -hh * 0.2, hw * 0.55, hh * 0.3, -0.1, 0, TAU);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(2, -hh * 0.8);
+  ctx.quadraticCurveTo(-2, -hh - 4, -6, -hh * 0.7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // the eye, and the mouth open as it goes
+  ctx.fillStyle = BRISTLE;
+  ctx.beginPath();
+  ctx.arc(hw * 0.52, -1.6, 1.8, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = MAW;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(hw - 1, 1.4);
+  ctx.lineTo(hw * 0.6, 2.6);
+  ctx.stroke();
+  ctx.restore();
+}
+
 // ------------------------------------------------------------------ name labels (pre-rendered)
 
 const labelCache = new Map<string, HTMLCanvasElement>();
@@ -858,10 +1143,15 @@ let labelEpoch = 0;
 
 /** A rounded name tag, rendered once per (name, color, size). */
 /**
- * The two creatures keep one look across all five themes — a beetle in the mill is the same beetle
- * as in the garden. Danger is the one thing in this game that should never need reading twice, and
- * a plum-and-bristle shape that means "don't touch" everywhere is worth more than five pretty
- * variants. Only the outline follows the theme, so they still sit in its line.
+ * Every creature keeps one PALETTE across all the themes — a beetle in the mill is the same plum and
+ * bristle-yellow as in the garden. Danger is the one thing in this game that should never need
+ * reading twice, and a colour that means "don't touch" everywhere is worth more than pretty variants.
+ * Only the outline follows the theme, so they still sit in its line.
+ *
+ * What a world does get is its own SHAPES. The creek has a nipper, a dragonfly and a chub; the mill
+ * and the falls will have their own, in these same colours — so a new silhouette never has to be
+ * learnt as a danger, only as a behaviour. The behaviours themselves are shared (see game/level.ts):
+ * a mill rat is a nipper with a rat's outline.
  */
 const SHELL = '#53324e';
 const SHELL_LIT = '#7a4a6e';

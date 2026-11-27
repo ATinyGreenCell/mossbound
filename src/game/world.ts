@@ -1,4 +1,4 @@
-import { beetlePos, Creature, isSolidTile, moverPos, Tile, type LevelData, type Pt } from './level';
+import { Creature, creaturePos, isSolidTile, moverPos, Tile, type CreaturePos, type LevelData, type Pt } from './level';
 import {
   CORNER_NUDGE,
   CRUMBLE_GONE,
@@ -83,9 +83,12 @@ export class World {
   readonly grown: Uint8Array;
   /** how far a patch's leaves have unfurled, 0..1 (drawing) */
   readonly growT: Float32Array;
-  /** beetles: where they are now (from the clock), and which way they face (drawing) */
+  /** every creature that moves on the clock: where it is now, which way it faces, and how far
+   * through its move it is (drawing — and for a chub, 0 while it is under the water and harmless) */
   readonly creatureX: Float32Array;
+  readonly creatureY: Float32Array;
   readonly creatureFace: Int8Array;
+  readonly creatureU: Float32Array;
   /** snaptraps: where they are in their round, and how long is left of it */
   readonly trapState: Uint8Array;
   readonly trapT: Float32Array;
@@ -93,7 +96,7 @@ export class World {
   readonly trapFired: Uint8Array;
   readonly trapBit: Uint8Array;
   private readonly tmp: Pt = { x: 0, y: 0 };
-  private readonly beetle = { x: 0, face: 1 };
+  private readonly where: CreaturePos = { x: 0, y: 0, face: 1, u: 0 };
   private readonly hold: number;
 
   constructor(L: LevelData) {
@@ -114,7 +117,9 @@ export class World {
     this.grown = new Uint8Array(L.soils.length);
     this.growT = new Float32Array(L.soils.length);
     this.creatureX = new Float32Array(L.creatures.length);
+    this.creatureY = new Float32Array(L.creatures.length);
     this.creatureFace = new Int8Array(L.creatures.length).fill(1);
+    this.creatureU = new Float32Array(L.creatures.length);
     this.trapState = new Uint8Array(L.creatures.length);
     this.trapT = new Float32Array(L.creatures.length);
     this.trapFired = new Uint8Array(L.creatures.length);
@@ -319,15 +324,38 @@ export class World {
 
   // ------------------------------------------------------------------ update
 
-  /** Beetles, straight from the shared clock — never stepped, so they cannot drift apart. */
+  /**
+   * Every creature but the snaptrap, straight from the shared clock — never stepped, so they cannot
+   * drift apart however differently two screens' frames fall (see level.ts creaturePos).
+   */
   private placeCreatures(t: number) {
     const cs = this.L.creatures;
     for (let i = 0; i < cs.length; i++) {
-      if (cs[i].kind !== Creature.Beetle) continue;
-      const p = beetlePos(cs[i], t, this.beetle);
+      if (cs[i].kind === Creature.Snaptrap) continue;
+      const p = creaturePos(cs[i], t, this.where);
       this.creatureX[i] = p.x;
+      this.creatureY[i] = p.y;
       this.creatureFace[i] = p.face;
+      this.creatureU[i] = p.u;
     }
+  }
+
+  /**
+   * A creature's live box: where it is this instant and how big it is. A snaptrap's grows and sinks
+   * with its round (trapBox); everything else keeps its size and only moves.
+   */
+  creatureBox(i: number): { x: number; y: number; w: number; h: number } {
+    const c = this.L.creatures[i];
+    if (c.kind === Creature.Snaptrap) return this.trapBox(i);
+    return { x: this.creatureX[i], y: this.creatureY[i], w: c.w, h: c.h };
+  }
+
+  /** Can this creature hurt anyone this instant? (a chub under the water cannot, nor a dozing trap) */
+  creatureLive(i: number) {
+    const c = this.L.creatures[i];
+    if (c.kind === Creature.Snaptrap) return this.trapState[i] === Trap.Biting;
+    if (c.kind === Creature.Chub) return this.creatureU[i] > 0;
+    return true;
   }
 
   /** A snaptrap's live box: it rears up out of the ground as it opens, and sinks back as it shuts. */
@@ -365,13 +393,18 @@ export class World {
     const bot = b.y + b.h / 2 - 1;
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i];
+      if (!this.creatureLive(i)) continue;
       if (c.kind === Creature.Beetle) {
         const cx = this.creatureX[i];
         // its bristly back is what hurts; a sprout brushing the very edge is let off
         if (r > cx - c.w / 2 + 3 && l < cx + c.w / 2 - 3 && bot > c.y - c.h / 2 + 2 && t < c.y + c.h / 2) return true;
-      } else if (this.trapState[i] === Trap.Biting) {
+      } else if (c.kind === Creature.Snaptrap) {
         const box = this.trapBox(i);
         if (r > box.x - box.w / 2 + 4 && l < box.x + box.w / 2 - 4 && bot > box.y - box.h / 2 && t < box.y + box.h / 2) return true;
+      } else {
+        // the three on a beat: a box where it is now, forgiving at the edges as a beetle's is
+        const box = this.creatureBox(i);
+        if (r > box.x - box.w / 2 + 3 && l < box.x + box.w / 2 - 3 && bot > box.y - box.h / 2 + 2 && t < box.y + box.h / 2 - 1) return true;
       }
     }
     return false;
