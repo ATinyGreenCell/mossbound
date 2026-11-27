@@ -123,21 +123,23 @@ function* hiss(buf: Float32Array, rate: number, o: { dur: number; at?: number; v
   }
 }
 
-/** Karplus-Strong plucked string (the string's twang). */
-function* pluck(buf: Float32Array, rate: number, f: number, o: { at?: number; dur: number; vol?: number; damp?: number; bend?: number }): Steps<void> {
+/**
+ * Karplus-Strong plucked string (the string's twang).
+ *
+ * It used to take a `bend` that slid the pitch by stretching the delay line as it played. Only the
+ * tug used it, and it was where the tug's rasp came from: re-length the loop while it is still
+ * ringing and every partial in it is smeared rather than let die, which reads as a buzzer and not a
+ * string. A pitch drop belongs in tone(), which glides by the sample and cleanly.
+ */
+function* pluck(buf: Float32Array, rate: number, f: number, o: { at?: number; dur: number; vol?: number; damp?: number }): Steps<void> {
   const start = Math.floor((o.at ?? 0) * rate);
   const n = Math.min(buf.length - start, Math.floor(o.dur * rate));
-  let N = Math.max(2, Math.round(rate / f));
-  const ring = new Float32Array(Math.round(rate / (f * Math.min(1, o.bend ?? 1))) + 4);
+  const N = Math.max(2, Math.round(rate / f));
+  const ring = new Float32Array(N + 4);
   for (let i = 0; i < N; i++) ring[i] = noise() * 0.9;
   let idx = 0;
   const damp = o.damp ?? 0.996;
   for (let i = 0; i < n; i++) {
-    if (o.bend && o.bend !== 1) {
-      // pitch slides by stretching the loop
-      const target = Math.round(rate / (f * (1 + (o.bend - 1) * (i / n))));
-      if (target !== N && target < ring.length - 1) N = Math.max(2, target);
-    }
     const a = ring[idx % N];
     const b = ring[(idx + 1) % N];
     const out = a;
@@ -195,7 +197,7 @@ const LEN: Record<Sfx, number> = {
   step: 0.04,
   grab: 0.18,
   mantle: 0.14,
-  tug: 0.7,
+  tug: 0.42,
   zip: 0.45,
   catch: 0.4,
   seed: 0.22,
@@ -218,7 +220,7 @@ const LEN: Record<Sfx, number> = {
 };
 
 // (the melodic ones sit under the chill music rather than on top of it)
-const PEAK: Partial<Record<Sfx, number>> = { splash: 0.5, step: 0.12, flutter: 0.3, seed: 0.42, uiMove: 0.25, land: 0.5, plate: 0.45, clear: 0.5, feather: 0.45, checkpoint: 0.5, join: 0.45, leave: 0.4, nuzzle: 0.45, respawn: 0.45 };
+const PEAK: Partial<Record<Sfx, number>> = { splash: 0.5, step: 0.12, flutter: 0.3, seed: 0.42, uiMove: 0.25, land: 0.5, plate: 0.45, clear: 0.5, feather: 0.45, checkpoint: 0.5, join: 0.45, leave: 0.4, nuzzle: 0.45, respawn: 0.45, tug: 0.5 };
 
 /** Synthesize one sound at `rate` Hz, a slice at a time (see steps.ts). */
 export function* renderSfxSteps(name: Sfx, rate: number): Steps<Float32Array<ArrayBuffer>> {
@@ -277,8 +279,15 @@ export function* renderSfxSteps(name: Sfx, rate: number): Steps<Float32Array<Arr
       yield* tone(b, rate, { f0: 300, f1: 520, dur: 0.1, vol: 0.45, decay: 0.04 });
       break;
     case 'tug':
-      yield* pluck(b, rate, 128, { dur: 0.65, vol: 0.75, damp: 0.995, bend: 0.82 });
-      yield* pluck(b, rate, 256, { dur: 0.3, vol: 0.2, damp: 0.99 });
+      // The vine going taut and throwing your partner: the knot taking the strain, the rope's own
+      // low body dropping a few tones, the vine ringing once, and the air of somebody leaving the
+      // ground. Four short layers that all decay — a tug happens dozens of times in a level, so it
+      // has to be an event and not a note held.
+      yield* hiss(b, rate, { dur: 0.03, vol: 0.3, lp: 2600, hp: 700, attack: 0.001, decay: 0.008 });
+      yield* tone(b, rate, { f0: 190, f1: 92, dur: 0.2, vol: 0.5, type: 'tri', attack: 0.004, decay: 0.06 });
+      yield* pluck(b, rate, midi(50), { dur: 0.28, at: 0.005, vol: 0.34, damp: 0.985 });
+      yield* bell(b, rate, midi(62), { at: 0.02, dur: 0.26, vol: 0.07, ratio: 2, index: 0.4 });
+      yield* hiss(b, rate, { dur: 0.24, at: 0.04, vol: 0.16, lp: 620, lp1: 1900, hp: 180, attack: 0.05, decay: 0.08 });
       break;
     case 'zip':
       yield* hiss(b, rate, { dur: 0.4, vol: 0.45, lp: 500, lp1: 4500, hp: 200, attack: 0.05, decay: 0.15 });
